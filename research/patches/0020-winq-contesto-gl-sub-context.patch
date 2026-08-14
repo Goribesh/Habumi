@@ -1,0 +1,131 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index bcc8dc9..7784b44 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -8032,6 +8032,33 @@ static void vrend_destroy_sub_context(struct vrend_sub_context *sub)
+    vrend_object_fini_ctx_table(sub->object_hash);
+    vrend_clicbs->destroy_gl_context(sub->gl_context);
+ 
++   /* winq: CANCELLATO UN CONTESTO GL, LA CONTABILITA' NON PUO' PIU' DIRE "CI
++    * SIAMO GIA'".
++    *
++    * IL DISALLINEAMENTO. current_hw_ctx tiene un vrend_context, ma cio' che e'
++    * corrente davvero all'API grafica e' il contesto GL di un SUB. Qui un
++    * contesto GL muore e current_hw_ctx non se ne accorge: continua a
++    * nominare un vrend_context vivo. La scorciatoia di
++    * vrend_finish_context_switch() ("if (current_hw_ctx == ctx) return
++    * false;") crede quindi che il contesto giusto sia gia' corrente, salta la
++    * make_current, e su WGL non e' corrente NIENTE -- cancellare un contesto
++    * lo toglie al thread senza dirlo a nessuno. Da li' in poi ogni comando di
++    * quel contesto gira nel vuoto, e non si riprende da solo: nemmeno la
++    * force_ctx_0() alla fine di vrend_destroy_context lo rimedia, perche'
++    * anche lei passa da quella scorciatoia.
++    *
++    * MISURATO il 12/08/2026, ed e' cio' che restava dopo la make_current per
++    * sub aggiunta nel ciclo di vrend_destroy_context: 97 chiamate "without a
++    * rendering context" e DUE contesti guest uccisi nello stesso momento (5
++    * "RenderThread" e 2 "surfaceflinger"), cioe' lo stato senza contesto era
++    * sopravvissuto a piu' submit di applicazioni diverse -- la firma di una
++    * make_current saltata, non di una fallita (falliti=0 su tutti i campioni).
++    *
++    * COSTA una make_current in piu' per contesto distrutto. A 2663
++    * commutazioni al secondo sotto carico, una in piu' ogni volta che
++    * un'applicazione del guest se ne va non si misura. */
++   vrend_state.current_hw_ctx = NULL;
++
+    list_del(&sub->head);
+    FREE(sub);
+ 
+@@ -8053,6 +8080,47 @@ void vrend_destroy_context(struct vrend_context *ctx)
+       vrend_state.current_hw_ctx = NULL;
+    }
+ 
++   /* winq: current_hw_ctx VA AZZERATO ANCHE QUANDO switch_0 E' FALSO, e il
++    * puntatore che resta senza questa riga e' liberato.
++    *
++    * COSA FA IL CODICE DI SERIE. Azzera current_hw_ctx solo se il contesto che
++    * muore e' anche current_ctx, cioe' quello LOGICO. Ma current_hw_ctx tiene
++    * il contesto reso corrente per ULTIMO all'API grafica, e i due divergono di
++    * continuo: SUBMIT_3D commuta al contesto dell'applicazione e lo lascia in
++    * current_hw_ctx, mentre current_ctx torna a ctx0. Sotto, FREE(ctx) libera
++    * la struttura. Da quel momento current_hw_ctx e' un puntatore a memoria
++    * liberata.
++    *
++    * PERCHE' FA DANNO. La scorciatoia di vrend_finish_context_switch()
++    * confronta PUNTATORI: "if (vrend_state.current_hw_ctx == ctx) return
++    * false;" -- niente make_current, "ci siamo gia'". Quando l'allocatore
++    * riusa quell'indirizzo per un vrend_context NUOVO, il confronto dice si' a
++    * un contesto che non e' mai stato reso corrente. Da li' in poi ogni
++    * chiamata GL di quel contesto gira SENZA contesto corrente.
++    *
++    * MISURATO il 12/08/2026, con MESA_DEBUG=1 e la diagnostica
++    * WINQ_MAKECURRENT_DIAG di winq-wgl.c accese insieme: 86 righe "GL User
++    * Error: gl... called without a rendering context" in una sessione, la
++    * prima a 22 s, e la make-current lato host NON fallisce mai -- ok=40/s,
++    * falliti=0, stacchi=0 su 237 campioni. Non veniva chiamata, ed e' questa
++    * riga che mancava. La glFenceSync senza contesto torna NULL ("Failed to
++    * create fence sync object"), l'errore GL resta pendente, e il primo
++    * TRANSFER3D che passa lo paga: vrend_check_no_error() lo trasforma in
++    * EINVAL, il contesto va in errore e virglrenderer smette di eseguire i suoi
++    * buffer. A schermo: l'applicazione che disegnava con quel contesto perde la
++    * grafica -- il launcher senza icone, o glmark2 che esce.
++    *
++    * PERCHE' NON SI VEDEVA SU ANGLE. Il riuso dell'indirizzo da malloc rende
++    * il difetto intermittente (~2 sessioni su 8 qui), e su EGL la finestra e'
++    * piu' stretta: eglDestroyContext su un contesto corrente RINVIA la
++    * distruzione, quindi il thread conserva un contesto valido e le chiamate
++    * successive non finiscono nel vuoto. wglDeleteContext no: cancella subito
++    * e lascia il thread senza contesto. Vedi la riga gemella in
++    * winq_wgl_ctx_destroy(). */
++   if (vrend_state.current_hw_ctx == ctx) {
++      vrend_state.current_hw_ctx = NULL;
++   }
++
+    vrend_clicbs->make_current(ctx->sub->gl_context);
+    /* reset references on framebuffers */
+    vrend_set_framebuffer_state(ctx, 0, NULL, 0);
+@@ -8068,8 +8136,44 @@ void vrend_destroy_context(struct vrend_context *ctx)
+ 
+    vrend_set_index_buffer(ctx, 0, 0, 0);
+ 
++   /* winq: OGNI SUB-CONTESTO VUOLE IL SUO CONTESTO GL CORRENTE, e la
++    * make_current di sopra ne copre uno solo.
++    *
++    * COSA FA IL CODICE DI SERIE. Sopra rende corrente ctx->sub->gl_context --
++    * il sub attivo in quel momento, uno -- e poi questo ciclo distrugge TUTTI i
++    * sub. Ogni sub ha un contesto GL proprio, e vrend_destroy_sub_context()
++    * fa due cose in quest'ordine: vrend_object_fini_ctx_table(), che cancella
++    * gli oggetti del sub con glDelete*, e destroy_gl_context(sub->gl_context).
++    * Al primo giro il contesto reso corrente sopra viene cancellato; su WGL
++    * cancellare il contesto corrente lascia il thread SENZA contesto. Dal
++    * secondo giro in poi, quindi, tutte le glDelete* girano nel vuoto.
++    *
++    * MISURATO il 12/08/2026, ed e' come si e' arrivati qui: 70-86 righe "GL
++    * User Error: glDeleteTextures/glDeleteBuffers called without a rendering
++    * context" in raffica, la prima subito dopo la morte di un processo del
++    * guest ("binder: undelivered transaction, process died" nel registro del
++    * guest 1,3 s prima), e la make-current lato host che non fallisce mai --
++    * ok=2664/s, falliti=0 -- perche' su questo percorso nessuno la chiama. La
++    * conseguenza non si ferma alle cancellazioni: l'errore GL resta pendente e
++    * il primo TRANSFER3D che passa lo paga, vrend_check_no_error() lo
++    * trasforma in EINVAL, e il contesto di UN'ALTRA applicazione muore.
++    *
++    * PERCHE' SU EGL NON SI VEDE. eglDestroyContext su un contesto corrente
++    * rinvia la distruzione, quindi il thread conserva un contesto valido e i
++    * giri successivi del ciclo cancellano gli oggetti nel contesto sbagliato
++    * ma esistente: nessun errore, nessun sintomo. Su WGL il contesto sparisce
++    * subito. Questo codice non e' mai girato su WGL prima di questo albero.
++    *
++    * PERCHE' LE ALTRE DUE RIGHE NOSTRE NON BASTAVANO. L'azzeramento di
++    * current_hw_ctx qui sopra serve a far ripartire davvero la force_ctx_0()
++    * che segue il ciclo (altrimenti la scorciatoia la salta fidandosi di un
++    * puntatore liberato), e lo stacco esplicito in winq_wgl_ctx_destroy()
++    * rende visibile lo stato invece di lasciarlo implicito. Nessuna delle due
++    * pero' rimette un contesto corrente DENTRO il ciclo: quello lo fa questa
++    * riga, ed e' l'unica delle tre che tocca la causa. */
+    list_for_each_entry_safe_rev(struct vrend_sub_context, sub, &ctx->sub_ctxs, head) {
+       ctx->sub = sub;
++      vrend_clicbs->make_current(sub->gl_context);
+       vrend_destroy_sub_context(sub);
+    }
+    ctx->sub = NULL;

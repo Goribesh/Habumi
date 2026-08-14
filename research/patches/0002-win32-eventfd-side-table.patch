@@ -1,0 +1,198 @@
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index c6b6d81..e44c424 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -178,7 +178,10 @@ proxy_context_sync_thread(void *arg)
+ 
+    while (!ctx->sync_thread.stop) {
+ #ifdef _WIN32
+-      HANDLE event = (HANDLE)_get_osfhandle(ctx->sync_thread.fence_eventfd);
++      /* Non _get_osfhandle: su Windows il fence eventfd non e' un
++       * descrittore della CRT, e' l'indice di un HANDLE nella tabella di
++       * virgl_util. Vedi create_eventfd. */
++      HANDLE event = (HANDLE)eventfd_handle(ctx->sync_thread.fence_eventfd);
+       DWORD wait_ret = WaitForSingleObject(event, 100); /* 100ms timeout */
+       if (wait_ret == WAIT_FAILED) {
+          proxy_log("failed to wait on fence event");
+@@ -541,7 +544,7 @@ proxy_context_destroy(struct virgl_context *base)
+          thrd_join(ctx->sync_thread.thread, NULL);
+       }
+ 
+-      os_close_fd(ctx->sync_thread.fence_eventfd);
++      close_eventfd(ctx->sync_thread.fence_eventfd);
+    }
+ 
+    if (ctx->shmem.ptr)
+diff --git a/src/virgl_util.c b/src/virgl_util.c
+index be2903f..d5c71dd 100644
+--- a/src/virgl_util.c
++++ b/src/virgl_util.c
+@@ -102,30 +102,100 @@ bool has_eventfd(void)
+ #endif
+ }
+ 
++#ifdef _WIN32
++/*
++ * Emulazione di eventfd su Windows.
++ *
++ * L'implementazione precedente avvolgeva un HANDLE di Event in un
++ * descrittore con _open_osfhandle. Non puo' funzionare: la UCRT chiama
++ * GetFileType sull'handle, per un Event ottiene FILE_TYPE_UNKNOWN con
++ * ERROR_INVALID_HANDLE, e rifiuta con EBADF. Verificato in isolamento su
++ * Windows 11 ARM64 con UCRT: _open_osfhandle su un Event ritorna sempre -1.
++ * Di conseguenza create_eventfd falliva sempre, e con essa ogni percorso
++ * che dipende da VIRGL_RENDERER_THREAD_SYNC — che QEMU imposta da se',
++ * senza modo di disattivarlo.
++ *
++ * Qui l'HANDLE non viene travestito da descrittore: sta in una tabella e
++ * il valore restituito e' un indice riconoscibile. I chiamanti continuano a
++ * maneggiare un int, come su Linux, ma non lo passano piu' a funzioni della
++ * CRT: per chiuderlo c'e' close_eventfd, per ottenere l'HANDLE
++ * eventfd_handle.
++ *
++ * L'allocazione degli slot e' senza lock, con InterlockedCompareExchange
++ * su ciascuno: evita di dover inizializzare un mutex prima del primo uso,
++ * cosa che in questo file non avrebbe un punto naturale in cui avvenire.
++ *
++ * Il valore restituito e' >= 0 e ben oltre qualunque descrittore reale,
++ * perche' il codice esistente usa `fd >= 0` e `fd != -1` come test di
++ * validita' e li deve continuare a superare.
++ */
++#define VIRGL_EVENTFD_BASE 0x10000000
++#define VIRGL_EVENTFD_MAX  256
++
++static PVOID virgl_eventfd_table[VIRGL_EVENTFD_MAX];
++
++static bool virgl_is_eventfd(int fd)
++{
++   return fd >= VIRGL_EVENTFD_BASE &&
++          fd < VIRGL_EVENTFD_BASE + VIRGL_EVENTFD_MAX;
++}
++
++void *eventfd_handle(int fd)
++{
++   if (!virgl_is_eventfd(fd))
++      return NULL;
++   return virgl_eventfd_table[fd - VIRGL_EVENTFD_BASE];
++}
++#endif /* _WIN32 */
++
+ int create_eventfd(unsigned int initval)
+ {
+ #ifdef HAVE_EVENTFD_H
+    return eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+ #elif defined(_WIN32)
++   /* Manual reset: flush_eventfd deve poter azzerare esplicitamente lo
++    * stato, come fa la read su un eventfd Linux. */
+    HANDLE event = CreateEventA(NULL, TRUE, initval ? TRUE : FALSE, NULL);
+    if (!event)
+       return -1;
+-   int fd = _open_osfhandle((intptr_t)event, 0);
+-   if (fd < 0)
+-      CloseHandle(event);
+-   return fd;
++
++   for (int i = 0; i < VIRGL_EVENTFD_MAX; i++) {
++      if (!InterlockedCompareExchangePointer(&virgl_eventfd_table[i],
++                                             event, NULL))
++         return VIRGL_EVENTFD_BASE + i;
++   }
++
++   /* Tabella piena: nessuno slot libero. Meglio fallire che perdere
++    * l'handle. */
++   CloseHandle(event);
++   return -1;
+ #else
+    (void)initval;
+    return -1;
+ #endif
+ }
+ 
++void close_eventfd(int fd)
++{
++#ifdef _WIN32
++   if (!virgl_is_eventfd(fd))
++      return;
++   HANDLE event = InterlockedExchangePointer(
++      &virgl_eventfd_table[fd - VIRGL_EVENTFD_BASE], NULL);
++   if (event)
++      CloseHandle(event);
++#else
++   if (fd >= 0)
++      close(fd);
++#endif
++}
++
+ int write_eventfd(int fd, uint64_t val)
+ {
+ #ifdef _WIN32
+    (void)val;
+-   HANDLE event = (HANDLE)_get_osfhandle(fd);
+-   if (event == INVALID_HANDLE_VALUE)
++   HANDLE event = eventfd_handle(fd);
++   if (!event)
+       return -1;
+    return SetEvent(event) ? 0 : -1;
+ #else
+@@ -151,8 +221,8 @@ int write_eventfd(int fd, uint64_t val)
+ void flush_eventfd(int fd)
+ {
+ #ifdef _WIN32
+-   HANDLE event = (HANDLE)_get_osfhandle(fd);
+-   if (event != INVALID_HANDLE_VALUE)
++   HANDLE event = eventfd_handle(fd);
++   if (event)
+       ResetEvent(event);
+ #else
+     ssize_t len;
+diff --git a/src/virgl_util.h b/src/virgl_util.h
+index a4fb7c7..3dbbd1b 100644
+--- a/src/virgl_util.h
++++ b/src/virgl_util.h
+@@ -70,6 +70,24 @@ int create_eventfd(unsigned int initval);
+ int write_eventfd(int fd, uint64_t val);
+ void flush_eventfd(int fd);
+ 
++/*
++ * Il valore restituito da create_eventfd va chiuso con questa, non con
++ * close() ne' os_close_fd(): su Windows non e' un descrittore della CRT ma
++ * l'indice di un HANDLE in una tabella interna. Su POSIX equivale a
++ * close().
++ */
++void close_eventfd(int fd);
++
++#ifdef _WIN32
++/*
++ * HANDLE associato a un eventfd, per i chiamanti che devono attenderlo con
++ * le primitive Win32. Ritorna NULL se il descrittore non viene da
++ * create_eventfd. Dichiarato void* per non tirare windows.h in questo
++ * header.
++ */
++void *eventfd_handle(int fd);
++#endif
++
+ /*
+  * Returns true once WINQ_DIAG=1 (or any non-empty, non-"0" value) has been
+  * observed in the environment. Modules that have their own VIRGL_*_DIAG
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 562efdc..3e39a65 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -7466,7 +7466,7 @@ static void vrend_renderer_use_threaded_sync(void)
+ 
+    vrend_state.sync_thread = u_thread_create(thread_sync, NULL);
+    if (!vrend_state.sync_thread) {
+-      close(vrend_state.eventfd);
++      close_eventfd(vrend_state.eventfd);
+       vrend_state.eventfd = -1;
+       vrend_clicbs->destroy_gl_context_surfaceless(vrend_state.sync_context);
+       cnd_destroy(&vrend_state.fence_cond);
+@@ -7819,7 +7819,7 @@ vrend_renderer_fini(void)
+    vrend_state.finishing = true;
+ 
+    if (vrend_state.eventfd != -1) {
+-      close(vrend_state.eventfd);
++      close_eventfd(vrend_state.eventfd);
+       vrend_state.eventfd = -1;
+    }
+ 

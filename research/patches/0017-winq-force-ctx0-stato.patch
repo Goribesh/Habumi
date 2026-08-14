@@ -1,0 +1,95 @@
+From 4f4b23737bea4e92630498226caef6f11ff15dd6 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 20:51:42 +0200
+[PATCH] winq: force_ctx_0 e azzeramento dello stato
+
+La scorciatoia di vrend_hw_switch_context confronta current_ctx e
+current_hw_ctx col contesto target. force_ctx_0 le azzerava entrambe
+PRIMA di chiedere lo switch, quindi i confronti erano sempre falsi:
+606.725 switch veri su 606.725 richiesti, il 100,0%, misurato.
+
+Ora si controlla 'siamo gia' su ctx0?' prima di azzerare, con le stesse
+identiche condizioni dei due cancelli, ctx_switch_pending compreso. Il
+ritorno anticipato conta come richiesta e non come switch vero, cosi' il
+confronto prima/dopo resta leggibile.
+
+WINQ_CTX0_SEMPRE=1 ripristina il comportamento vecchio per l'A/B con lo
+stesso binario. Il default e' la cura.
+
+Incluso il ripristino della correzione della patch 0001 su
+threads_win32.h (prototipo di impl_tss_dtor_invoke), che non era
+nell'albero e faceva fallire la compilazione appena i file di mesa
+venivano ricompilati davvero invece che presi dalla cache.
+---
+ src/mesa/compat/c11/threads_win32.h |  2 +-
+ src/vrend/vrend_renderer.c          | 40 +++++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/src/mesa/compat/c11/threads_win32.h b/src/mesa/compat/c11/threads_win32.h
+index 9f00d44..be25122 100644
+--- a/src/mesa/compat/c11/threads_win32.h
++++ b/src/mesa/compat/c11/threads_win32.h
+@@ -175,7 +175,7 @@ static int impl_tss_dtor_register(tss_t key, tss_dtor_t dtor)
+     return 0;
+ }
+ 
+-static void impl_tss_dtor_invoke()
++static void impl_tss_dtor_invoke(void)
+ {
+     int i;
+     for (i = 0; i < EMULATED_THREADS_TSS_DTOR_SLOTNUM; i++) {
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index aae3e21..faaf8b4 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -13115,7 +13115,47 @@ void *vrend_renderer_get_cursor_contents(struct pipe_resource *pres,
+ 
+ void vrend_renderer_force_ctx_0(void)
+ {
++   /* WINQ_CTX0_SEMPRE=1 ripristina il comportamento di prima di questa
++    * correzione: azzera sempre lo stato e richiede sempre lo switch,
++    * anche quando siamo gia' su ctx0 -- serve solo per il confronto A/B
++    * con lo stesso binario. Il default e' la cura, non il vecchio
++    * comportamento: la misura in PRESTAZIONI.md ("La causa, misurata:
++    * 717 ms/s dentro wglMakeCurrent") non e' un esperimento da attivare
++    * a mano. Letta una volta e cachata: mai getenv sul percorso caldo,
++    * stesso idioma di winq_glspia_accesa() in winq-glspia-conta.c. */
++   static int sempre = -1;
++
+    TRACE_FUNC();
++
++   if (sempre < 0) {
++      const char *v = getenv("WINQ_CTX0_SEMPRE");
++      sempre = (v && *v == '1') ? 1 : 0;
++   }
++
++   /* Siamo GIA' su ctx0? Le stesse identiche condizioni dei due cancelli
++    * di vrend_hw_switch_context() (:11714) e vrend_finish_context_switch()
++    * (:11740), ctx_switch_pending compreso, valutate qui contro ctx0
++    * PRIMA di azzerare current_ctx/current_hw_ctx -- azzerarli e'
++    * esattamente cio' che sotto fa scattare sempre lo switch vero, perche'
++    * i due cancelli confrontano contro quelle due variabili e con NULL
++    * non possono mai coincidere. vrend_state.ctx0 e' creato all'avvio del
++    * renderer (vrend_renderer_init()) ben prima che QEMU possa chiamare
++    * questa funzione sul percorso per-comando; il controllo di non-NULL
++    * e' comunque qui per restare sicuro come vrend_hw_switch_context(),
++    * che gestisce un ctx NULL senza dereferenziarlo. */
++   if (!sempre &&
++       vrend_state.ctx0 != NULL &&
++       vrend_state.current_ctx == vrend_state.ctx0 &&
++       vrend_state.ctx0->ctx_switch_pending == false &&
++       vrend_state.current_hw_ctx == vrend_state.ctx0) {
++      /* Conta come richiesta -- il confronto prima/dopo nella diagnostica
++       * resta leggibile -- ma NON come switch vero: non si tocca GL. */
++      if (winq_glspia_accesa()) {
++         winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++      }
++      return;
++   }
++
+    vrend_state.current_ctx = NULL;
+    vrend_state.current_hw_ctx = NULL;
+    /* WINQ_CTX_FORCE0: l'unico chiamante classificato cosi', vedi il commento
+-- 
+2.53.0.vfs.0.7
+

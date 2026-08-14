@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- App degli appunti condivisi, lato guest.
+
+     Nessuna activity, nessuna icona, nessuna risorsa: non c'e' niente da
+     mostrare all'utente. L'app vive in /system/app/ ed e' firmata con la
+     chiave di piattaforma, che e' l'unico modo per ottenere
+     READ_CLIPBOARD_IN_BACKGROUND (prot=signature|role): senza quel permesso
+     Android 10+ restituisce appunti vuoti a chi non ha il fuoco.
+
+     -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.godziller.habumi.clipboard"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="33" />
+
+    <!-- Leggere gli appunti mentre l'app non ha il fuoco: e' tutto cio' che
+         l'app fa, e senza questo non funziona niente. -->
+    <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND" />
+    <!-- La connessione TCP verso 10.0.2.2, cioe' l'host visto da SLIRP. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- RICEVERE BOOT_COMPLETED, e senza questa riga l'app non parte MAI.
+         MISURATO : dichiarare il receiver nel manifesto non basta,
+         Android rifiuta la consegna e lo scrive una volta sola nel logcat, cosi':
+             BroadcastQueue: Permission Denial: receiving Intent
+             { act=android.intent.action.BOOT_COMPLETED } to
+             com.godziller.habumi.clipboard/.AvvioReceiver requires
+         (nome del pacchetto aggiornato ; il resto e' testuale)
+             android.permission.RECEIVE_BOOT_COMPLETED
+         Il sintomo e' "gli appunti non si sincronizzano", che assomiglia a un
+         difetto del canale e non a un permesso mancante: senza quella riga di
+         logcat si cerca nel posto sbagliato. E' un permesso NORMALE, non serve
+         la firma di piattaforma che invece serve per leggere gli appunti. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- PERCHE' android:persistent NELL'application QUI SOTTO, e non un servizio
+         normale.
+         MISURATO : con un servizio in background ordinario Android
+         lo ferma dopo circa un minuto di inattivita', e lo dice cosi':
+             ActivityManager: Stopping service due to app idle:
+             u0a152 -1m19s711ms com.godziller.habumi.clipboard/.ServizioAppunti
+         (nome del pacchetto aggiornato ; il resto e' testuale)
+         La connessione col guscio cade di conseguenza, e il sintomo che si vede
+         e' "gli appunti hanno funzionato per un minuto e poi basta", che
+         somiglia a un difetto del canale e non a una politica di Android.
+         Le due cure possibili erano un servizio in PRIMO PIANO, che pero'
+         pretende una notifica permanente nella barra di stato del guest, oppure
+         android:persistent, che Android onora SOLO per le app installate in
+         /system. L'app ci sta gia' (ce la mette l'overlay dell'initramfs),
+         quindi si sceglie quella: nessuna notifica, e il processo non viene mai
+         reclamato.
+         Il costo, dichiarato: un processo sempre vivo. E' piccolo e non fa
+         nulla mentre aspetta, ma e' un impegno di risorse e non un pasto
+         gratis. -->
+
+    <application
+        android:label="HabumiClipboard"
+        android:hasCode="true"
+        android:allowBackup="false"
+        android:persistent="true">
+
+        <!-- exported="true" e' obbligatorio: BOOT_COMPLETED arriva dal sistema,
+             cioe' da fuori dell'app. -->
+        <receiver
+            android:name=".AvvioReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- exported="false": il servizio lo avvia solo il receiver qui sopra.
+             Nessun altro deve poterlo far partire. -->
+        <service
+            android:name=".ServizioAppunti"
+            android:exported="false" />
+
+    </application>
+</manifest>

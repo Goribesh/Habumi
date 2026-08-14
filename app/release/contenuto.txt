@@ -1,0 +1,255 @@
+# contenuto.txt -- cio' che entra nel pacchetto di rilascio.
+#
+# Un percorso per riga, relativo alla radice del progetto. Righe vuote e righe che
+# iniziano con # si ignorano, cosi' si puo' scrivere PERCHE' un file c'e'.
+#
+# Questo elenco e' MISURATO, non indovinato: ogni voce ha la sua ragione accanto.
+# Il copione di confezionamento legge questo file e non decide niente da se'.
+
+# --- il guscio e QEMU -------------------------------------------------------
+# Tutte e 107 le DLL di runtime/bin restano: 105 risultano caricate a VM in moto,
+# e le due che non compaiono -- AdbWinApi e AdbWinUsbApi -- le carica adb.exe, che
+# e' un processo a parte. In bin/ non c'e' niente da togliere.
+runtime/bin/AdbWinApi.dll
+runtime/bin/AdbWinUsbApi.dll
+runtime/bin/Habumi.exe
+runtime/bin/SDL2.dll
+runtime/bin/SDL2_image.dll
+runtime/bin/adb.exe
+runtime/bin/config.txt
+runtime/bin/libEGL.dll
+runtime/bin/libGLESv2.dll
+runtime/bin/libLerc.dll
+runtime/bin/libSvtAv1Enc-4.dll
+runtime/bin/libaom.dll
+runtime/bin/libatk-1.0-0.dll
+runtime/bin/libavif-16.dll
+runtime/bin/libbrotlicommon.dll
+runtime/bin/libbrotlidec.dll
+runtime/bin/libbrotlienc.dll
+runtime/bin/libbz2-1.dll
+runtime/bin/libc++.dll
+runtime/bin/libcacard-0.dll
+runtime/bin/libcairo-2.dll
+runtime/bin/libcairo-gobject-2.dll
+runtime/bin/libcapstone.dll
+runtime/bin/libcrypto-3-arm64.dll
+runtime/bin/libcurl-4.dll
+runtime/bin/libdatrie-1.dll
+runtime/bin/libdav1d-7.dll
+runtime/bin/libdb-6.2.dll
+runtime/bin/libdeflate.dll
+runtime/bin/libepoxy-0.dll
+runtime/bin/libexpat-1.dll
+runtime/bin/libfdt-1.dll
+runtime/bin/libffi-8.dll
+runtime/bin/libfontconfig-1.dll
+runtime/bin/libfreetype-6.dll
+runtime/bin/libfribidi-0.dll
+runtime/bin/libgdk-3-0.dll
+runtime/bin/libgdk_pixbuf-2.0-0.dll
+runtime/bin/libgio-2.0-0.dll
+runtime/bin/libglib-2.0-0.dll
+runtime/bin/libgmodule-2.0-0.dll
+runtime/bin/libgmp-10.dll
+runtime/bin/libgnutls-30.dll
+runtime/bin/libgobject-2.0-0.dll
+runtime/bin/libgraphite2.dll
+runtime/bin/libgstapp-1.0-0.dll
+runtime/bin/libgstbase-1.0-0.dll
+runtime/bin/libgstreamer-1.0-0.dll
+runtime/bin/libgtk-3-0.dll
+runtime/bin/libharfbuzz-0.dll
+runtime/bin/libhogweed-7.dll
+runtime/bin/libiconv-2.dll
+runtime/bin/libidn2-0.dll
+runtime/bin/libintl-8.dll
+runtime/bin/libjack.dll
+runtime/bin/libjbig-0.dll
+runtime/bin/libjpeg-8.dll
+runtime/bin/libjxl.dll
+runtime/bin/libjxl_cms.dll
+runtime/bin/liblcms2-2.dll
+runtime/bin/liblz4.dll
+runtime/bin/liblzma-5.dll
+runtime/bin/liblzo2-2.dll
+runtime/bin/libncursesw6.dll
+runtime/bin/libnettle-9.dll
+runtime/bin/libnfs-16.dll
+runtime/bin/libnghttp2-14.dll
+runtime/bin/libnghttp3-9.dll
+runtime/bin/libngtcp2-16.dll
+runtime/bin/libngtcp2_crypto_ossl-0.dll
+runtime/bin/libnspr4.dll
+runtime/bin/libopus-0.dll
+runtime/bin/liborc-0.4-0.dll
+runtime/bin/libp11-kit-0.dll
+runtime/bin/libpango-1.0-0.dll
+runtime/bin/libpangocairo-1.0-0.dll
+runtime/bin/libpangoft2-1.0-0.dll
+runtime/bin/libpangowin32-1.0-0.dll
+runtime/bin/libpcre2-8-0.dll
+runtime/bin/libpixman-1-0.dll
+runtime/bin/libplc4.dll
+runtime/bin/libplds4.dll
+runtime/bin/libpng16-16.dll
+runtime/bin/libpsl-5.dll
+runtime/bin/librav1e.dll
+runtime/bin/libsasl2-3.dll
+runtime/bin/libsharpyuv-0.dll
+runtime/bin/libslirp-0.dll
+runtime/bin/libsnappy.dll
+runtime/bin/libspice-server-1.dll
+runtime/bin/libssh.dll
+runtime/bin/libssh2-1.dll
+runtime/bin/libssl-3-arm64.dll
+runtime/bin/libsystre-0.dll
+runtime/bin/libtasn1-6.dll
+runtime/bin/libthai-0.dll
+runtime/bin/libtiff-6.dll
+runtime/bin/libtre-5.dll
+runtime/bin/libunistring-5.dll
+runtime/bin/libusb-1.0.dll
+runtime/bin/libusbredirparser-1.dll
+runtime/bin/libvirglrenderer-1.dll
+runtime/bin/libwebp-7.dll
+runtime/bin/libwebpdemux-2.dll
+runtime/bin/libwinpthread-1.dll
+runtime/bin/libyuv.dll
+runtime/bin/libzstd.dll
+runtime/bin/nss3.dll
+runtime/bin/nssutil3.dll
+# opengl32.dll e' Mesa 26.2.0 costruita da noi (driver gallium d3d12), non
+# quella di Windows. Sta qui perche' il prodotto la carica per vicinanza a
+# qemu-nostro.exe, e senza di lei si ricadrebbe sull'OpenGL di sistema
+# perdendo dxil-hash e WGL_ARB_context_flush_control -- cioe' il +68% di
+# punteggio e l'attesa della GPU a ogni cambio di contesto. Provenienza,
+# patch applicate e licenze in LICENSES/MESA-NOTA.txt.
+runtime/bin/opengl32.dll
+runtime/bin/qemu-img.exe
+# Le tre "riserva" e la "prima-mappa" NON entrano: sono copie di sviluppo di
+# qemu-nostro.exe tenute da parte per poter tornare indietro durante una
+# indagine, 116 MB l'una. Erano finite in questo elenco con la lista
+# alfabetica di runtime/bin/ e sono state spedite nell'archivio 0.1.0 --
+# 464 MB di scorte in un pacchetto da 221. La motivazione scritta piu' sopra
+# ("tutte e 107 le DLL restano") riguardava le DLL, non gli eseguibili.
+runtime/bin/qemu-nostro.exe
+runtime/bin/qemu-system-aarch64.exe
+runtime/bin/zlib1.dll
+
+# --- i dati di QEMU, senza i firmware UEFI ----------------------------------
+# I 12 file edk2-*.fd pesavano 303 MB e non servono: si avvia con -kernel diretto,
+# senza -bios e senza -pflash, quindi nessun firmware UEFI entra mai in gioco.
+# Verificato togliendoli e rifacendo il giro completo.
+runtime/share/qemu/QEMU,cgthree.bin
+runtime/share/qemu/QEMU,tcx.bin
+runtime/share/qemu/ast27x0_bootrom.bin
+runtime/share/qemu/bios-256k.bin
+runtime/share/qemu/bios-microvm.bin
+runtime/share/qemu/bios.bin
+runtime/share/qemu/dtb/bamboo.dtb
+runtime/share/qemu/dtb/canyonlands.dtb
+runtime/share/qemu/dtb/pegasos1.dtb
+runtime/share/qemu/dtb/pegasos2.dtb
+runtime/share/qemu/dtb/petalogix-ml605.dtb
+runtime/share/qemu/dtb/petalogix-s3adsp1800.dtb
+runtime/share/qemu/edk2-licenses.txt
+runtime/share/qemu/efi-e1000.rom
+runtime/share/qemu/efi-e1000e.rom
+runtime/share/qemu/efi-eepro100.rom
+runtime/share/qemu/efi-ne2k_pci.rom
+runtime/share/qemu/efi-pcnet.rom
+runtime/share/qemu/efi-rtl8139.rom
+runtime/share/qemu/efi-virtio.rom
+runtime/share/qemu/efi-vmxnet3.rom
+runtime/share/qemu/firmware/50-edk2-i386-secure.json
+runtime/share/qemu/firmware/50-edk2-x86_64-secure.json
+runtime/share/qemu/firmware/60-edk2-aarch64.json
+runtime/share/qemu/firmware/60-edk2-arm.json
+runtime/share/qemu/firmware/60-edk2-i386.json
+runtime/share/qemu/firmware/60-edk2-loongarch64.json
+runtime/share/qemu/firmware/60-edk2-riscv64.json
+runtime/share/qemu/firmware/60-edk2-x86_64.json
+runtime/share/qemu/hppa-firmware.img
+runtime/share/qemu/hppa-firmware64.img
+runtime/share/qemu/keymaps/ar
+runtime/share/qemu/keymaps/bepo
+runtime/share/qemu/keymaps/cz
+runtime/share/qemu/keymaps/da
+runtime/share/qemu/keymaps/de
+runtime/share/qemu/keymaps/de-ch
+runtime/share/qemu/keymaps/en-gb
+runtime/share/qemu/keymaps/en-us
+runtime/share/qemu/keymaps/es
+runtime/share/qemu/keymaps/et
+runtime/share/qemu/keymaps/fi
+runtime/share/qemu/keymaps/fo
+runtime/share/qemu/keymaps/fr
+runtime/share/qemu/keymaps/fr-be
+runtime/share/qemu/keymaps/fr-ca
+runtime/share/qemu/keymaps/fr-ch
+runtime/share/qemu/keymaps/hr
+runtime/share/qemu/keymaps/hu
+runtime/share/qemu/keymaps/is
+runtime/share/qemu/keymaps/it
+runtime/share/qemu/keymaps/ja
+runtime/share/qemu/keymaps/lt
+runtime/share/qemu/keymaps/lv
+runtime/share/qemu/keymaps/mk
+runtime/share/qemu/keymaps/nl
+runtime/share/qemu/keymaps/no
+runtime/share/qemu/keymaps/pl
+runtime/share/qemu/keymaps/pt
+runtime/share/qemu/keymaps/pt-br
+runtime/share/qemu/keymaps/ru
+runtime/share/qemu/keymaps/sl
+runtime/share/qemu/keymaps/sv
+runtime/share/qemu/keymaps/th
+runtime/share/qemu/keymaps/tr
+runtime/share/qemu/kvmvapic.bin
+runtime/share/qemu/linuxboot_dma.bin
+runtime/share/qemu/multiboot_dma.bin
+runtime/share/qemu/npcm7xx_bootrom.bin
+runtime/share/qemu/npcm8xx_bootrom.bin
+runtime/share/qemu/openbios-ppc
+runtime/share/qemu/openbios-sparc32
+runtime/share/qemu/openbios-sparc64
+runtime/share/qemu/opensbi-riscv32-generic-fw_dynamic.bin
+runtime/share/qemu/opensbi-riscv64-generic-fw_dynamic.bin
+runtime/share/qemu/palcode-clipper
+runtime/share/qemu/pnv-pnor.bin
+runtime/share/qemu/pvh.bin
+runtime/share/qemu/pxe-e1000.rom
+runtime/share/qemu/pxe-eepro100.rom
+runtime/share/qemu/pxe-ne2k_pci.rom
+runtime/share/qemu/pxe-pcnet.rom
+runtime/share/qemu/pxe-rtl8139.rom
+runtime/share/qemu/pxe-virtio.rom
+runtime/share/qemu/qboot.rom
+runtime/share/qemu/qemu-nsis.bmp
+runtime/share/qemu/qemu_vga.ndrv
+runtime/share/qemu/s390-ccw.img
+runtime/share/qemu/skiboot.lid
+runtime/share/qemu/slof.bin
+runtime/share/qemu/trace-events-all
+runtime/share/qemu/u-boot-sam460.bin
+runtime/share/qemu/u-boot.e500
+runtime/share/qemu/vgabios-ati.bin
+runtime/share/qemu/vgabios-bochs-display.bin
+runtime/share/qemu/vgabios-cirrus.bin
+runtime/share/qemu/vgabios-qxl.bin
+runtime/share/qemu/vgabios-ramfb.bin
+runtime/share/qemu/vgabios-stdvga.bin
+runtime/share/qemu/vgabios-virtio.bin
+runtime/share/qemu/vgabios-vmware.bin
+runtime/share/qemu/vgabios.bin
+runtime/share/qemu/vof-nvram.bin
+runtime/share/qemu/vof.bin
+
+# --- gli altri file del prodotto --------------------------------------------
+runtime/empty-data.zip
+runtime/keymaps/generico.txt
+
+# --- cio' che e' nostro e non si scarica ------------------------------------
+guest/images/kernel-guest-arm64
+guest/images/android/initramfs.img

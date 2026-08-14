@@ -1,0 +1,494 @@
+From af5387e9f79154d7479fa5148abec42f9906399a Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 11:25:04 +0200
+[PATCH] winq: anello delle query GL_TIME_ELAPSED
+
+---
+ src/meson.build              |   1 +
+ src/test-winq-glspia-conta.c |  41 +++++++
+ src/virglrenderer.c          |  18 +++-
+ src/vrend/vrend_decode.c     |  48 ++++++++-
+ src/winq-glspia-conta.c      |  16 +++
+ src/winq-glspia-conta.h      |  20 ++++
+ src/winq-glspia-gpu.c        | 203 +++++++++++++++++++++++++++++++++++
+ 7 files changed, 341 insertions(+), 6 deletions(-)
+ create mode 100644 src/winq-glspia-gpu.c
+
+diff --git a/src/meson.build b/src/meson.build
+index d2dab29..8b43e2e 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -47,6 +47,7 @@ vrend_sources = [
+ virglrenderer_sources = [
+    'virglrenderer.c',
+    'winq-glspia-conta.c',
++   'winq-glspia-gpu.c',
+ ]
+ 
+ vrend_winsys_gbm_sources = [
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index 0e8b86d..7ef9917 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -161,6 +161,45 @@ static void prova_taratura_frequenza_non_impostata(void)
+     esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessun contatore chiamate toccato");
+ }
+ 
++/* winq_glspia_gpu_chiudi() passa il proprio argomento alla banda di
++ * plausibilita' di winq-glspia-gpu.c come tempo CPU vero, in nanosecondi, da
++ * confrontare con i nanosecondi veri della query GL. QueryPerformanceFrequency
++ * su Windows non e' mai 1 GHz (tipicamente 10 MHz: qemu/probe/sonda-gltimer.c
++ * lo converte esplicitamente con lo stesso schema). Se l'aggancio passasse i
++ * tick grezzi invece dei nanosecondi convertiti, la banda confronterebbe
++ * numeri di ordini di grandezza diversi e scarterebbe come "assurdi" quasi
++ * tutti i campioni validi -- silenziosamente, perche' "assurda" e' comunque
++ * un conteggio valido e nessuno lo leggerebbe come sintomo di un bug di unita'
++ * di misura. Questa prova blocca la regressione a quell'errore. */
++static void prova_intervallo_ns(void)
++{
++    printf("intervallo in nanosecondi:\n");
++    winq_glspia_freq_forza(1000000);   /* 1 MHz: un tick vale 1000 ns */
++
++    esigi(winq_glspia_intervallo_ns(100, 150) == 50000,
++          "50 tick a 1 MHz sono 50000 ns, non 50");
++    esigi(winq_glspia_intervallo_ns(500, 400) == 0,
++          "intervallo negativo: zero, non un numero enorme");
++}
++
++/* I nanosecondi della query non passano dalla conversione da tick: se un
++ * giorno qualcuno li facesse passare da aggiungi(), questa prova lo prende. */
++static void prova_somma_gpu(void)
++{
++    struct winq_glspia s;
++
++    printf("somma GPU:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_somma_gpu(1500000);
++    winq_glspia_somma_gpu(500000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_GPU] == 2000000, "2 ms sommati come nanosecondi");
++    esigi(s.chiamate[WINQ_SPIA_GPU] == 2, "due campioni contati");
++}
++
+ int main(void)
+ {
+     prova_accumulo();
+@@ -170,6 +209,8 @@ int main(void)
+     prova_taratura();
+     prova_frequenza_non_impostata();
+     prova_taratura_frequenza_non_impostata();
++    prova_intervallo_ns();
++    prova_somma_gpu();
+ 
+     if (falliti) {
+         printf("\n%d PROVE FALLITE\n", falliti);
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index d2f928e..0608101 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -291,12 +291,28 @@ void virgl_renderer_context_destroy(uint32_t handle)
+    virgl_context_remove(handle);
+ }
+ 
++/* CORREZIONE POST-REVIEW: l'aggancio alla query GL_TIME_ELAPSED (apri/chiudi)
++ * che stava qui e' stato spostato dentro vrend_decode_ctx_submit_cmd
++ * (research/winq-virgl/src/vrend/vrend_decode.c), subito dopo che
++ * vrend_hw_switch_context() ha reso corrente il contesto GL del vrend_context
++ * di destinazione. Da qui, il cambio di contesto avviene DENTRO
++ * ctx->submit_cmd(): aprire la query prima di chiamarlo -- come faceva
++ * questa funzione -- significa aprirla sul contesto lasciato corrente dalla
++ * submit PRECEDENTE, non su quello che sta per eseguire i comandi (mai, alla
++ * primissima chiamata del processo). Percio' questa funzione e' tornata a
++ * essere il semplice inoltro che era prima di quell'aggancio: nessun'altra
++ * ragione per estrarne il corpo in una funzione a se' (vedi il commento in
++ * cima a vrend_decode_ctx_submit_cmd per dove vive ora la garanzia sui
++ * quattro punti di uscita). */
+ int virgl_renderer_submit_cmd(void *buffer,
+                               int ctx_id,
+                               int ndw)
+ {
++   struct virgl_context *ctx;
++
+    TRACE_FUNC();
+-   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
++
++   ctx = virgl_context_lookup(ctx_id);
+    if (!ctx)
+       return EINVAL;
+ 
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index 7774a25..d662e87 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -38,6 +38,7 @@
+ #include "vrend_object.h"
+ #include "tgsi/tgsi_text.h"
+ #include "vrend_debug.h"
++#include "winq-glspia-conta.h"
+ #include "vrend_tweaks.h"
+ #include "virgl_util.h"
+ 
+@@ -2053,7 +2054,8 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+    TRACE_FUNC();
+    struct vrend_decode_ctx *gdctx = (struct vrend_decode_ctx *)ctx;
+    bool bret;
+-   int ret;
++   int ret = 0;
++   uint64_t t0, t1;
+ 
+ #define TRANSFER_HEADER_SIZE 4096
+ 
+@@ -2068,6 +2070,29 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+                                   size - TRANSFER_HEADER_SIZE);
+    }
+ 
++   /* CORREZIONE POST-REVIEW: qui, e solo qui, il contesto GL e' garantito
++    * essere quello giusto. vrend_hw_switch_context() qui sopra e' arrivato
++    * fino a vrend_finish_context_switch() (vrend_renderer.c), che ha gia'
++    * fatto vrend_clicbs->make_current(ctx->sub->gl_context) se un cambio
++    * serviva -- e i comandi del buffer, decodificati dal ciclo sotto, non
++    * sono ancora stati eseguiti. Prima di questo punto (come faceva la
++    * versione precedente, dentro virgl_renderer_submit_cmd in
++    * virglrenderer.c, chiamata PRIMA di arrivare fin qui) il contesto
++    * corrente e' ancora quello lasciato dalla submit precedente, non quello
++    * che sta per lavorare: glBeginQuery finirebbe sul contesto sbagliato, o
++    * su nessuno alla primissima chiamata del processo. Percio' l'apertura e
++    * la chiusura della query GL_TIME_ELAPSED avvolgono da qui il ciclo di
++    * decodifica, non il corpo di virgl_renderer_submit_cmd.
++    *
++    * t_cpu per la banda di plausibilita' (winq-glspia-gpu.c) e' misurato
++    * qui, non nel chiamante esterno: e' l'unico consumatore di questo
++    * numero, e deve coprire esattamente il tratto che la query GL
++    * cronometra, non un intervallo piu' largo che includerebbe anche la
++    * validazione fatta da virgl_renderer_submit_cmd prima di arrivare al
++    * vero submit_cmd del contesto. */
++   winq_glspia_gpu_apri();
++   t0 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
++
+    const uint32_t *typed_buf = (const uint32_t *)buffer;
+    const uint32_t buf_total = (uint32_t)(size / sizeof(uint32_t));
+    uint32_t buf_offset = 0;
+@@ -2078,8 +2103,10 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+       uint32_t len = *buf >> 16;
+       uint32_t cmd = *buf & 0xff;
+ 
+-      if (cmd >= VIRGL_MAX_COMMANDS)
+-         return EINVAL;
++      if (cmd >= VIRGL_MAX_COMMANDS) {
++         ret = EINVAL;
++         goto out;
++      }
+ 
+       buf_offset += len + 1;
+ 
+@@ -2103,10 +2130,21 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+                gdctx->base.ctx_id, vrend_get_comand_name(cmd), ret);
+          if (ret == EINVAL)
+             vrend_report_buffer_error(gdctx->grctx, *buf);
+-         return ret;
++         goto out;
+       }
+    }
+-   return 0;
++   ret = 0;
++
++out:
++   /* Un solo punto di chiusura per tutte le uscite del ciclo (il return
++    * anticipato su comando invalido, il return sull'errore di dispatch, e il
++    * completamento normale): un chiudi dimenticato su uno di questi rami
++    * lascerebbe la query GL_TIME_ELAPSED aperta per sempre, e ogni
++    * glBeginQuery successivo su questo contesto fallirebbe in silenzio
++    * (vedi il commento in cima a winq-glspia-gpu.c). */
++   t1 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
++   winq_glspia_gpu_chiudi(winq_glspia_intervallo_ns(t0, t1));
++   return ret;
+ }
+ 
+ static int vrend_decode_ctx_get_fencing_fd(UNUSED struct virgl_context *ctx)
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index f895b2a..340cec4 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -112,6 +112,16 @@ void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1)
+     spia.chiamate[secchio]++;
+ }
+ 
++uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1)
++{
++    /* Stessa guardia di aggiungi(): un orologio che torna indietro non deve
++     * diventare, sottratto come unsigned, un numero enorme. */
++    if (t1 < t0) {
++        return 0;
++    }
++    return winq_tick_a_ns(t1 - t0);
++}
++
+ void winq_glspia_conta_saltata(void)
+ {
+     spia.saltate++;
+@@ -122,6 +132,12 @@ void winq_glspia_conta_assurda(void)
+     spia.assurde++;
+ }
+ 
++void winq_glspia_somma_gpu(uint64_t ns)
++{
++    spia.ns[WINQ_SPIA_GPU] += ns;
++    spia.chiamate[WINQ_SPIA_GPU]++;
++}
++
+ void winq_glspia_azzera(void)
+ {
+     int i;
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index 039ef0e..dfe159a 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -43,8 +43,22 @@ int winq_glspia_accesa(void);
+ 
+ uint64_t winq_glspia_ora(void);
+ void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1);
++/* Come aggiungi(), converte un intervallo fra due letture di winq_glspia_ora()
++ * in nanosecondi -- ma senza sommarlo in un secchio: serve a chi ha bisogno
++ * del solo numero. L'aggancio di virgl_renderer_submit_cmd lo usa per passare
++ * a winq_glspia_gpu_chiudi() il tempo CPU vero in nanosecondi, non i tick
++ * grezzi di QueryPerformanceCounter: la banda di plausibilita' di
++ * winq-glspia-gpu.c confronta questo numero con i nanosecondi veri della
++ * query GL, e su Windows un tick non e' un nanosecondo (vedi
++ * qemu/probe/sonda-gltimer.c, che fa la stessa conversione per lo stesso
++ * motivo). Stessa guardia di aggiungi() sull'orologio che torna indietro:
++ * intervallo negativo -> 0, non un numero enorme. */
++uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1);
+ void winq_glspia_conta_saltata(void);
+ void winq_glspia_conta_assurda(void);
++/* I nanosecondi arrivano gia' convertiti dalla query GL, quindi non passano
++ * per aggiungi(), che converte da tick. */
++void winq_glspia_somma_gpu(uint64_t ns);
+ void winq_glspia_azzera(void);
+ uint64_t winq_glspia_taratura_ns(void);
+ 
+@@ -55,4 +69,10 @@ WINQ_SPIA_ESPORTA void winq_glspia_leggi(struct winq_glspia *fuori);
+ void winq_glspia_freq_forza(uint64_t hz);
+ void winq_glspia_freq_vera(void);
+ 
++/* L'anello delle query GL_TIME_ELAPSED. Vive in winq-glspia-gpu.c, che e'
++ * l'unico file dello shim che tocca GL -- percio' le prove di
++ * research/scripts/test-glspia.sh non lo compilano. */
++void winq_glspia_gpu_apri(void);
++void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns);
++
+ #endif /* WINQ_GLSPIA_CONTA_H */
+diff --git a/src/winq-glspia-gpu.c b/src/winq-glspia-gpu.c
+new file mode 100644
+index 0000000..c2bc2db
+--- /dev/null
++++ b/src/winq-glspia-gpu.c
+@@ -0,0 +1,203 @@
++/* winq-glspia-gpu.c -- l'anello delle query GL_TIME_ELAPSED, per contesto GL.
++ *
++ * PERCHE' PER CONTESTO E NON PER PROCESSO. Un query object GL non si
++ * condivide fra contesti (a differenza di texture e buffer, non fa parte del
++ * gruppo di condivisione): un id generato nel contesto A e' invalido nel
++ * contesto B, e glBeginQuery su un contesto che non e' quello per cui l'id
++ * fu creato fallisce con GL_INVALID_OPERATION -- che nessuno legge. Ogni
++ * vrend_sub_context ha il proprio HGLRC (vrend_renderer.c, vrend_create_sub_ctx)
++ * e su Android piu' contesti si alternano a ogni frame: non e' un caso
++ * limite, e' la normalita'. Percio' l'anello, l'inizializzazione
++ * dell'estensione e lo stato "query in corso" sono per contesto, indicizzati
++ * dall'HGLRC restituito da wglGetCurrentContext().
++ *
++ * PERCHE' UN ANELLO E NON UNA LETTURA DIRETTA. Leggere GL_QUERY_RESULT subito
++ * dopo glEndQuery blocca finche' la GPU non ha finito: serializzerebbe la
++ * catena e cambierebbe la cosa che si sta misurando, restituendo numeri
++ * plausibili e falsi. Si apre la casella i, e prima di riusarla si guarda se
++ * il risultato di allora e' pronto. Se non lo e' si SALTA e si conta -- non si
++ * aspetta mai.
++ *
++ * PERCHE' NIENTE GUARDIA "DISGIUNTO". GL_GPU_DISJOINT appartiene a
++ * EXT_disjoint_timer_query, che e' un'estensione di OpenGL ES. Qui il contesto
++ * dell'host e' desktop 4.6 core via WGL (qemu/WGL.md) e GL_ARB_timer_query non
++ * offre alcun segnale di disgiunzione. Al suo posto una banda di plausibilita':
++ * zero, o piu' di dieci volte il tempo CPU della submit, e' un campione che si
++ * butta contandolo.
++ */
++#include "winq-glspia-conta.h"
++
++#include <epoxy/gl.h>
++/* epoxy/wgl.h e non <windows.h> a mano: risolve wglGetCurrentContext() come
++ * epoxy_wglGetCurrentContext() (dispatch pigro di epoxy, wgl_generated.h),
++ * la stessa via che questo shim usa gia' per ogni altra chiamata GL -- niente
++ * dipendenza di collegamento nuova verso opengl32.lib da giustificare in una
++ * patch che vive sopra l'upstream. Porta con se' <windows.h> (per HGLRC),
++ * quindi non va incluso a parte. */
++#include <epoxy/wgl.h>
++
++#define WINQ_ANELLO 8
++#define WINQ_BANDA  10   /* t_gpu oltre 10 x t_cpu non e' un numero, e' un errore */
++
++/* WINQ_CONTESTI: quanti contesti GL distinti questo shim puo' cronometrare
++ * contemporaneamente. Ogni vrend_sub_context ha il proprio HGLRC e su
++ * Android piu' contesti si alternano a ogni frame (vedi il commento in cima
++ * al file): 8 copre comodamente un client con piu' sub-contesti vivi insieme
++ * senza riservare memoria per un caso mai osservato. Se la riga di riepilogo
++ * mostra "contesti saltati" > 0, questo numero va alzato, non ignorato --
++ * vedi trova_o_crea() sotto. */
++#define WINQ_CONTESTI 8
++
++struct winq_ctx {
++    HGLRC contesto;                     /* NULL = voce libera */
++    GLuint query[WINQ_ANELLO];
++    uint64_t cpu_ns[WINQ_ANELLO];       /* il t_cpu della submit di quella casella */
++    int aperta[WINQ_ANELLO];
++    int prossima;
++    int pronto;      /* -1 = estensione assente PER QUESTO contesto, 0 = da inizializzare, 1 = ok */
++    int in_corso;
++};
++
++static struct winq_ctx tabella[WINQ_CONTESTI];
++
++/* Trova la voce di 'corrente' nella tabella, o ne assegna una libera se
++ * 'corrente' e' un contesto mai visto. Restituisce NULL se il contesto non
++ * c'era e la tabella e' piena: il chiamante conta il fatto e rinuncia, non
++ * apre query per i contesti in eccesso.
++ *
++ * NIENTE liberazione di voci alla distruzione di un contesto: questo file
++ * non ha un aggancio per sapere quando un HGLRC muore (vrend_destroy_sub_context
++ * non chiama nulla di winq), e un pugno di query object persi a fine sessione
++ * -- al piu' WINQ_CONTESTI * WINQ_ANELLO, liberati dal driver alla chiusura
++ * del processo -- non e' un problema che giustifichi l'aggancio. Decisione
++ * esplicita, non una svista: vedi la review che ha introdotto questo file. */
++static struct winq_ctx *trova_o_crea(HGLRC corrente)
++{
++    int libera = -1;
++    int i;
++
++    for (i = 0; i < WINQ_CONTESTI; i++) {
++        if (tabella[i].contesto == corrente)
++            return &tabella[i];
++        if (libera < 0 && tabella[i].contesto == NULL)
++            libera = i;
++    }
++    if (libera < 0)
++        return NULL;
++
++    tabella[libera].contesto = corrente;
++    return &tabella[libera];
++}
++
++static int inizializza(struct winq_ctx *c)
++{
++    if (c->pronto) {
++        return c->pronto > 0;
++    }
++    /* Per contesto e non per processo: contesti diversi (driver diversi, o
++     * lo stesso driver con capacita' negoziate diversamente) possono in
++     * teoria esporre insiemi diversi di estensioni. */
++    if (!epoxy_has_gl_extension("GL_ARB_timer_query")) {
++        c->pronto = -1;
++        return 0;
++    }
++    /* epoxy_glGenQueries e non glGenQueries: winq-glspia.h non avvolge questa
++     * funzione, ma scriverla per esteso rende il file leggibile da solo. */
++    epoxy_glGenQueries(WINQ_ANELLO, c->query);
++    c->pronto = 1;
++    return 1;
++}
++
++/* Raccoglie il risultato della casella, se c'e'. Non aspetta mai. */
++static void raccogli(struct winq_ctx *c, int i)
++{
++    GLint disponibile = 0;
++    GLuint64 ns = 0;
++
++    if (!c->aperta[i]) {
++        return;
++    }
++    epoxy_glGetQueryObjectiv(c->query[i], GL_QUERY_RESULT_AVAILABLE, &disponibile);
++    if (!disponibile) {
++        winq_glspia_conta_saltata();
++        c->aperta[i] = 0;
++        return;
++    }
++    epoxy_glGetQueryObjectui64v(c->query[i], GL_QUERY_RESULT, &ns);
++    c->aperta[i] = 0;
++
++    /* cpu_ns[i] == 0 capita quando l'orologio e' tornato indietro fra apri()
++     * e chiudi() di quella casella (guardia di winq_glspia_intervallo_ns) o
++     * quando la submit e' stata piu' veloce della risoluzione del tick: in
++     * entrambi i casi non c'e' un t_cpu valido con cui giudicare la
++     * plausibilita' del campione GPU. Si SCARTA anziche' accettarlo senza
++     * controllo superiore -- la banda esiste per contare i campioni assurdi,
++     * non per lasciare un varco dove non sa rispondere. */
++    if (ns == 0 || c->cpu_ns[i] == 0 || ns > c->cpu_ns[i] * WINQ_BANDA) {
++        winq_glspia_conta_assurda();
++        return;
++    }
++    /* aggiungi vuole due tick e converte; qui i nanosecondi ci sono gia'.
++     * Con la frequenza forzata a un miliardo il tick E' il nanosecondo, ma
++     * forzarla qui romperebbe gli altri secchi: si passa 0 e ns come istanti,
++     * il che e' esatto solo se la frequenza e' 1 GHz. Percio' NON si usa
++     * aggiungi: si somma direttamente nel secchio dedicato. */
++    winq_glspia_somma_gpu(ns);
++}
++
++void winq_glspia_gpu_apri(void)
++{
++    HGLRC corrente;
++    struct winq_ctx *c;
++
++    if (!winq_glspia_accesa()) {
++        return;
++    }
++
++    corrente = wglGetCurrentContext();
++    if (!corrente) {
++        /* Nessun contesto corrente: aprire una query qui sarebbe esattamente
++         * il difetto trovato in review (glBeginQuery sul contesto lasciato
++         * dalla submit precedente, o su nessuno alla primissima chiamata).
++         * Si conta come un salto: un campione perso, non un errore da
++         * nascondere. */
++        winq_glspia_conta_saltata();
++        return;
++    }
++
++    c = trova_o_crea(corrente);
++    if (!c) {
++        /* Tabella piena: questo contesto resta senza cronometraggio. Si
++         * conta con lo stesso contatore dei salti -- e' un campione perso
++         * per lo stesso motivo di fondo (nessuna casella disponibile), non
++         * un evento diverso da distinguere in questa fase. */
++        winq_glspia_conta_saltata();
++        return;
++    }
++
++    if (!inizializza(c) || c->in_corso) {
++        return;
++    }
++    raccogli(c, c->prossima);
++    epoxy_glBeginQuery(GL_TIME_ELAPSED, c->query[c->prossima]);
++    c->aperta[c->prossima] = 1;
++    c->in_corso = 1;
++}
++
++void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns)
++{
++    HGLRC corrente = wglGetCurrentContext();
++    struct winq_ctx *c;
++
++    if (!corrente) {
++        return;
++    }
++    c = trova_o_crea(corrente);
++    if (!c || !c->in_corso) {
++        return;
++    }
++    epoxy_glEndQuery(GL_TIME_ELAPSED);
++    c->cpu_ns[c->prossima] = t_cpu_ns;
++    c->prossima = (c->prossima + 1) % WINQ_ANELLO;
++    c->in_corso = 0;
++}
+-- 
+2.53.0.vfs.0.7
+

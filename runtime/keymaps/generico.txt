@@ -1,0 +1,11 @@
+# mappa dei tasti -- profilo di esempio
+# Coordinate in permille dell'area cliente (0..1000), non in pixel: cosi' la
+# mappa sopravvive al ridimensionamento della finestra.
+#
+# joystick <quattro tasti> <cx> <cy> <raggio>
+# I quattro tasti sono nell'ordine SU, SINISTRA, GIU', DESTRA.
+joystick WASD 200 750 120
+
+# tocco <tasto> <x> <y>
+touch Q 250 700
+touch E 750 700

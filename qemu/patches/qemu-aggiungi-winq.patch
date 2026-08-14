@@ -1,0 +1,50 @@
+--- a/qapi/ui.json
++++ b/qapi/ui.json
+@@ -1494,6 +1494,9 @@
+ #
+ # @sdl: The SDL user interface.
+ #
++# @winq: The winq user interface, a native Win32 window (Godziller
++#     internal, ARM64 Android runtime).
++#
+ # @egl-headless: No user interface, offload GL operations to a local
+ #     DRI device.  Graphical display need to be paired with VNC or
+ #     Spice.  (Since 3.1)
+@@ -1521,6 +1524,7 @@
+     { 'name': 'none' },
+     { 'name': 'gtk', 'if': 'CONFIG_GTK' },
+     { 'name': 'sdl', 'if': 'CONFIG_SDL' },
++    { 'name': 'winq' },
+     { 'name': 'egl-headless', 'if': 'CONFIG_OPENGL' },
+     { 'name': 'curses', 'if': 'CONFIG_CURSES' },
+     { 'name': 'cocoa', 'if': 'CONFIG_COCOA' },
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -103,6 +103,27 @@
+   ui_modules += {'dbus' : dbus_ss}
+ endif
+ 
++if host_os == 'windows'
++  # Backend -display winq: finestra Win32 nativa (Godziller, non upstream).
++  # Non e' un modulo caricabile: entra sempre nel binario principale, come
++  # win32-kbd-hook.c poco sotto.
++  #
++  # winq-coord.c, winq-window.c e winq-input.c non dipendono da nulla oltre a
++  # windows.h: in particolare il tocco (winq-input.c) non c'entra con la
++  # presentazione, quindi entra sempre e una build senza GL fallisce dove il
++  # problema e' (winq_early_init, che dice "usare -display sdl").
++  # winq-present.c invece riusa egl-helpers.c, egl-context.c, shader.c e
++  # console-gl.c, che stanno in opengl_ss (righe 57-64 di questo file) e
++  # quindi esistono solo se opengl e' stato trovato: va aggiunto con
++  # "when: opengl", altrimenti una build senza OpenGL fallirebbe in fase di
++  # link su simboli qemu_egl_* invece di dire cosa manca. Con CONFIG_MODULES
++  # spento (il caso di questa build) opengl_ss viene riversato in system_ss
++  # da meson.build:3953-3957, quindi i simboli finiscono nello stesso
++  # binario e non serve nient'altro.
++  system_ss.add(files('winq-coord.c', 'winq-window.c', 'winq-ciclo.c', 'winq-input.c', 'winq-rotella.c', 'winq-coda.c', 'winq-mappa.c'))
++  system_ss.add(when: opengl, if_true: files('winq-present.c', 'winq-wgl.c'))
++endif
++
+ if gtk.found()
+   if host_os == 'windows'
+     system_ss.add(files('win32-kbd-hook.c'))

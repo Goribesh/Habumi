@@ -1,0 +1,255 @@
+diff --git a/src/egl/drivers/wgl/egl_wgl.c b/src/egl/drivers/wgl/egl_wgl.c
+index f670c18d524..45b0748de74 100644
+--- a/src/egl/drivers/wgl/egl_wgl.c
++++ b/src/egl/drivers/wgl/egl_wgl.c
+@@ -457,10 +457,18 @@ wgl_create_context(_EGLDisplay *disp, _EGLConfig *conf, _EGLContext *share_list,
+    unsigned resetStrategy = WGL_NO_RESET_NOTIFICATION_ARB;
+    if (wgl_ctx->base.ResetNotificationStrategy != EGL_NO_RESET_NOTIFICATION)
+       resetStrategy = WGL_LOSE_CONTEXT_ON_RESET_ARB;
++   /* EGL_KHR_context_flush_control ha gli stessi due valori di
++    * WGL_ARB_context_flush_control, e qui EGL sta sopra WGL: si traduce invece
++    * di lasciar cadere la richiesta. Passare sempre FLUSH avrebbe reso questo
++    * percorso l'unico dei tre in cui chiedere NONE non ottiene niente, in
++    * silenzio. */
++   unsigned releaseBehavior = WGL_CONTEXT_RELEASE_BEHAVIOR_FLUSH_ARB;
++   if (wgl_ctx->base.ReleaseBehavior == EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR)
++      releaseBehavior = WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB;
+    wgl_ctx->ctx = stw_create_context_attribs(
+       disp->PlatformDisplay, 0, shared, &wgl_dpy->base,
+       wgl_ctx->base.ClientMajorVersion, wgl_ctx->base.ClientMinorVersion, flags,
+-      profile_mask, stw_config, resetStrategy);
++      profile_mask, stw_config, resetStrategy, releaseBehavior);
+ 
+    if (!wgl_ctx->ctx)
+       goto cleanup;
+diff --git a/src/gallium/frontends/wgl/stw_context.c b/src/gallium/frontends/wgl/stw_context.c
+index f0f543c243b..fa0477b829f 100644
+--- a/src/gallium/frontends/wgl/stw_context.c
++++ b/src/gallium/frontends/wgl/stw_context.c
+@@ -139,7 +139,8 @@ DrvCreateLayerContext(HDC hdc, INT iLayerPlane)
+ 
+    struct stw_context *ctx = stw_create_context_attribs(hdc, iLayerPlane, NULL, stw_dev->fscreen, 1, 0, 0,
+                                                         WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
+-                                                        pfi, WGL_NO_RESET_NOTIFICATION_ARB);
++                                                        pfi, WGL_NO_RESET_NOTIFICATION_ARB,
++                                                        WGL_CONTEXT_RELEASE_BEHAVIOR_FLUSH_ARB);
+    if (!ctx)
+       return 0;
+ 
+@@ -160,7 +161,8 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, struct stw_context *shareCt
+                            int majorVersion, int minorVersion,
+                            int contextFlags, int profileMask,
+                            const struct stw_pixelformat_info *pfi,
+-                           int resetStrategy)
++                           int resetStrategy,
++                           int releaseBehavior)
+ {
+    struct st_context_attribs attribs;
+    struct stw_context *ctx = NULL;
+@@ -198,6 +200,17 @@ stw_create_context_attribs(HDC hdc, INT iLayerPlane, struct stw_context *shareCt
+    if (resetStrategy != WGL_NO_RESET_NOTIFICATION_ARB)
+       attribs.context_flags |= PIPE_CONTEXT_LOSE_CONTEXT_ON_RESET;
+ 
++   /* WGL_ARB_context_flush_control. ST_CONTEXT_FLAG_RELEASE_NONE e' la stessa
++    * strada che dri_context.c percorre per EGL e GLX: arriva a
++    * ctx->Const.ContextReleaseBehavior, quindi _mesa_make_current smette di
++    * fare il flush implicito uscendo dal contesto e glGetIntegerv(
++    * GL_CONTEXT_RELEASE_BEHAVIOR) risponde NONE, come la specifica chiede.
++    * Il ramo di stw_make_current qui sotto e' l'altra meta': quello e'
++    * specifico di WGL e non passa da _mesa_make_current. */
++   ctx->release_behavior = releaseBehavior;
++   if (releaseBehavior == WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB)
++      attribs.flags |= ST_CONTEXT_FLAG_RELEASE_NONE;
++
+    switch (profileMask) {
+    case WGL_CONTEXT_CORE_PROFILE_BIT_ARB:
+       /* There are no profiles before OpenGL 3.2.  The
+@@ -426,6 +439,58 @@ release_old_framebuffers(struct stw_framebuffer *old_fb, struct stw_framebuffer
+    }
+ }
+ 
++/* winq: MESA_WGL_NO_FLUSH_WAIT=1 toglie l'ATTESA (non il flush) quando si
++ * lascia un contesto condiviso.
++ *
++ * COSA FA IL CODICE DI SERIE. In stw_make_current, uscendo da un contesto che
++ * e' shared -- o che ha un winsys framebuffer -- si passa
++ * ST_FLUSH_FRONT | ST_FLUSH_WAIT. Il WAIT arriva fino a
++ * screen->fence_finish(..., OS_TIMEOUT_INFINITE) (st_manager.c), che su d3d12
++ * e' SetEventOnCompletion con evento NULL: blocca il thread finche' la GPU non
++ * ha finito. Non e' un flush, e' un round-trip completo.
++ *
++ * PERCHE' E' UN PROBLEMA QUI. Questo albero fa girare virglrenderer, che crea
++ * un contesto GL host per ogni contesto del guest e li rende tutti condivisi
++ * (serve: le texture del guest devono essere visibili al contesto che
++ * presenta). Ogni comando del guest che cambia contesto paga quindi un
++ * round-trip GPU. Misurato su Snapdragon X Plus / Adreno X1-85, con Android
++ * come guest: 386 ms/s di ciclo principale di QEMU, cioe' il 53% del secondo,
++ * per ~920 commutazioni al secondo.
++ *
++ * PERCHE' L'ATTESA E NON IL FLUSH. La specifica (wglMakeCurrent, e
++ * KHR_context_flush_control) prevede un FLUSH implicito uscendo da un
++ * contesto, non un finish. L'attesa in piu' arriva dal commit del 2017
++ * "st/wgl: flush with ST_FLUSH_WAIT before releasing shared contexts", che
++ * curava uno sfarfallio di Photoshop su GPU virtuale VMware: conservatorismo
++ * mirato a un caso, non un requisito della specifica.
++ *
++ * PERCHE' UN INTERRUTTORE E NON UNA RIMOZIONE. Spento di serie: chi non chiede
++ * niente conserva il comportamento di oggi, e il caso che quel commit curava
++ * resta curato. Acceso, la stessa DLL da' l'altro comportamento, cosi' l'A/B
++ * ha una variabile sola e non richiede due build -- che e' l'unico modo di
++ * attribuire una differenza alla riga invece che al compilatore.
++ *
++ * LA VIA PULITA E' STATA SCRITTA, ed e' quella che il prodotto usa: questo
++ * albero espone WGL_ARB_context_flush_control e onora
++ * WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB, chiesto a wglCreateContextAttribsARB.
++ * Mesa lo implementava gia' per EGL e GLX (22.2.0, "for all drivers") e non per
++ * WGL; adesso i tre percorsi si comportano allo stesso modo. La variabile
++ * d'ambiente resta come SCAVALCO GLOBALE, e serve a una cosa sola: fare l'A/B
++ * su un binario che non chiede l'attributo, senza ricompilare chi crea il
++ * contesto. Chi chiede l'attributo non ha bisogno di lei. */
++static bool
++stw_no_flush_wait(void)
++{
++   static int cached = -1;
++
++   if (cached < 0) {
++      const char *v = getenv("MESA_WGL_NO_FLUSH_WAIT");
++
++      cached = (v && *v == '1') ? 1 : 0;
++   }
++   return cached != 0;
++}
++
+ BOOL
+ stw_make_current(struct stw_framebuffer *fb, struct stw_framebuffer *fbRead, struct stw_context *ctx)
+ {
+@@ -447,13 +512,33 @@ stw_make_current(struct stw_framebuffer *fb, struct stw_framebuffer *fbRead, str
+             /* Using a winsys framebuffer effectively means that there's sharing since another
+              * context might end up using the same resources. */
+             (old_ctx->current_framebuffer && old_ctx->current_framebuffer->winsys_framebuffer)) {
++            /* L'ATTESA E' OPZIONALE, IL FLUSH NO, e a decidere e' il contesto
++             * che si sta lasciando -- non una variabile d'ambiente.
++             *
++             * Con RELEASE_BEHAVIOR_NONE questo ramo diventa identico a quello
++             * non condiviso qui sotto: si conserva ST_FLUSH_FRONT e si toglie
++             * ST_FLUSH_WAIT. Il front flush RESTA anche con NONE, ed e'
++             * deliberato: la specifica parla del flush implicito del contesto,
++             * mentre questo qui rende visibile al contesto che presenta cio'
++             * che il contesto uscente ha disegnato nel front buffer. Toglierlo
++             * cambierebbe cosa si vede, non quanto si aspetta -- ed e' la meta'
++             * misurata come sicura, con il cancello visivo dato sulla finestra
++             * vera (qemu/PRESTAZIONI.md, 13/08/2026).
++             *
++             * La variabile d'ambiente scavalca entrambi i casi, per l'A/B. */
++            unsigned flags = ST_FLUSH_FRONT;
++
++            if (old_ctx->release_behavior != WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB &&
++                !stw_no_flush_wait())
++               flags |= ST_FLUSH_WAIT;
++
+             if (old_ctx->current_framebuffer) {
+                stw_st_flush(old_ctx->st, old_ctx->current_framebuffer->drawable,
+-                            ST_FLUSH_FRONT | ST_FLUSH_WAIT);
++                            flags);
+             } else {
+                struct pipe_fence_handle *fence = NULL;
+-               st_context_flush(old_ctx->st,
+-                                ST_FLUSH_FRONT | ST_FLUSH_WAIT, &fence,
++               st_context_flush(old_ctx->st, flags,
++                                (flags & ST_FLUSH_WAIT) ? &fence : NULL,
+                                 NULL, NULL);
+             }
+          } else {
+diff --git a/src/gallium/frontends/wgl/stw_context.h b/src/gallium/frontends/wgl/stw_context.h
+index ab4bbd09949..48569f8c26d 100644
+--- a/src/gallium/frontends/wgl/stw_context.h
++++ b/src/gallium/frontends/wgl/stw_context.h
+@@ -50,6 +50,12 @@ struct stw_context
+    struct stw_framebuffer *current_framebuffer;
+    struct stw_framebuffer *current_read_framebuffer;
+ 
++   /* WGL_ARB_context_flush_control: WGL_CONTEXT_RELEASE_BEHAVIOR_FLUSH_ARB
++    * (il default della specifica) oppure _NONE_ARB. Si conserva per contesto
++    * perche' e' una proprieta' del contesto, decisa da chi lo crea: la legge
++    * stw_make_current uscendo da questo contesto. */
++   int release_behavior;
++
+    struct hud_context *hud;
+ };
+ 
+@@ -59,7 +65,8 @@ struct stw_context *stw_create_context_attribs(HDC hdc, INT iLayerPlane,
+                                                int majorVersion, int minorVersion,
+                                                int contextFlags, int profileMask,
+                                                const struct stw_pixelformat_info *pfi,
+-                                               int resetStrategy);
++                                               int resetStrategy,
++                                               int releaseBehavior);
+ 
+ DHGLRC stw_create_context_handle(struct stw_context *context, DHGLRC handle);
+ 
+diff --git a/src/gallium/frontends/wgl/stw_ext_context.c b/src/gallium/frontends/wgl/stw_ext_context.c
+index 590530e2b9f..bda08f37cdf 100644
+--- a/src/gallium/frontends/wgl/stw_ext_context.c
++++ b/src/gallium/frontends/wgl/stw_ext_context.c
+@@ -78,6 +78,9 @@ wglCreateContextAttribsARB(HDC hDC, HGLRC hShareContext, const int *attribList)
+    int contextFlags = 0x0;
+    int profileMask = WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
+    int resetStrategy = WGL_NO_RESET_NOTIFICATION_ARB;
++   /* WGL_ARB_context_flush_control: il default della specifica e' FLUSH, cioe'
++    * il comportamento di sempre per chi non chiede niente. */
++   int releaseBehavior = WGL_CONTEXT_RELEASE_BEHAVIOR_FLUSH_ARB;
+    int i;
+    BOOL done = false;
+    const int contextFlagsAll = (WGL_CONTEXT_DEBUG_BIT_ARB |
+@@ -109,6 +112,9 @@ wglCreateContextAttribsARB(HDC hDC, HGLRC hShareContext, const int *attribList)
+          case WGL_CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB:
+             resetStrategy = attribList[++i];
+             break;
++         case WGL_CONTEXT_RELEASE_BEHAVIOR_ARB:
++            releaseBehavior = attribList[++i];
++            break;
+          case 0:
+             /* end of list */
+             done = true;
+@@ -159,6 +165,15 @@ wglCreateContextAttribsARB(HDC hDC, HGLRC hShareContext, const int *attribList)
+       return 0;
+    }
+ 
++   /* check releaseBehavior: due valori soli, e un valore ignoto e' un errore --
++    * non un ripiego silenzioso sul default. Chi chiede NONE e ottiene FLUSH
++    * senza saperlo misurerebbe una cosa credendone un'altra. */
++   if (releaseBehavior != WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB &&
++       releaseBehavior != WGL_CONTEXT_RELEASE_BEHAVIOR_FLUSH_ARB) {
++      SetLastError(ERROR_INVALID_PARAMETER);
++      return NULL;
++   }
++
+    if (resetStrategy != WGL_NO_RESET_NOTIFICATION_ARB &&
+        resetStrategy != WGL_LOSE_CONTEXT_ON_RESET_ARB) {
+       SetLastError(ERROR_INVALID_PARAMETER);
+@@ -231,7 +246,8 @@ wglCreateContextAttribsARB(HDC hDC, HGLRC hShareContext, const int *attribList)
+                                                                stw_dev->fscreen,
+                                                                majorVersion, minorVersion,
+                                                                contextFlags, profileMask, pfi,
+-                                                               resetStrategy);
++                                                               resetStrategy,
++                                                               releaseBehavior);
+ 
+       if (!stw_ctx) {
+          pfnwglDeleteContext(context);
+diff --git a/src/gallium/frontends/wgl/stw_ext_extensionsstring.c b/src/gallium/frontends/wgl/stw_ext_extensionsstring.c
+index 3d0e36c44dd..82171473793 100644
+--- a/src/gallium/frontends/wgl/stw_ext_extensionsstring.c
++++ b/src/gallium/frontends/wgl/stw_ext_extensionsstring.c
+@@ -35,6 +35,11 @@
+ 
+ 
+ static const char *stw_extension_string = 
++   /* winq: implementata in stw_ext_context.c (l'attributo) e in
++    * stw_context.c (l'effetto sull'uscita dal contesto). Va dichiarata qui o
++    * chi la cerca prima di usarla -- cioe' chiunque scriva codice corretto --
++    * non la trova e ripiega sul comportamento vecchio. */
++   "WGL_ARB_context_flush_control "
+    "WGL_ARB_create_context "
+    "WGL_ARB_create_context_profile "
+    "WGL_ARB_create_context_robustness "

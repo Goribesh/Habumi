@@ -1,0 +1,480 @@
+From f8afb093e7dab96f3afb2ed89e8b6e159267b30e Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 10:18:05 +0200
+[PATCH] winq: macro sopra epoxy e simbolo esportato
+
+---
+ src/meson.build   |   5 +-
+ src/winq-glspia.h | 430 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 434 insertions(+), 1 deletion(-)
+ create mode 100644 src/winq-glspia.h
+
+diff --git a/src/meson.build b/src/meson.build
+index ecb99c9..d2dab29 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -46,6 +46,7 @@ vrend_sources = [
+ 
+ virglrenderer_sources = [
+    'virglrenderer.c',
++   'winq-glspia-conta.c',
+ ]
+ 
+ vrend_winsys_gbm_sources = [
+@@ -274,6 +275,7 @@ libvirgl = static_library(
+    virgl_sources,
+    include_directories: [inc_gallium, inc_configuration, 'venus', 'drm'],
+    dependencies : [virgl_depends, drm_uapi_dep],
++   c_args : ['-include', join_paths(meson.current_source_dir(), 'winq-glspia.h')],
+ )
+ 
+ libvirgl_inc = [
+@@ -295,7 +297,8 @@ libvirglrenderer = library(
+    version : binary_age.to_string() + '.'
+              + interface_age.to_string() + '.'
+              + revision.to_string(),
+-   install : true
++   install : true,
++   c_args : ['-include', join_paths(meson.current_source_dir(), 'winq-glspia.h')],
+ )
+ 
+ pkg = import('pkgconfig')
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+new file mode 100644
+index 0000000..3968002
+--- /dev/null
++++ b/src/winq-glspia.h
+@@ -0,0 +1,430 @@
++/* winq-glspia.h -- cronometra le entry point GL calde.
++ *
++ * COME FUNZIONA. virglrenderer chiama GL attraverso libepoxy, dove ogni glFoo
++ * e' gia' una macro verso epoxy_glFoo (verificato: meson.build:88 dichiara
++ * dependency('epoxy', >= 1.5.4), src/meson.build:172 la lega, ed epoxy/gl.h e'
++ * incluso da virglrenderer.c, vrend/vrend_decode.c, vrend/vrend_renderer.h).
++ * Si toglie quella macro e se ne mette una che chiama epoxy_glFoo in mezzo a
++ * due letture dell'orologio. Nessun sito di chiamata cambia.
++ *
++ * Questo file viene FORCE-INCLUSO da src/meson.build con -include, quindi
++ * arriva prima di qualunque #include del file compilato. epoxy/gl.h ha le
++ * proprie guardie, percio' l'inclusione successiva nei sorgenti e' innocua.
++ *
++ * PERCHE' TRE SECCHI E NON UNO. glFinish e glClientWaitSync non sono lavoro:
++ * sono attesa. Sommarle a glDrawElements gonfierebbe il costo del driver con
++ * tempo speso fermi, e la sottrazione della spec §3 attribuirebbe a
++ * virglrenderer un tempo che non ha speso lui. glCompileShader e glLinkProgram
++ * sono lavoro ma di prima volta, e mescolarle al regime nasconderebbe proprio
++ * il fenomeno che si vuole vedere.
++ *
++ * PERCHE' PROPRIO QUESTI NOMI. Il criterio non e' "il nome inizia per glDraw"
++ * ne' un elenco copiato dall'API GL generica: e' "e' lavoro caldo del driver
++ * che oggi, se non avvolto, cade dentro t_virgl per sottrazione (spec §3) pur
++ * non essendo tempo speso da virglrenderer". Questo copre il dispatch del
++ * disegno (glDraw* e glMultiDraw*), il dispatch del calcolo (glDispatchCompute*,
++ * stesso ruolo del disegno ma per gli shader di calcolo), l'aggancio delle
++ * render target (glFramebufferTexture*, glFramebufferRenderbuffer,
++ * glRenderbufferStorageMultisampleEXT, glCheckFramebufferStatus: scattano a
++ * ogni cambio di framebuffer, non solo alla creazione, vedi il commento sopra
++ * quelle macro per la catena di chiamata verificata), il trasferimento dati
++ * guest -> host che passa da buffer/texture reali (glBufferSubData,
++ * glTexSubImage*, glCopyBufferSubData: dati veri che si spostano, non
++ * allocazione di storage con puntatore NULL), l'azzeramento di un target
++ * (glClear e sorelle, glClearTexSubImage: lavoro reale sullo stesso piano
++ * CPU del disegno, non solo impostazione di stato) e la lettura all'indietro
++ * host <- GPU (glGetTexImage, glReadPixels), messa in ATTESA come
++ * approssimazione dichiarata: vedi il commento sopra quelle due macro, piu'
++ * sotto, per il perche'. Non copre invece la sola creazione di risorse
++ * (glTexStorage*, glTexImage* usate qui solo per allocare senza dati,
++ * glBufferStorage -- quasi sempre una tantum, con un'eccezione stretta
++ * documentata in fondo al file) ne' le barriere di sincronizzazione: vedi in
++ * fondo al file la lista di esclusioni motivate, con il sito di chiamata che
++ * giustifica ciascuna.
++ *
++ * Ogni nome qui sotto e' verificato sui siti di chiamata reali sotto
++ * src/vrend/ (non ricavato a memoria ne' copiato da un elenco di
++ * riferimento). Se il fork cambia -- una nuova estensione usata da
++ * vrend_renderer.c, un percorso di disegno o di trasferimento diverso --
++ * questo elenco va riverificato con una ricerca dei siti di chiamata e
++ * rivalutato con lo stesso criterio, non esteso a occhio rimettendo i nomi
++ * "ovvi" (es. glDrawArraysInstanced, o glTexStorage2D per simmetria con
++ * glTexImage2D) ne' escluso a occhio con una motivazione di categoria o di
++ * frequenza non verificata sul sito di chiamata: l'elenco e' gia' stato
++ * sbagliato piu' volte cosi', sia per difetto (nomi mancanti) sia per
++ * eccesso (esclusioni con la ragione sbagliata).
++ */
++#ifndef WINQ_GLSPIA_H
++#define WINQ_GLSPIA_H
++
++#include <epoxy/gl.h>
++#include "winq-glspia-conta.h"
++
++/* Le espressioni di statement sono un'estensione GNU, e questo albero si
++ * compila con clang in modalita' gnu11: sono disponibili. Servono perche' le
++ * funzioni GL avvolte hanno tipi di ritorno diversi e il wrapper deve
++ * restituirne il valore senza conoscerlo.
++ *
++ * LA SENTINELLA E' LO ZERO. winq_t0_ == 0 vuol dire "diagnostica spenta, non
++ * cronometrare". E' sicuro perche' winq_glspia_ora() legge QueryPerformanceCounter,
++ * che conta i tick da un riferimento fisso all'avvio del sistema: su hardware
++ * reale non e' mai zero, quindi una lettura vera con la diagnostica accesa non
++ * puo' mai essere scambiata per "spenta". Se in futuro winq_glspia_ora() venisse
++ * ricollegata a un orologio che *puo'* restituire zero, questa sentinella
++ * andrebbe rivista insieme a lei. */
++#define WINQ_SPIA_VAL(secchio, espr) __extension__({                        \
++    uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
++    __typeof__(espr) winq_r_ = (espr);                                      \
++    if (winq_t0_) {                                                         \
++        winq_glspia_aggiungi((secchio), winq_t0_, winq_glspia_ora());       \
++    }                                                                       \
++    winq_r_;                                                                \
++})
++
++#define WINQ_SPIA_VOID(secchio, espr) do {                                  \
++    uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
++    (espr);                                                                 \
++    if (winq_t0_) {                                                         \
++        winq_glspia_aggiungi((secchio), winq_t0_, winq_glspia_ora());       \
++    }                                                                       \
++} while (0)
++
++/* --- disegno: il grosso del lavoro, e dove il driver valida lo stato ------ *
++ * Elenco ricavato dai siti di chiamata reali in src/vrend/vrend_renderer.c
++ * (il dispatch di vrend_draw_vbo attorno alla riga 6130) e src/vrend/vrend_blitter.c,
++ * vrend_formats.c, vrend_video.c. glDrawArraysInstanced e glDrawElementsInstanced
++ * NON compaiono: questo fork chiama sempre le varianti ARB/BaseInstance/BaseVertex,
++ * mai la forma "base" dell'API. */
++#undef glDrawArrays
++#define glDrawArrays(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArrays(__VA_ARGS__))
++#undef glDrawElements
++#define glDrawElements(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElements(__VA_ARGS__))
++#undef glDrawArraysIndirect
++#define glDrawArraysIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysIndirect(__VA_ARGS__))
++#undef glDrawArraysInstancedARB
++#define glDrawArraysInstancedARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysInstancedARB(__VA_ARGS__))
++#undef glDrawArraysInstancedBaseInstance
++#define glDrawArraysInstancedBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysInstancedBaseInstance(__VA_ARGS__))
++#undef glDrawElementsBaseVertex
++#define glDrawElementsBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsBaseVertex(__VA_ARGS__))
++#undef glDrawElementsIndirect
++#define glDrawElementsIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsIndirect(__VA_ARGS__))
++#undef glDrawElementsInstancedARB
++#define glDrawElementsInstancedARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedARB(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseInstance
++#define glDrawElementsInstancedBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseInstance(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseVertex
++#define glDrawElementsInstancedBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseVertex(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseVertexBaseInstance
++#define glDrawElementsInstancedBaseVertexBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseVertexBaseInstance(__VA_ARGS__))
++#undef glDrawRangeElements
++#define glDrawRangeElements(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawRangeElements(__VA_ARGS__))
++#undef glDrawRangeElementsBaseVertex
++#define glDrawRangeElementsBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawRangeElementsBaseVertex(__VA_ARGS__))
++#undef glDrawBuffers
++#define glDrawBuffers(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawBuffers(__VA_ARGS__))
++#undef glDrawPixels
++#define glDrawPixels(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawPixels(__VA_ARGS__))
++#undef glMultiDrawArraysIndirect
++#define glMultiDrawArraysIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawArraysIndirect(__VA_ARGS__))
++#undef glMultiDrawArraysIndirectCountARB
++#define glMultiDrawArraysIndirectCountARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawArraysIndirectCountARB(__VA_ARGS__))
++#undef glMultiDrawElementsIndirect
++#define glMultiDrawElementsIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawElementsIndirect(__VA_ARGS__))
++#undef glMultiDrawElementsIndirectCountARB
++#define glMultiDrawElementsIndirectCountARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawElementsIndirectCountARB(__VA_ARGS__))
++
++/* --- calcolo: stesso ruolo del disegno, ma per gli shader di calcolo ----- *
++ * vrend_launch_grid (vrend_renderer.c riga ~6297) e' il dispatch del calcolo
++ * cosi' come vrend_draw_vbo lo e' per il disegno: stessa sottrazione, stesso
++ * rischio di finire in t_virgl se non avvolto. */
++#undef glDispatchCompute
++#define glDispatchCompute(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDispatchCompute(__VA_ARGS__))
++#undef glDispatchComputeIndirect
++#define glDispatchComputeIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDispatchComputeIndirect(__VA_ARGS__))
++
++/* --- framebuffer: l'aggancio delle render target, a ogni cambio ---------- *
++ * Rilievo verificato dal coordinatore: glFramebufferTexture2DMultisampleEXT
++ * e glRenderbufferStorageMultisampleEXT erano finite fra le esclusioni come
++ * "creazione di risorse, una tantum". Falso: la catena e'
++ * vrend_set_framebuffer_state (riga 3183, il gestore del comando guest "set
++ * framebuffer state") -> vrend_hw_set_zsurf_texture/vrend_hw_set_color_surface
++ * (righe 3076/3093) -> vrend_fb_bind_texture_id (riga 2992) ->
++ * vrend_framebuffer_texture_2d (riga 2931, dove stanno le due macro). Scatta
++ * a ogni cambio di render target, non alla creazione. Peggio: dentro la
++ * stessa funzione, glGenRenderbuffers (riga 2949) e' incondizionato -- non
++ * controlla mai res->rbo_id prima di generarne uno nuovo -- quindi rialloca
++ * un renderbuffer ogni volta che ci passa (bug di risorse a se', fuori
++ * scope per questo file: segnalato separatamente, non toccato qui).
++ *
++ * Spostate qui, in WINQ_SPIA_GL. Con loro le sorelle dirette nello stesso
++ * sito, incluse per lo stesso motivo per cui i giri precedenti hanno chiuso
++ * i buchi analoghi su glDraw* e glTexSubImage* (non lasciare una sorella
++ * scoperta sullo stesso dispatch): glFramebufferTexture2D (la stessa
++ * funzione, ramo non-MSAA, di gran lunga il piu' usato), glFramebufferTexture/
++ * glFramebufferTextureLayer/glFramebufferTexture1D/glFramebufferTexture3D/
++ * glFramebufferTexture3DOES (vrend_fb_bind_texture_id, righe 3017-3057, il
++ * dispatch per target array/cubemap/3D/1D), glFramebufferRenderbuffer (riga
++ * 2954, tre righe sotto la Multisample, stesso ramo). glCheckFramebufferStatus
++ * (riga 3273 qui, anche in vrend_formats.c) e' incluso perche' e' letteralmente
++ * "il driver valida lo stato" -- la stessa frase che il commento del secchio
++ * disegno usa per giustificare se stesso; ritorna GLenum, quindi WINQ_SPIA_VAL.
++ *
++ * NON incluse, con la ragione vera e non una frequenza indovinata:
++ * glGenRenderbuffers (genera solo un nome intero, l'allocazione vera e'
++ * glRenderbufferStorageMultisampleEXT tre righe sotto, gia' inclusa -- stessa
++ * ragione per cui glGenBuffersARB/glGenFramebuffers/glGenTextures non sono
++ * mai stati in questo file), glBindRenderbuffer/glBindFramebuffer (bind,
++ * scambiano un puntatore di stato, non validano ne' allocano -- stessa
++ * ragione di glBindBuffer/glBindTexture altrove nel file, mai avvolte),
++ * glReadBuffer (imposta quale buffer leggere, puntatore di stato come i
++ * bind, non esegue lavoro). */
++#undef glFramebufferTexture2D
++#define glFramebufferTexture2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture2D(__VA_ARGS__))
++#undef glFramebufferTexture2DMultisampleEXT
++#define glFramebufferTexture2DMultisampleEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture2DMultisampleEXT(__VA_ARGS__))
++#undef glFramebufferTexture
++#define glFramebufferTexture(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture(__VA_ARGS__))
++#undef glFramebufferTextureLayer
++#define glFramebufferTextureLayer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTextureLayer(__VA_ARGS__))
++#undef glFramebufferTexture1D
++#define glFramebufferTexture1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture1D(__VA_ARGS__))
++#undef glFramebufferTexture3D
++#define glFramebufferTexture3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture3D(__VA_ARGS__))
++#undef glFramebufferTexture3DOES
++#define glFramebufferTexture3DOES(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture3DOES(__VA_ARGS__))
++#undef glFramebufferRenderbuffer
++#define glFramebufferRenderbuffer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferRenderbuffer(__VA_ARGS__))
++#undef glRenderbufferStorageMultisampleEXT
++#define glRenderbufferStorageMultisampleEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glRenderbufferStorageMultisampleEXT(__VA_ARGS__))
++#undef glCheckFramebufferStatus
++#define glCheckFramebufferStatus(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glCheckFramebufferStatus(__VA_ARGS__))
++
++/* --- buffer: il traffico di dati guest -> host --------------------------- */
++#undef glBufferData
++#define glBufferData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBufferData(__VA_ARGS__))
++#undef glBufferSubData
++#define glBufferSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBufferSubData(__VA_ARGS__))
++#undef glMapBufferRange
++#define glMapBufferRange(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glMapBufferRange(__VA_ARGS__))
++#undef glUnmapBuffer
++#define glUnmapBuffer(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glUnmapBuffer(__VA_ARGS__))
++#undef glCopyBufferSubData
++#define glCopyBufferSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCopyBufferSubData(__VA_ARGS__))
++
++/* --- texture: le copie, che su d3d12 possono diventare passaggi interi ---- *
++ * Solo le entry point che spostano dati guest veri (glTexSubImage*, le
++ * varianti compresse). glTexImage2D resta perche' era gia' nell'elenco
++ * originale; le sue sorelle di sola allocazione (glTexImage1D/3D,
++ * glTexStorage*) NON ci sono per scelta, vedi la nota di testa al file. */
++#undef glTexImage2D
++#define glTexImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexImage2D(__VA_ARGS__))
++#undef glTexSubImage1D
++#define glTexSubImage1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage1D(__VA_ARGS__))
++#undef glTexSubImage2D
++#define glTexSubImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage2D(__VA_ARGS__))
++#undef glTexSubImage3D
++#define glTexSubImage3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage3D(__VA_ARGS__))
++#undef glCompressedTexSubImage1D
++#define glCompressedTexSubImage1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage1D(__VA_ARGS__))
++#undef glCompressedTexSubImage2D
++#define glCompressedTexSubImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage2D(__VA_ARGS__))
++#undef glCompressedTexSubImage3D
++#define glCompressedTexSubImage3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage3D(__VA_ARGS__))
++#undef glCopyImageSubData
++#define glCopyImageSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCopyImageSubData(__VA_ARGS__))
++#undef glBlitFramebuffer
++#define glBlitFramebuffer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBlitFramebuffer(__VA_ARGS__))
++
++/* --- clear: azzerare un target e' lavoro reale, non solo stato ----------- *
++ * glClear stava fra le esclusioni con la motivazione "non e' ne' dispatch
++ * ne' trasferimento dati": vera, ma e' una motivazione di categoria, non di
++ * evidenza, e non risponde alla domanda che conta. glClear vive in
++ * vrend_clear (riga 4828, il gestore del comando guest CLEAR) e glClear
++ * ricompare in vrend_clear_surface (riga 4929, comando CLEAR_SURFACE): due
++ * gestori di comando di primo livello, non dettagli interni, chiamati a ogni
++ * clear di un render target -- una o piu' volte a frame come glDraw* e
++ * glDispatchCompute*, che sono gia' incluse. E' comunque una chiamata GL con
++ * validazione di stato lato driver, sullo stesso piano CPU delle altre:
++ * la ragione vera per includerla, non la categoria "clear" in se'.
++ *
++ * Incluse le sorelle dirette nello stesso sito: glClearBufferuiv/iv/fv
++ * (vrend_clear, righe 4871/4875/4877) sono i rami alternativi dello stesso
++ * if quando i colorbuffer hanno formati diversi da quello atteso da
++ * glClear(bits). glClearTexSubImage (vrend_clear_texture, riga 4921) e la
++ * sua variante GLES glClearTexSubImageEXT (riga 4916) scrivono dati veri in
++ * una regione di texture: stessa natura di glTexSubImage*, gia' incluse.
++ *
++ * NON incluse: glClearColor/glClearDepth/glClearStencil (vrend_clear_prepare,
++ * righe 4737-4774) impostano il VALORE da usare al prossimo clear, non
++ * eseguono il clear -- puntatori di stato come i bind, non lavoro. */
++#undef glClear
++#define glClear(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClear(__VA_ARGS__))
++#undef glClearBufferuiv
++#define glClearBufferuiv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferuiv(__VA_ARGS__))
++#undef glClearBufferiv
++#define glClearBufferiv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferiv(__VA_ARGS__))
++#undef glClearBufferfv
++#define glClearBufferfv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferfv(__VA_ARGS__))
++#undef glClearTexSubImage
++#define glClearTexSubImage(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearTexSubImage(__VA_ARGS__))
++#undef glClearTexSubImageEXT
++#define glClearTexSubImageEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearTexSubImageEXT(__VA_ARGS__))
++
++/* --- sincronizzazione: ATTESA, non lavoro -------------------------------- */
++#undef glFlush
++#define glFlush(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glFlush(__VA_ARGS__))
++#undef glFinish
++#define glFinish(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glFinish(__VA_ARGS__))
++#undef glClientWaitSync
++#define glClientWaitSync(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_ATTESA, epoxy_glClientWaitSync(__VA_ARGS__))
++
++/* --- lettura all'indietro: ATTESA, per approssimazione dichiarata -------- *
++ * glReadPixels e glGetTexImage sono sincrone: un readback e' insieme una
++ * copia (lavoro) e un blocco finche' la coda GPU non arriva a quel punto
++ * (attesa), e i tre secchi non hanno una casella per "tutti e due". Le
++ * mettiamo intere in ATTESA, non in GL, perche' delle due componenti l'attesa
++ * domina largamente: la copia costa microsecondi, il blocco costa quanto ci
++ * mette la GPU a smaltire la coda davanti. L'alternativa vera qui non e'
++ * "ATTESA oppure GL": e' "ATTESA oppure NIENTE", perche' senza questo
++ * wrapper le due chiamate cadrebbero in t_virgl per sottrazione, attribuendo
++ * tempo di blocco alla traduzione di virglrenderer -- la distorsione
++ * peggiore delle due, e proprio quella per cui esistono questi giri di
++ * correzione. Chi legge i numeri deve sapere che, per queste due funzioni
++ * soltanto, il secchio ATTESA include anche del lavoro di copia: un quarto
++ * secchio "lavoro+attesa" sarebbe piu' preciso, ma cambierebbe l'aritmetica
++ * e il formato della riga di riepilogo su cui si costruiscono le task
++ * successive, quindi non si introduce qui. */
++#undef glReadPixels
++#define glReadPixels(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glReadPixels(__VA_ARGS__))
++#undef glGetTexImage
++#define glGetTexImage(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glGetTexImage(__VA_ARGS__))
++
++/* --- shader: DXIL + PSO, costo di prima volta ---------------------------- */
++#undef glCompileShader
++#define glCompileShader(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_SHADER, epoxy_glCompileShader(__VA_ARGS__))
++#undef glLinkProgram
++#define glLinkProgram(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_SHADER, epoxy_glLinkProgram(__VA_ARGS__))
++
++/* --- esclusioni motivate ---------------------------------------------------
++ * Chiamate davvero presenti in src/vrend/ e scartate di proposito, non per
++ * dimenticanza. Ogni esclusione qui sotto cita il sito di chiamata che la
++ * giustifica, non solo una categoria o una frequenza presunta -- due
++ * esclusioni di un giro precedente si reggevano su "una tantum" che il
++ * grafo delle chiamate smentiva (vedi la sezione framebuffer sopra), quindi
++ * questo elenco e' stato riverificato riga per riga. Se una di queste va
++ * rivista, cambiare qui il ragionamento, non solo l'elenco sopra.
++ *
++ * Creazione di buffer (allocano storage, non spostano dati): glBufferStorage,
++ * glBufferStorageMemEXT. Verificato: unico chiamante e' vrend_create_buffer
++ * (riga 8324), a sua volta chiamata solo da vrend_resource_alloc_buffer
++ * (riga 8394), a sua volta chiamata solo dal dispatch di resource-create
++ * (riga 8926, dentro la funzione invocata da vrend_renderer_pipe_resource_create
++ * / vrend_decode.c:1598, un gestore di comando guest RESOURCE_CREATE). Un solo
++ * chiamante, un solo comando: davvero una tantum per risorsa.
++ *
++ * Creazione di texture: glTexImage1D/3D, glTexImage2DMultisample/3DMultisample,
++ * glTexStorage1D/2D/3D, glTexStorage2DMultisample/3DMultisample,
++ * glTexStorageMem2DEXT. Vivono in vrend_resource_alloc_texture (riga 8694).
++ * Qui la frequenza NON e' pulita come per i buffer: il chiamante principale
++ * (riga 8929, dispatch di resource-create, stesso comando guest di sopra) e'
++ * una tantum per risorsa, ma esiste un'eccezione stretta in
++ * vrend_renderer_blit_fbo (riga 11084): quando GLES + blit con maschera
++ * depth/stencil + campionamento multisample diverso fra sorgente e
++ * destinazione + rettangoli non coincidenti, alloca una texture "intermediate_copy"
++ * a ogni blit che soddisfa quella condizione, non alla creazione della
++ * risorsa. E' un fallback di workaround (vedi il commento alle righe
++ * 11045-11054), non il percorso comune del disegno: restano escluse, ma la
++ * riga precedente che diceva "chiamate una volta per risorsa, non ad ogni
++ * frame" senza qualificarla era essa stessa il tipo di affermazione che
++ * questo giro doveva controllare. Se quel percorso GLES risultasse piu'
++ * caldo del previsto, va misurato separatamente, non infilato qui dentro.
++ * (glTexImage2D e' gia' nell'elenco incluso sopra pur passando anch'essa da
++ * questa stessa funzione: e' dell'elenco originale, non toccata da questo
++ * giro di correzioni.)
++ *
++ * glGetTexImage e glReadPixels NON sono escluse: sono in ATTESA, vedi il
++ * commento sopra a quelle due macro per il ragionamento (approssimazione
++ * dichiarata, decisa esplicitamente e non scelta qui in silenzio).
++ *
++ * glCopyTexSubImage2D (solo in vrend_video.c): quel file si compila solo con
++ * `meson -Dvideo=true` (src/meson.build: `if with_video`), e questa build ha
++ * video disattivato (virgl-build.json: "videoEnabled": false) -- oggi non
++ * fa nemmeno parte del binario. Non e' una frequenza, e' un flag di build:
++ * verificabile con certezza, non un'ipotesi. Da rivedere se e quando video
++ * viene acceso.
++ *
++ * glClear e glClearTexSubImage NON sono escluse: sono in WINQ_SPIA_GL, vedi
++ * il commento sopra a quel gruppo di macro.
++ *
++ * glMemoryBarrier (vrend_memory_barrier, riga 3982) e la sorella
++ * glTextureBarrier (vrend_texture_barrier, riga 3989, notata durante questa
++ * verifica) sono gestori di comando guest a se' stanti, quindi non rare: il
++ * pattern dispatch-compute-poi-barriera le rende potenzialmente frequenti
++ * quanto glDispatchCompute, che e' inclusa. Restano fuori non per rarita' ma
++ * per natura: la spec GL dice esplicitamente che glMemoryBarrier "does not
++ * block execution" -- e' l'inserimento di un ordine nel flusso di comandi,
++ * non una validazione di stato ne' uno spostamento di dati ne' un blocco
++ * della CPU. Diverso da glCheckFramebufferStatus (inclusa sopra), che valida
++ * davvero lo stato del framebuffer.
++ */
++
++#endif /* WINQ_GLSPIA_H */
+-- 
+2.53.0.vfs.0.7
+

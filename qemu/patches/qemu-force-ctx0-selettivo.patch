@@ -1,0 +1,117 @@
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -115,6 +115,20 @@
+  * vrend_hw_switch_context() in vrend_renderer.c (research/winq-virgl) per
+  * la classificazione completa dei chiamanti.
+  *
++ * SESTA CORREZIONE DELL'11/08/2026: la QUINTA CORREZIONE qui sopra era un
++ * sospetto dedotto dal codice; la diagnostica di quella stessa correzione
++ * (patch 0016 del fork) l'ha misurato: 606.725/606.725 switch da
++ * force_ctx_0() arrivano davvero a wglMakeCurrent, il 100,0%, contro il
++ * 74,8% del percorso di decodifica -- 717 ms/s, il 72% di ogni secondo,
++ * PRESTAZIONI.md sezione "La causa, misurata". Il rimedio e' su due
++ * fronti: nel fork, vrend_renderer_force_ctx_0() ora controlla se e' gia'
++ * su ctx0 prima di azzerare lo stato (patch 0017); qui, la chiamata sotto
++ * non e' piu' incondizionata -- winq_ctx0_serve() sceglie per tipo di
++ * comando, con un elenco di ESCLUSIONE la cui sicurezza sta nel default
++ * (chiamare), non nella lista. Dietro WINQ_CTX0_SEMPRE=1 per il confronto
++ * A/B con lo stesso binario; il default e' la cura, non il comportamento
++ * di prima. Vedi winq_ctx0_serve() e winq_ctx0_sempre() qui sotto.
++ *
+  * Spec: docs/superpowers/specs/2026-08-11-attribuzione-tempo-gpu-design.md */
+ enum { WINQ_SPIA_GL = 0, WINQ_SPIA_SHADER, WINQ_SPIA_FLUSH, WINQ_SPIA_FINISH,
+        WINQ_SPIA_WAITSYNC, WINQ_SPIA_GPU, WINQ_SPIA_N };
+@@ -1528,6 +1542,82 @@
+ }
+ #endif
+ 
++/* WINQ_CTX0_SEMPRE=1 ripristina il comportamento di prima della SESTA
++ * CORREZIONE qui sopra: virgl_renderer_force_ctx_0() chiamata sempre,
++ * incondizionatamente, come faceva prima di questa patch -- serve solo
++ * per il confronto A/B con lo stesso binario. Il default (variabile non
++ * impostata) e' la cura: la misura in PRESTAZIONI.md non e' un
++ * esperimento da attivare a mano. Letta una volta e cachata: mai getenv
++ * sul percorso caldo, per-comando. */
++static int winq_ctx0_sempre(void)
++{
++    static int sempre = -1;
++
++    if (sempre < 0) {
++        const char *v = getenv("WINQ_CTX0_SEMPRE");
++
++        sempre = (v && *v == '1') ? 1 : 0;
++    }
++    return sempre;
++}
++
++/* Questo tipo di comando ha DAVVERO bisogno che virgl_renderer_force_ctx_0()
++ * sia chiamata prima? L'elenco sotto e' di ESCLUSIONE, non di inclusione:
++ * il default (l'etichetta "default" dello switch) e' "si', chiamala" --
++ * la proprieta' di sicurezza sta nel default, non nella lista. Un tipo di
++ * comando nuovo o non ancora classificato si comporta quindi come oggi,
++ * senza bisogno di essere aggiunto qui apposta.
++ *
++ * Escono dalla chiamata solo i gestori verificati leggendo il codice:
++ *   - CTX_ATTACH_RESOURCE, CTX_DETACH_RESOURCE, RESOURCE_ATTACH_BACKING,
++ *     RESOURCE_DETACH_BACKING, GET_CAPSET_INFO, GET_CAPSET,
++ *     GET_DISPLAY_INFO, GET_EDID: i rispettivi gestori non toccano GL
++ *     affatto (contabilita', tabelle hash, negoziazione capset/edid);
++ *   - SUBMIT_3D: il suo decoder chiama vrend_hw_switch_context() come
++ *     prima cosa, incondizionatamente, prima di eseguire qualunque
++ *     comando del buffer (vrend_decode_ctx_submit_cmd, vrend_decode.c
++ *     riga 2065) -- non ha bisogno che il contesto sia gia' ctx0. Verificato
++ *     anche per la fence che segue: virgl_cmd_submit_3d (sopra) non tocca
++ *     GL prima di quello switch (solo g_malloc/iov_to_buf e la diagnostica
++ *     a tempo), e vrend_renderer_create_fence() (glFenceSync/glFlush,
++ *     vrend_renderer.c) non cambia contesto da sola -- opera su quello
++ *     che il decoder ha appena impostato, non su ctx0, sia con questa
++ *     patch che senza: la fence finisce sempre sul contesto dell'app,
++ *     mai su ctx0, indipendentemente da questa chiamata.
++ *
++ * RESTANO DENTRO, deliberatamente, quindi CONTINUANO a chiamarla:
++ *   - RESOURCE_CREATE_2D, RESOURCE_CREATE_3D, RESOURCE_UNREF: toccano GL
++ *     ma non commutano contesto da soli, quindi dipendono da quello
++ *     lasciato li' da chi e' passato prima;
++ *   - SET_SCANOUT: la richiama pure per conto suo (virgl_cmd_set_scanout
++ *     qui sopra), ma restare comunque nella lista di chi chiama non costa
++ *     nulla per un comando a ~106/s (PRESTAZIONI.md). */
++static bool winq_ctx0_serve(uint32_t tipo)
++{
++    switch (tipo) {
++    case VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE:
++    case VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE:
++    case VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING:
++    case VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING:
++    case VIRTIO_GPU_CMD_GET_CAPSET_INFO:
++    case VIRTIO_GPU_CMD_GET_CAPSET:
++    case VIRTIO_GPU_CMD_GET_DISPLAY_INFO:
++    case VIRTIO_GPU_CMD_GET_EDID:
++        return false;
++    /* SUBMIT_3D era in questa lista e ne e' USCITO il 11/08/2026, per una
++     * misura. La verifica statica diceva sicuro -- il suo decoder commuta
++     * da se' e la fence nasce dopo quello switch -- e per la CORRETTEZZA
++     * lo era. Ma con SUBMIT_3D escluso l'HUD di Android diventa NERO e il
++     * punteggio glmark2 crolla da ~427 a 210: il costo per switch sale da
++     * 266 a 1159 us perche' ogni commutazione porta con se' tutto il
++     * lavoro accumulato, e qualcosa nella composizione si rompe.
++     * Sicuro per la correttezza non vuol dire buono, e non vuol dire
++     * nemmeno corretto a schermo. Non rimetterlo senza una misura. */
++    default:
++        return true;
++    }
++}
++
+ void virtio_gpu_virgl_process_cmd(VirtIOGPU *g,
+                                       struct virtio_gpu_ctrl_command *cmd)
+ {
+@@ -1536,7 +1626,9 @@
+ 
+     VIRTIO_GPU_FILL_CMD(cmd->cmd_hdr);
+ 
+-    virgl_renderer_force_ctx_0();
++    if (winq_ctx0_sempre() || winq_ctx0_serve(cmd->cmd_hdr.type)) {
++        virgl_renderer_force_ctx_0();
++    }
+     switch (cmd->cmd_hdr.type) {
+     case VIRTIO_GPU_CMD_CTX_CREATE:
+         virgl_cmd_context_create(g, cmd);

@@ -1,0 +1,449 @@
+From 0ef0bc239ae7221546f29b2a37332a7c6c954cc8 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 09:54:15 +0200
+[PATCH] winq: contatori dello shim GL
+
+---
+ src/test-winq-glspia-conta.c | 180 +++++++++++++++++++++++++++++++++++
+ src/winq-glspia-conta.c      | 176 ++++++++++++++++++++++++++++++++++
+ src/winq-glspia-conta.h      |  58 +++++++++++
+ 3 files changed, 414 insertions(+)
+ create mode 100644 src/test-winq-glspia-conta.c
+ create mode 100644 src/winq-glspia-conta.c
+ create mode 100644 src/winq-glspia-conta.h
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+new file mode 100644
+index 0000000..0e8b86d
+--- /dev/null
++++ b/src/test-winq-glspia-conta.c
+@@ -0,0 +1,180 @@
++/* Prove dei contatori dello shim GL. Nessun GL, nessun contesto, nessuna VM:
++ * e' la ragione per cui la logica di accumulo sta in un file separato da
++ * winq-glspia.h, che invece e' solo macro.
++ *
++ * Compilare ed eseguire con research/scripts/test-glspia.sh. */
++#include <stdio.h>
++#include <string.h>
++#include "winq-glspia-conta.h"
++
++static int falliti;
++
++static void esigi(int condizione, const char *cosa)
++{
++    printf("  %-58s %s\n", cosa, condizione ? "ok" : "FALLITA");
++    if (!condizione) {
++        falliti++;
++    }
++}
++
++/* Con la frequenza forzata a 1 MHz un tick vale 1000 ns, cosi' i conti
++ * dell'aritmetica si leggono a occhio invece di dipendere dall'orologio
++ * della macchina -- che renderebbe la prova non deterministica. */
++static void prova_accumulo(void)
++{
++    struct winq_glspia s;
++
++    printf("accumulo:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_SPIA_GL, 100, 150);      /* 50 tick = 50 us */
++    winq_glspia_aggiungi(WINQ_SPIA_GL, 200, 210);      /* 10 tick = 10 us */
++    winq_glspia_aggiungi(WINQ_SPIA_SHADER, 0, 3000);   /* 3 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_GL] == 60000, "GL: 60 us in nanosecondi");
++    esigi(s.chiamate[WINQ_SPIA_GL] == 2, "GL: due chiamate contate");
++    esigi(s.ns[WINQ_SPIA_SHADER] == 3000000, "SHADER: 3 ms in nanosecondi");
++    esigi(s.chiamate[WINQ_SPIA_SHADER] == 1, "SHADER: una chiamata contata");
++    esigi(s.ns[WINQ_SPIA_ATTESA] == 0, "ATTESA: intatta");
++}
++
++/* Un orologio che torna indietro esiste davvero: QueryPerformanceCounter puo'
++ * dare valori non monotoni fra core su alcune macchine. Un intervallo negativo
++ * sottratto come unsigned diventerebbe un numero enorme, e una sola occorrenza
++ * falserebbe l'intero secondo. Si scarta e si conta. */
++static void prova_intervallo_negativo(void)
++{
++    struct winq_glspia s;
++
++    printf("intervallo negativo:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_SPIA_GL, 500, 400);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 1, "contata come assurda");
++}
++
++/* La lettura e' una FOTOGRAFIA che azzera: la riga al secondo di QEMU deve
++ * poter chiedere "quanto da quando ho chiesto l'ultima volta" senza tenere
++ * lei lo stato precedente. */
++static void prova_lettura_azzera(void)
++{
++    struct winq_glspia s;
++
++    printf("la lettura azzera:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_SPIA_ATTESA, 0, 1000);
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_ATTESA] == 1000000, "prima lettura: 1 ms");
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_ATTESA] == 0, "seconda lettura: azzerata");
++    esigi(s.chiamate[WINQ_SPIA_ATTESA] == 0, "seconda lettura: zero chiamate");
++}
++
++/* Il secchio fuori intervallo non deve scrivere fuori dall'array. Se questa
++ * prova sparisce, torna un buco di memoria in un percorso caldo. */
++static void prova_secchio_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("secchio invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(-1, 0, 1000);
++    winq_glspia_aggiungi(WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi(WINQ_SPIA_N + 99, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori");
++}
++
++/* La taratura deve dare un numero, e un numero piccolo: se una coppia di
++ * letture dell'orologio costasse quanto una chiamata GL, lo strumento
++ * misurerebbe se stesso. La soglia e' larga apposta -- qui si esclude
++ * l'ordine di grandezza sbagliato, non si certifica una prestazione. */
++static void prova_taratura(void)
++{
++    uint64_t costo;
++
++    printf("taratura:\n");
++    winq_glspia_freq_vera();
++    costo = winq_glspia_taratura_ns();
++    printf("  costo di una coppia di letture: %llu ns\n",
++           (unsigned long long)costo);
++    esigi(costo > 0, "la taratura restituisce un valore");
++    esigi(costo < 10000, "sotto i 10 us per coppia");
++}
++
++/* Il buco che il brief non copre: prima che winq_glspia_accesa() o
++ * winq_glspia_freq_forza() vengano chiamate, freq_hz vale zero. Una divisione
++ * per freq_hz in quello stato manderebbe in crash il processo che ospita lo
++ * shim -- cioe' QEMU. Serve un processo separato per osservare freq_hz==0
++ * davvero, perche' tutte le prove sopra lo impostano; qui si verifica solo
++ * che con freq_hz a zero forzato esplicitamente la chiamata non trabocchi ne'
++ * faccia una divisione per zero, e che il campione sia contato come assurdo. */
++static void prova_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++
++    printf("frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_SPIA_GL, 100, 200);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 1, "contata come assurda invece di dividere per zero");
++}
++
++/* Stesso buco della prova precedente, ma sull'altra funzione che divide per
++ * freq_hz. winq_glspia_taratura_ns() pero' non ha un contatore "assurde" da
++ * incrementare: deve solo restituire 0 con garbo invece di dividere per
++ * zero, senza toccare spia. */
++static void prova_taratura_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++    uint64_t costo;
++
++    printf("taratura con frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    costo = winq_glspia_taratura_ns();
++
++    esigi(costo == 0, "nessuna divisione per zero: restituisce 0");
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 0, "la taratura non conta il campione come assurdo");
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun contatore ns toccato");
++    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessun contatore chiamate toccato");
++}
++
++int main(void)
++{
++    prova_accumulo();
++    prova_intervallo_negativo();
++    prova_lettura_azzera();
++    prova_secchio_invalido();
++    prova_taratura();
++    prova_frequenza_non_impostata();
++    prova_taratura_frequenza_non_impostata();
++
++    if (falliti) {
++        printf("\n%d PROVE FALLITE\n", falliti);
++        return 1;
++    }
++    printf("\ntutte le prove passate\n");
++    return 0;
++}
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+new file mode 100644
+index 0000000..f895b2a
+--- /dev/null
++++ b/src/winq-glspia-conta.c
+@@ -0,0 +1,176 @@
++/* winq-glspia-conta.c -- accumulo, orologio, taratura.
++ *
++ * Sul percorso caldo qui dentro succedono due somme e un confronto. Niente
++ * allocazioni, niente formattazione, niente lock: lo strumento deve costare
++ * meno di cio' che misura, e il cancello §7c della spec lo verifica.
++ *
++ * NIENTE GL IN QUESTO FILE. Vedi il commento in cima a winq-glspia-conta.h.
++ */
++#include "winq-glspia-conta.h"
++
++#include <stdlib.h>
++
++#ifdef _WIN32
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++#endif
++
++static struct winq_glspia spia;
++static uint64_t freq_hz;
++static int acceso = -1;
++
++int winq_glspia_accesa(void)
++{
++    if (acceso < 0) {
++        const char *v = getenv("WINQ_GPU_DIAG");
++
++        acceso = (v && *v == '1') ? 1 : 0;
++        if (acceso) {
++            winq_glspia_freq_vera();
++        }
++    }
++    return acceso;
++}
++
++void winq_glspia_freq_vera(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER f;
++
++    QueryPerformanceFrequency(&f);
++    freq_hz = (uint64_t)f.QuadPart;
++#else
++    freq_hz = 1000000000ull;
++#endif
++}
++
++void winq_glspia_freq_forza(uint64_t hz)
++{
++    freq_hz = hz;
++}
++
++uint64_t winq_glspia_ora(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER t;
++
++    QueryPerformanceCounter(&t);
++    return (uint64_t)t.QuadPart;
++#else
++    return 0;
++#endif
++}
++
++/* Converte un intervallo in tick di QueryPerformanceCounter in nanosecondi.
++ *
++ * Divide-prima-poi-resto: moltiplicare subito per un miliardo trabocca a 18
++ * secondi di tick su un orologio a 1 GHz. Il resto e' cio' che rende utile
++ * la misura, perche' i singoli intervalli sono microsecondi e la divisione
++ * secca li azzererebbe tutti.
++ *
++ * Se freq_hz e' ancora zero (nessuno ha chiamato winq_glspia_accesa() o
++ * winq_glspia_freq_forza()) restituisce 0 invece di dividere per zero: qui
++ * dentro non si decide se uno zero cosi' e' un campione da scartare o una
++ * taratura innocua, quella distinzione resta ai chiamanti. */
++static uint64_t winq_tick_a_ns(uint64_t tick)
++{
++    if (freq_hz == 0) {
++        return 0;
++    }
++    return (tick / freq_hz) * 1000000000ull +
++           (tick % freq_hz) * 1000000000ull / freq_hz;
++}
++
++void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1)
++{
++    uint64_t tick;
++
++    if (secchio < 0 || secchio >= WINQ_SPIA_N) {
++        spia.assurde++;
++        return;
++    }
++    /* L'orologio puo' tornare indietro fra core su alcune macchine. Sottratto
++     * come unsigned, un intervallo negativo diventerebbe un numero enorme e
++     * un solo campione falserebbe l'intero secondo. */
++    if (t1 < t0) {
++        spia.assurde++;
++        return;
++    }
++    /* freq_hz e' zero finche' nessuno ha ancora chiamato winq_glspia_accesa()
++     * o winq_glspia_freq_forza(): succede se una chiamata GL arriva prima che
++     * lo shim si sia inizializzato. winq_tick_a_ns() da sola restituirebbe un
++     * innocuo zero, ma qui il campione va anche contato come assurdo e non
++     * come "zero secondi di lavoro GL": senza questo controllo esplicito la
++     * chiamata verrebbe conteggiata in spia.chiamate come se fosse valida. */
++    if (freq_hz == 0) {
++        spia.assurde++;
++        return;
++    }
++    tick = t1 - t0;
++
++    spia.ns[secchio] += winq_tick_a_ns(tick);
++    spia.chiamate[secchio]++;
++}
++
++void winq_glspia_conta_saltata(void)
++{
++    spia.saltate++;
++}
++
++void winq_glspia_conta_assurda(void)
++{
++    spia.assurde++;
++}
++
++void winq_glspia_azzera(void)
++{
++    int i;
++
++    for (i = 0; i < WINQ_SPIA_N; i++) {
++        spia.ns[i] = 0;
++        spia.chiamate[i] = 0;
++    }
++    spia.saltate = 0;
++    spia.assurde = 0;
++}
++
++void winq_glspia_leggi(struct winq_glspia *fuori)
++{
++    *fuori = spia;
++    winq_glspia_azzera();
++}
++
++/* Un milione di coppie di letture a vuoto, senza niente in mezzo: e' il costo
++ * che lo strumento aggiunge a ogni chiamata GL avvolta. Va confrontato con
++ * t_virgl (spec §7c): se e' dello stesso ordine, la misura non regge e la
++ * lista delle funzioni avvolte va accorciata. */
++uint64_t winq_glspia_taratura_ns(void)
++{
++    const uint64_t giri = 1000000;
++    uint64_t i, a, b, tick;
++    /* Accumulatore locale per impedire al compilatore di buttare via le due
++     * letture del ciclo: volatile forza una scrittura in memoria a ogni
++     * iterazione, quindi le chiamate a winq_glspia_ora() non sono eliminabili
++     * come codice morto. Locale e non spia.assurde: la taratura e' una
++     * misura, non un evento da contare nelle statistiche di produzione che
++     * QEMU legge. */
++    volatile uint64_t anti_ottimizzazione = 0;
++
++    a = winq_glspia_ora();
++    for (i = 0; i < giri; i++) {
++        uint64_t x = winq_glspia_ora();
++        uint64_t y = winq_glspia_ora();
++
++        if (y < x) {
++            anti_ottimizzazione++;
++        }
++    }
++    (void)anti_ottimizzazione;
++    b = winq_glspia_ora();
++    tick = b - a;
++
++    /* freq_hz a zero qui non e' un campione assurdo da contare: e' solo una
++     * taratura chiamata troppo presto. winq_tick_a_ns() restituisce 0 in quel
++     * caso, senza toccare spia. */
++    return winq_tick_a_ns(tick) / giri;
++}
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+new file mode 100644
+index 0000000..039ef0e
+--- /dev/null
++++ b/src/winq-glspia-conta.h
+@@ -0,0 +1,58 @@
++/* winq-glspia-conta.h -- i contatori dello shim GL.
++ *
++ * Nessun GL qui dentro, e nemmeno in winq-glspia-conta.c: e' cio' che rende
++ * questa parte provabile senza contesto grafico (research/scripts/test-glspia.sh).
++ * Le macro che avvolgono le entry point stanno in winq-glspia.h, che invece
++ * include epoxy.
++ *
++ * Spec: docs/superpowers/specs/2026-08-11-attribuzione-tempo-gpu-design.md
++ */
++#ifndef WINQ_GLSPIA_CONTA_H
++#define WINQ_GLSPIA_CONTA_H
++
++#include <stdint.h>
++
++#ifdef _WIN32
++/* Senza dllexport il simbolo non esce dalla DLL e QEMU non lo trova con
++ * GetProcAddress: la diagnostica si spegnerebbe da se' dicendo "shim assente"
++ * pur essendo compilata dentro. */
++#define WINQ_SPIA_ESPORTA __declspec(dllexport)
++#else
++#define WINQ_SPIA_ESPORTA
++#endif
++
++enum {
++    WINQ_SPIA_GL = 0,      /* disegno, buffer, texture: lavoro del driver */
++    WINQ_SPIA_SHADER,      /* glCompileShader, glLinkProgram: DXIL + PSO */
++    WINQ_SPIA_ATTESA,      /* glFinish, glClientWaitSync: fermi ad aspettare */
++    WINQ_SPIA_GPU,         /* GL_TIME_ELAPSED: lavoro vero della Adreno */
++    WINQ_SPIA_N
++};
++
++struct winq_glspia {
++    uint64_t ns[WINQ_SPIA_N];
++    uint64_t chiamate[WINQ_SPIA_N];
++    uint64_t saltate;   /* query GPU non pronte quando la casella serviva */
++    uint64_t assurde;   /* campioni fuori banda o intervalli negativi */
++};
++
++/* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
++ * legge questa, non getenv: getenv per chiamata GL costerebbe piu' della
++ * chiamata stessa. */
++int winq_glspia_accesa(void);
++
++uint64_t winq_glspia_ora(void);
++void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1);
++void winq_glspia_conta_saltata(void);
++void winq_glspia_conta_assurda(void);
++void winq_glspia_azzera(void);
++uint64_t winq_glspia_taratura_ns(void);
++
++/* Fotografia che azzera. Esportata: la chiama QEMU con GetProcAddress. */
++WINQ_SPIA_ESPORTA void winq_glspia_leggi(struct winq_glspia *fuori);
++
++/* Solo per le prove: rendono deterministica la conversione tick -> ns. */
++void winq_glspia_freq_forza(uint64_t hz);
++void winq_glspia_freq_vera(void);
++
++#endif /* WINQ_GLSPIA_CONTA_H */
+-- 
+2.53.0.vfs.0.7
+

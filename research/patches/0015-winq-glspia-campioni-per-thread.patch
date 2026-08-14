@@ -1,0 +1,1085 @@
+From 18dfa5621fbf6695d16244930c9fb5e4a596156a Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 16:12:43 +0200
+[PATCH] winq: campioni etichettati per thread
+ altri
+
+I contatori sono static globali senza affinita' di thread, e
+in_finestra lo alzano/abbassano solo winq_glspia_finestra_apri()/
+chiudi(), chiamate solo dal thread che decodifica. Conseguenza: "fuori
+dalla finestra" non vuol dire "sul thread principale" -- il 624,9 ms/s
+di glClientWaitSync pubblicato non era dimostrato essere del ciclo
+principale, dato che l'unico sito bloccante e' raggiunto solo dal
+thread "vrend-sync". E i secchi "dentro" sono ugualmente contaminabili
+dato che il flag e' globale.
+
+ns[]/chiamate[]/fuori_ns[]/fuori_chiamate[] si allungano di una
+dimensione (WINQ_THREAD_PRINCIPALE/WINQ_THREAD_ALTRI), non di un
+secchio in piu': aggiungi()/aggiungi_fuori() prendono un thread oltre
+al secchio, con la stessa guardia sui bordi che avevano per il
+secchio. winq_glspia_finestra_apri() registra il thread principale
+alla prima chiamata (GetCurrentThreadId(), letto anche nella taratura
+insieme alle due letture dell'orologio, cosi' il costo che riporta e'
+onesto); winq_glspia_thread_indice() confronta il thread corrente col
+principale e, se e' un altro, lo registra in un piccolo insieme di 8
+(con un contatore di quelli senza posto) -- un registro persistente,
+non un accumulo al secondo.
+---
+ src/test-winq-glspia-conta.c | 413 +++++++++++++++++++++++++++++------
+ src/winq-glspia-conta.c      | 157 ++++++++++---
+ src/winq-glspia-conta.h      | 114 ++++++++--
+ src/winq-glspia.h            |  25 ++-
+ 4 files changed, 592 insertions(+), 117 deletions(-)
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index 853e020..c620094 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -28,16 +28,16 @@ static void prova_accumulo(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_GL, 100, 150);      /* 50 tick = 50 us */
+-    winq_glspia_aggiungi(WINQ_SPIA_GL, 200, 210);      /* 10 tick = 10 us */
+-    winq_glspia_aggiungi(WINQ_SPIA_SHADER, 0, 3000);   /* 3 ms */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 200, 210);    /* 10 tick = 10 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_SHADER, 0, 3000); /* 3 ms */
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_GL] == 60000, "GL: 60 us in nanosecondi");
+-    esigi(s.chiamate[WINQ_SPIA_GL] == 2, "GL: due chiamate contate");
+-    esigi(s.ns[WINQ_SPIA_SHADER] == 3000000, "SHADER: 3 ms in nanosecondi");
+-    esigi(s.chiamate[WINQ_SPIA_SHADER] == 1, "SHADER: una chiamata contata");
+-    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC: intatta");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 60000, "GL: 60 us in nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 2, "GL: due chiamate contate");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 3000000, "SHADER: 3 ms in nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 1, "SHADER: una chiamata contata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC: intatta");
+ }
+ 
+ /* Un orologio che torna indietro esiste davvero: QueryPerformanceCounter puo'
+@@ -52,11 +52,11 @@ static void prova_intervallo_negativo(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_GL, 500, 400);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 500, 400);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
+-    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 1, "contata come assurda");
+ }
+ 
+@@ -71,13 +71,13 @@ static void prova_lettura_azzera(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_WAITSYNC, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 1000);
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: 1 ms");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: 1 ms");
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: azzerata");
+-    esigi(s.chiamate[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: azzerata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate");
+ }
+ 
+ /* Il secchio fuori intervallo non deve scrivere fuori dall'array. Se questa
+@@ -90,18 +90,44 @@ static void prova_secchio_invalido(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(-1, 0, 1000);
+-    winq_glspia_aggiungi(WINQ_SPIA_N, 0, 1000);
+-    winq_glspia_aggiungi(WINQ_SPIA_N + 99, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, -1, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N + 99, 0, 1000);
+ 
+     winq_glspia_leggi(&s);
+     esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori");
+ }
+ 
++/* QUARTA CORREZIONE DELL'11/08/2026: aggiungi() ora indicizza un array a due
++ * dimensioni (thread e secchio). Lo stesso rischio di prova_secchio_invalido(),
++ * sull'altro asse: un thread fuori bounds deve scartarsi come assurda, non
++ * scrivere fuori dall'array. */
++static void prova_thread_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("thread invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(-1, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_N, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_N + 99, WINQ_SPIA_GL, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
+ /* La taratura deve dare un numero, e un numero piccolo: se una coppia di
+  * letture dell'orologio costasse quanto una chiamata GL, lo strumento
+  * misurerebbe se stesso. La soglia e' larga apposta -- qui si esclude
+- * l'ordine di grandezza sbagliato, non si certifica una prestazione. */
++ * l'ordine di grandezza sbagliato, non si certifica una prestazione.
++ *
++ * QUARTA CORREZIONE DELL'11/08/2026: il numero ora include anche una lettura
++ * di winq_glspia_thread_id() per giro (vedi il commento sopra
++ * winq_glspia_taratura_ns()), perche' e' quello che il percorso caldo fa
++ * davvero da questa correzione in poi. La soglia non cambia: GetCurrentThreadId()
++ * e' una lettura del TEB, non sposta l'ordine di grandezza. */
+ static void prova_taratura(void)
+ {
+     uint64_t costo;
+@@ -109,10 +135,41 @@ static void prova_taratura(void)
+     printf("taratura:\n");
+     winq_glspia_freq_vera();
+     costo = winq_glspia_taratura_ns();
+-    printf("  costo di una coppia di letture: %llu ns\n",
++    printf("  costo di una tripletta di letture (ora+ora+thread_id): %llu ns\n",
+            (unsigned long long)costo);
+     esigi(costo > 0, "la taratura restituisce un valore");
+-    esigi(costo < 10000, "sotto i 10 us per coppia");
++    esigi(costo < 10000, "sotto i 10 us per tripletta");
++}
++
++/* Misura isolata di winq_glspia_thread_id() da solo, separata dal numero
++ * combinato di taratura_ns(): il rapporto deve poter citare il costo della
++ * sola lettura del thread id, non solo il totale con le due letture
++ * dell'orologio incluse. Non e' una prova di correttezza (nessun esigi()
++ * sul valore stesso oltre alla soglia larga): e' la misura dichiarata nel
++ * compito. */
++static void prova_costo_thread_id(void)
++{
++    const uint64_t giri = 1000000;
++    uint64_t i, a, b, costo;
++    volatile uint64_t anti_ottimizzazione = 0;
++
++    printf("costo isolato di winq_glspia_thread_id():\n");
++    winq_glspia_freq_vera();
++
++    a = winq_glspia_ora();
++    for (i = 0; i < giri; i++) {
++        uint64_t t = winq_glspia_thread_id();
++
++        if (t == 0) {
++            anti_ottimizzazione++;
++        }
++    }
++    (void)anti_ottimizzazione;
++    b = winq_glspia_ora();
++
++    costo = winq_glspia_intervallo_ns(a, b) / giri;
++    printf("  costo di una lettura: %llu ns\n", (unsigned long long)costo);
++    esigi(costo < 10000, "sotto i 10 us per lettura");
+ }
+ 
+ /* Il buco che il brief non copre: prima che winq_glspia_accesa() o
+@@ -130,11 +187,11 @@ static void prova_frequenza_non_impostata(void)
+     winq_glspia_freq_forza(0);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_GL, 100, 200);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 200);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
+-    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 1, "contata come assurda invece di dividere per zero");
+ }
+ 
+@@ -157,8 +214,8 @@ static void prova_taratura_frequenza_non_impostata(void)
+ 
+     winq_glspia_leggi(&s);
+     esigi(s.assurde == 0, "la taratura non conta il campione come assurdo");
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "nessun contatore ns toccato");
+-    esigi(s.chiamate[WINQ_SPIA_GL] == 0, "nessun contatore chiamate toccato");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun contatore ns toccato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun contatore chiamate toccato");
+ }
+ 
+ /* winq_glspia_gpu_chiudi() passa il proprio argomento alla banda di
+@@ -183,7 +240,9 @@ static void prova_intervallo_ns(void)
+ }
+ 
+ /* I nanosecondi della query non passano dalla conversione da tick: se un
+- * giorno qualcuno li facesse passare da aggiungi(), questa prova lo prende. */
++ * giorno qualcuno li facesse passare da aggiungi(), questa prova lo prende.
++ * Sempre nel secchio WINQ_THREAD_PRINCIPALE: somma_gpu() non prende un
++ * thread, vedi il commento sulla funzione. */
+ static void prova_somma_gpu(void)
+ {
+     struct winq_glspia s;
+@@ -196,8 +255,8 @@ static void prova_somma_gpu(void)
+     winq_glspia_somma_gpu(500000);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_GPU] == 2000000, "2 ms sommati come nanosecondi");
+-    esigi(s.chiamate[WINQ_SPIA_GPU] == 2, "due campioni contati");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 2000000, "2 ms sommati come nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 2, "due campioni contati");
+ }
+ 
+ /* L'interruttore di finestra: acceso da winq_glspia_finestra_apri(), spento
+@@ -224,12 +283,13 @@ static void prova_finestra_flag(void)
+  * e' il 62% del secondo (623,9 ms/s contro 19,0 ms/s dentro), ma essendo un
+  * unico contenitore diceva solo quanto, non cosa. Ora e' parallelo ai secchi
+  * dentro-finestra (WINQ_SPIA_GL/SHADER/FLUSH/FINISH/WAITSYNC): winq_glspia_aggiungi_fuori()
+- * prende un secchio come aggiungi(), e scrive in fuori_ns[secchio]/
+- * fuori_chiamate[secchio]. WINQ_SPIA_GPU non ha mai un campione fuori: le
+- * query GL_TIME_ELAPSED si aprono solo dentro la finestra (winq-glspia-gpu.c),
+- * quindi quella riga dell'array resta sempre zero, e non e' un caso da
+- * testare qui perche' nessun chiamante puo' produrlo. Non e' nemmeno un
+- * campione scartato: assurde resta a zero. */
++ * prende un thread e un secchio come aggiungi(), e scrive in
++ * fuori_ns[thread][secchio]/fuori_chiamate[thread][secchio]. WINQ_SPIA_GPU
++ * non ha mai un campione fuori: le query GL_TIME_ELAPSED si aprono solo
++ * dentro la finestra (winq-glspia-gpu.c), quindi quella riga dell'array
++ * resta sempre zero, e non e' un caso da testare qui perche' nessun
++ * chiamante puo' produrlo. Non e' nemmeno un campione scartato: assurde
++ * resta a zero. */
+ static void prova_aggiungi_fuori(void)
+ {
+     struct winq_glspia s;
+@@ -238,17 +298,17 @@ static void prova_aggiungi_fuori(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 0, 3000);     /* 3000 tick = 3 ms */
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_SHADER, 0, 500);  /* 500 tick = 0,5 ms */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 0, 3000);     /* 3000 tick = 3 ms */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_SHADER, 0, 500);  /* 500 tick = 0,5 ms */
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_GL] == 3050000, "GL fuori: 3,05 ms in nanosecondi");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 2, "GL fuori: due chiamate contate");
+-    esigi(s.fuori_ns[WINQ_SPIA_SHADER] == 500000, "SHADER fuori: 0,5 ms in nanosecondi");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_SHADER] == 1, "SHADER fuori: una chiamata contata");
+-    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC fuori: intatto, nessuna chiamata");
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL dentro-finestra: intatto, fuori e' parallelo");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 3050000, "GL fuori: 3,05 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 2, "GL fuori: due chiamate contate");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 500000, "SHADER fuori: 0,5 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 1, "SHADER fuori: una chiamata contata");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC fuori: intatto, nessuna chiamata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "GL dentro-finestra: intatto, fuori e' parallelo");
+     esigi(s.assurde == 0, "fuori non e' un errore: nessuna assurda");
+ }
+ 
+@@ -263,11 +323,11 @@ static void prova_aggiungi_fuori_orologio_indietro(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 500, 400);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 500, 400);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
+ }
+ 
+@@ -281,11 +341,11 @@ static void prova_aggiungi_fuori_frequenza_non_impostata(void)
+     winq_glspia_freq_forza(0);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 100, 200);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 200);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
+ }
+ 
+@@ -302,9 +362,27 @@ static void prova_aggiungi_fuori_secchio_invalido(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(-1, 0, 1000);
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_N, 0, 1000);
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_N + 99, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, -1, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N + 99, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
++/* Come prova_thread_invalido(), ma per aggiungi_fuori(): l'array e' a due
++ * dimensioni anche qui. */
++static void prova_aggiungi_fuori_thread_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, thread invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(-1, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_N, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_N + 99, WINQ_SPIA_GL, 0, 1000);
+ 
+     winq_glspia_leggi(&s);
+     esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
+@@ -341,16 +419,16 @@ static void prova_lettura_azzera_campi_nuovi(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_WAITSYNC, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 1000);
+     winq_glspia_somma_finestra(500000);
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: fuori(WAITSYNC) 1 ms");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_WAITSYNC] == 1, "prima lettura: una chiamata fuori(WAITSYNC)");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: fuori(WAITSYNC) 1 ms");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1, "prima lettura: una chiamata fuori(WAITSYNC)");
+     esigi(s.finestra_ns == 500000, "prima lettura: finestra 0,5 ms");
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: fuori(WAITSYNC) azzerato");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate fuori(WAITSYNC)");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: fuori(WAITSYNC) azzerato");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate fuori(WAITSYNC)");
+     esigi(s.finestra_ns == 0, "seconda lettura: finestra azzerata");
+ }
+ 
+@@ -370,20 +448,20 @@ static void prova_secchi_attesa_distinti(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_FLUSH, 0, 100);      /* 100 us */
+-    winq_glspia_aggiungi(WINQ_SPIA_FINISH, 0, 200);     /* 200 us */
+-    winq_glspia_aggiungi(WINQ_SPIA_WAITSYNC, 0, 300);   /* 300 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_FLUSH, 0, 100);      /* 100 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_FINISH, 0, 200);     /* 200 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 300);   /* 300 us */
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_FLUSH] == 100000, "FLUSH: 100 us, non contaminato");
+-    esigi(s.ns[WINQ_SPIA_FINISH] == 200000, "FINISH: 200 us, non contaminato");
+-    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 300000, "WAITSYNC: 300 us, non contaminato");
+-    esigi(s.chiamate[WINQ_SPIA_FLUSH] == 1, "FLUSH: una chiamata");
+-    esigi(s.chiamate[WINQ_SPIA_FINISH] == 1, "FINISH: una chiamata");
+-    esigi(s.chiamate[WINQ_SPIA_WAITSYNC] == 1, "WAITSYNC: una chiamata");
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL: intatto");
+-    esigi(s.ns[WINQ_SPIA_SHADER] == 0, "SHADER: intatto");
+-    esigi(s.ns[WINQ_SPIA_GPU] == 0, "GPU: intatto");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] == 100000, "FLUSH: 100 us, non contaminato");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] == 200000, "FINISH: 200 us, non contaminato");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 300000, "WAITSYNC: 300 us, non contaminato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] == 1, "FLUSH: una chiamata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] == 1, "FINISH: una chiamata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1, "WAITSYNC: una chiamata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "GL: intatto");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 0, "SHADER: intatto");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 0, "GPU: intatto");
+ }
+ 
+ /* SONDA glGetError, aggiunta l'11/08/2026. Qui si prova solo la logica di
+@@ -443,13 +521,201 @@ static void prova_sonda_azzerata_se_non_eseguita(void)
+     esigi(s.sonda_errore_fine == 0, "secondo ciclo: fine azzerata, non un residuo");
+ }
+ 
++/* QUARTA CORREZIONE DELL'11/08/2026. winq_glspia_thread_forza()/thread_vero()
++ * rendono deterministico cio' che winq_glspia_thread_id() restituisce, senza
++ * dover creare un secondo thread vero: la prova base che il seme funziona. */
++static void prova_thread_id_forzato(void)
++{
++    printf("thread id forzato per le prove:\n");
++
++    winq_glspia_thread_forza(777);
++    esigi(winq_glspia_thread_id() == 777, "restituisce il valore forzato");
++
++    winq_glspia_thread_forza(42);
++    esigi(winq_glspia_thread_id() == 42, "cambia se forzato di nuovo");
++
++    winq_glspia_thread_vero();
++    esigi(winq_glspia_thread_id() != 777 && winq_glspia_thread_id() != 42,
++          "tornato al vero GetCurrentThreadId(), non piu' al valore forzato");
++    esigi(winq_glspia_thread_id() != 0, "il vero thread id non e' mai zero");
++}
++
++/* winq_glspia_finestra_apri() registra il thread principale SOLO alla prima
++ * chiamata: chiamate successive, anche da un "thread" (forzato) diverso, non
++ * lo devono riscrivere -- altrimenti un secondo thread che needlessly
++ * chiamasse questa funzione soppianterebbe quello vero. */
++static void prova_thread_registrazione_principale(void)
++{
++    struct winq_glspia s;
++
++    printf("registrazione del thread principale:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(1001);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 1001, "registrato alla prima chiamata");
++
++    /* Una "seconda" chiamata da un thread diverso (forzato): non deve
++     * cambiare chi e' il principale. */
++    winq_glspia_thread_forza(2002);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 1001, "non riscritto da una chiamata successiva");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il cuore della correzione: lo stesso thread che ha aperto la finestra e'
++ * WINQ_THREAD_PRINCIPALE, un thread diverso e' WINQ_THREAD_ALTRI -- e
++ * l'effetto collaterale di thread_indice() lo registra nel piccolo insieme. */
++static void prova_thread_indice_principale_e_altri(void)
++{
++    struct winq_glspia s;
++
++    printf("thread_indice: principale contro altri:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(5000);
++    winq_glspia_finestra_apri();   /* registra 5000 come principale */
++    winq_glspia_finestra_chiudi();
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_PRINCIPALE,
++          "lo stesso thread che ha aperto la finestra e' principale");
++
++    winq_glspia_thread_forza(6000);
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_ALTRI,
++          "un thread diverso e' altri");
++
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 5000, "il principale registrato e' 5000");
++    esigi(s.thread_altri_n == 1, "un solo altro thread visto");
++    esigi(s.thread_altri_id[0] == 6000, "il suo id e' 6000");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il piccolo insieme regge fino a WINQ_THREAD_TABELLA identita' distinte; un
++ * thread ulteriore, distinto, non trova posto e si conta in
++ * thread_altri_fuori_tabella -- senza scrivere fuori dall'array
++ * thread_altri_id[]. Un thread GIA' visto, richiamato dopo che la tabella e'
++ * piena, non deve incrementare fuori_tabella: e' riconosciuto dalla scansione
++ * prima di provare a inserirlo. */
++static void prova_thread_registro_tabella(void)
++{
++    struct winq_glspia s;
++    int i;
++
++    printf("registro degli altri thread: tabella e overflow:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(1);
++    winq_glspia_finestra_apri();   /* thread 1 = principale */
++    winq_glspia_finestra_chiudi();
++
++    for (i = 0; i < WINQ_THREAD_TABELLA; i++) {
++        winq_glspia_thread_forza((uint64_t)(100 + i));
++        (void)winq_glspia_thread_indice();
++    }
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_n == WINQ_THREAD_TABELLA, "tabella piena: 8 altri thread distinti");
++    esigi(s.thread_altri_fuori_tabella == 0, "nessun overflow finche' la tabella non e' piena");
++
++    /* Un nono thread, distinto: non trova posto. */
++    winq_glspia_thread_forza(999);
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_ALTRI,
++          "resta 'altri' anche senza posto in tabella");
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_n == WINQ_THREAD_TABELLA, "il conteggio in tabella non supera 8");
++    esigi(s.thread_altri_fuori_tabella == 1, "un overflow contato");
++
++    /* Un thread GIA' in tabella (100), richiamato ora: riconosciuto dalla
++     * scansione, nessun NUOVO overflow. thread_altri_fuori_tabella e'
++     * persistente (leggi() non lo azzera, vedi prova_thread_registro_persiste):
++     * resta 1, quello del thread 999 sopra -- se la scansione non
++     * riconoscesse 100 diventerebbe 2. */
++    winq_glspia_thread_forza(100);
++    (void)winq_glspia_thread_indice();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_fuori_tabella == 1,
++          "un thread gia' noto non aggiunge un secondo overflow");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il registro (thread_principale, thread_altri_*) e' un'identita' di
++ * processo, non un accumulo al secondo: winq_glspia_azzera()/leggi() NON lo
++ * devono azzerare, a differenza di tutti gli altri campi della struct. Solo
++ * winq_glspia_thread_azzera_registro() (solo per le prove) lo fa. */
++static void prova_thread_registro_persiste(void)
++{
++    struct winq_glspia s;
++
++    printf("il registro dei thread persiste attraverso leggi()/azzera():\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(3003);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_thread_forza(4004);
++    (void)winq_glspia_thread_indice();
++
++    winq_glspia_azzera();   /* azzera i secchi, non deve toccare il registro */
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 3003, "principale intatto dopo azzera()/leggi()");
++    esigi(s.thread_altri_n == 1, "altri visti intatti dopo azzera()/leggi()");
++    esigi(s.thread_altri_id[0] == 4004, "il loro id e' intatto");
++
++    winq_glspia_leggi(&s);   /* una seconda lettura, stesso discorso */
++    esigi(s.thread_principale == 3003, "principale intatto anche alla seconda lettura");
++    esigi(s.thread_altri_n == 1, "altri visti intatti anche alla seconda lettura");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il cuore della quarta correzione: dentro/altri e fuori/altri sono secchi
++ * indipendenti da dentro/principale e fuori/principale. Un thread "altri"
++ * che accumula non deve toccare le celle del principale, e viceversa --
++ * altrimenti la contaminazione che questa correzione esiste per rivelare
++ * sarebbe ancora invisibile, solo spostata. */
++static void prova_dentro_e_fuori_per_thread_indipendenti(void)
++{
++    struct winq_glspia s;
++
++    printf("dentro/altri e fuori/altri non contaminano il principale:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 100);       /* 100 us */
++    winq_glspia_aggiungi(WINQ_THREAD_ALTRI, WINQ_SPIA_WAITSYNC, 0, 900);            /* 900 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 50);  /* 50 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_ALTRI, WINQ_SPIA_WAITSYNC, 0, 950);      /* 950 us */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 100000,
++          "dentro/principale: 100 us, non contaminato da altri");
++    esigi(s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] == 900000,
++          "dentro/altri: 900 us, non nel secchio del principale");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 50000,
++          "fuori/principale: 50 us, non contaminato da altri");
++    esigi(s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] == 950000,
++          "fuori/altri: 950 us, non nel secchio del principale");
++}
++
+ int main(void)
+ {
+     prova_accumulo();
+     prova_intervallo_negativo();
+     prova_lettura_azzera();
+     prova_secchio_invalido();
++    prova_thread_invalido();
+     prova_taratura();
++    prova_costo_thread_id();
+     prova_frequenza_non_impostata();
+     prova_taratura_frequenza_non_impostata();
+     prova_intervallo_ns();
+@@ -459,11 +725,18 @@ int main(void)
+     prova_aggiungi_fuori_orologio_indietro();
+     prova_aggiungi_fuori_frequenza_non_impostata();
+     prova_aggiungi_fuori_secchio_invalido();
++    prova_aggiungi_fuori_thread_invalido();
+     prova_somma_finestra();
+     prova_lettura_azzera_campi_nuovi();
+     prova_secchi_attesa_distinti();
+     prova_sonda_richiesta_e_registrazione();
+     prova_sonda_azzerata_se_non_eseguita();
++    prova_thread_id_forzato();
++    prova_thread_registrazione_principale();
++    prova_thread_indice_principale_e_altri();
++    prova_thread_registro_tabella();
++    prova_thread_registro_persiste();
++    prova_dentro_e_fuori_per_thread_indipendenti();
+ 
+     if (falliti) {
+         printf("\n%d PROVE FALLITE\n", falliti);
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index 1b867b9..69444f7 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -30,6 +30,11 @@ static int in_finestra;
+  * secondo, contenga gia' un campione. */
+ static int sonda_armata = 1;
+ 
++/* Solo per le prove (winq_glspia_thread_forza()): 0 vuol dire "usa il vero
++ * GetCurrentThreadId()", esattamente come freq_hz==0 vuol dire "non ancora
++ * tarata" -- 0 non e' mai un id di thread vero su Windows. */
++static uint64_t thread_forzato;
++
+ int winq_glspia_accesa(void)
+ {
+     if (acceso < 0) {
+@@ -92,11 +97,76 @@ static uint64_t winq_tick_a_ns(uint64_t tick)
+            (tick % freq_hz) * 1000000000ull / freq_hz;
+ }
+ 
+-void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1)
++uint64_t winq_glspia_thread_id(void)
++{
++    if (thread_forzato) {
++        return thread_forzato;
++    }
++#ifdef _WIN32
++    return (uint64_t)GetCurrentThreadId();
++#else
++    return 0;
++#endif
++}
++
++void winq_glspia_thread_forza(uint64_t tid)
++{
++    thread_forzato = tid;
++}
++
++void winq_glspia_thread_vero(void)
++{
++    thread_forzato = 0;
++}
++
++void winq_glspia_thread_azzera_registro(void)
++{
++    int i;
++
++    spia.thread_principale = 0;
++    spia.thread_altri_n = 0;
++    for (i = 0; i < WINQ_THREAD_TABELLA; i++) {
++        spia.thread_altri_id[i] = 0;
++    }
++    spia.thread_altri_fuori_tabella = 0;
++}
++
++/* Effetto collaterale se il thread corrente non e' il principale: lo
++ * registra nel piccolo insieme thread_altri_id[] se non e' gia' li' --
++ * scansione lineare di al piu' WINQ_THREAD_TABELLA elementi, il chiamante
++ * (winq-glspia.h) la fa una volta per chiamata GL avvolta, non di piu'. Se
++ * il thread e' nuovo e la tabella e' piena, non lo sappiamo distinguere da
++ * un thread gia' visto che non entrava: si conta la chiamata in
++ * thread_altri_fuori_tabella, non un'identita' -- stessa rinuncia di
++ * trova_o_crea() in winq-glspia-gpu.c quando WINQ_CONTESTI e' pieno. */
++int winq_glspia_thread_indice(void)
++{
++    uint64_t tid = winq_glspia_thread_id();
++    int n = (int)spia.thread_altri_n;
++    int i;
++
++    if (tid == spia.thread_principale) {
++        return WINQ_THREAD_PRINCIPALE;
++    }
++    for (i = 0; i < n; i++) {
++        if (spia.thread_altri_id[i] == tid) {
++            return WINQ_THREAD_ALTRI;
++        }
++    }
++    if (n < WINQ_THREAD_TABELLA) {
++        spia.thread_altri_id[n] = tid;
++        spia.thread_altri_n = (uint64_t)(n + 1);
++    } else {
++        spia.thread_altri_fuori_tabella++;
++    }
++    return WINQ_THREAD_ALTRI;
++}
++
++void winq_glspia_aggiungi(int thread, int secchio, uint64_t t0, uint64_t t1)
+ {
+     uint64_t tick;
+ 
+-    if (secchio < 0 || secchio >= WINQ_SPIA_N) {
++    if (thread < 0 || thread >= WINQ_THREAD_N || secchio < 0 || secchio >= WINQ_SPIA_N) {
+         spia.assurde++;
+         return;
+     }
+@@ -119,8 +189,8 @@ void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1)
+     }
+     tick = t1 - t0;
+ 
+-    spia.ns[secchio] += winq_tick_a_ns(tick);
+-    spia.chiamate[secchio]++;
++    spia.ns[thread][secchio] += winq_tick_a_ns(tick);
++    spia.chiamate[thread][secchio]++;
+ }
+ 
+ uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1)
+@@ -135,6 +205,15 @@ uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1)
+ 
+ void winq_glspia_finestra_apri(void)
+ {
++    /* Alla PRIMA chiamata, e solo alla prima: e' per definizione il thread
++     * che decodifica (vrend_decode_ctx_submit_cmd chiama solo questa
++     * funzione, mai da un altro thread -- vedi il commento sopra l'enum
++     * WINQ_THREAD_* in winq-glspia-conta.h). Chiamate successive non lo
++     * riscrivono: se lo facessero, un secondo thread che per qualche motivo
++     * chiamasse questa funzione soppianterebbe il principale vero. */
++    if (!spia.thread_principale) {
++        spia.thread_principale = winq_glspia_thread_id();
++    }
+     in_finestra = 1;
+ }
+ 
+@@ -157,11 +236,11 @@ int winq_glspia_in_finestra(void)
+  * campione scartato per quelle non e' un errore di misura, e' solo lavoro
+  * fuori perimetro che si perde senza toccare spia.assurde -- esattamente come
+  * dice il commento sopra la dichiarazione in winq-glspia-conta.h. */
+-void winq_glspia_aggiungi_fuori(int secchio, uint64_t t0, uint64_t t1)
++void winq_glspia_aggiungi_fuori(int thread, int secchio, uint64_t t0, uint64_t t1)
+ {
+     uint64_t tick;
+ 
+-    if (secchio < 0 || secchio >= WINQ_SPIA_N) {
++    if (thread < 0 || thread >= WINQ_THREAD_N || secchio < 0 || secchio >= WINQ_SPIA_N) {
+         spia.assurde++;
+         return;
+     }
+@@ -173,8 +252,8 @@ void winq_glspia_aggiungi_fuori(int secchio, uint64_t t0, uint64_t t1)
+     }
+     tick = t1 - t0;
+ 
+-    spia.fuori_ns[secchio] += winq_tick_a_ns(tick);
+-    spia.fuori_chiamate[secchio]++;
++    spia.fuori_ns[thread][secchio] += winq_tick_a_ns(tick);
++    spia.fuori_chiamate[thread][secchio]++;
+ }
+ 
+ void winq_glspia_conta_saltata(void)
+@@ -189,8 +268,13 @@ void winq_glspia_conta_assurda(void)
+ 
+ void winq_glspia_somma_gpu(uint64_t ns)
+ {
+-    spia.ns[WINQ_SPIA_GPU] += ns;
+-    spia.chiamate[WINQ_SPIA_GPU]++;
++    /* Sempre WINQ_THREAD_PRINCIPALE, senza bisogno di chiedere: le query
++     * GL_TIME_ELAPSED si aprono solo dentro la finestra (winq-glspia-gpu.c),
++     * e la finestra la apre solo il thread che decodifica -- nessuna
++     * ambiguita' di thread da risolvere qui, a differenza di ns[]/chiamate[]
++     * degli altri secchi. */
++    spia.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] += ns;
++    spia.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU]++;
+ }
+ 
+ /* ns e' gia' il tempo CPU della finestra, convertito da winq_glspia_intervallo_ns()
+@@ -228,13 +312,15 @@ void winq_glspia_sonda_registra_fine(uint64_t errore)
+ 
+ void winq_glspia_azzera(void)
+ {
+-    int i;
+-
+-    for (i = 0; i < WINQ_SPIA_N; i++) {
+-        spia.ns[i] = 0;
+-        spia.chiamate[i] = 0;
+-        spia.fuori_ns[i] = 0;
+-        spia.fuori_chiamate[i] = 0;
++    int t, i;
++
++    for (t = 0; t < WINQ_THREAD_N; t++) {
++        for (i = 0; i < WINQ_SPIA_N; i++) {
++            spia.ns[t][i] = 0;
++            spia.chiamate[t][i] = 0;
++            spia.fuori_ns[t][i] = 0;
++            spia.fuori_chiamate[t][i] = 0;
++        }
+     }
+     spia.saltate = 0;
+     spia.assurde = 0;
+@@ -242,6 +328,9 @@ void winq_glspia_azzera(void)
+     spia.sonda_eseguita = 0;
+     spia.sonda_errore_inizio = 0;
+     spia.sonda_errore_fine = 0;
++    /* thread_principale/thread_altri_* NON si azzerano: vedi il commento
++     * sulla struct in winq-glspia-conta.h. Sono un registro per la vita del
++     * processo, non un accumulo al secondo. */
+ }
+ 
+ void winq_glspia_leggi(struct winq_glspia *fuori)
+@@ -254,28 +343,42 @@ void winq_glspia_leggi(struct winq_glspia *fuori)
+     sonda_armata = 1;
+ }
+ 
+-/* Un milione di coppie di letture a vuoto, senza niente in mezzo: e' il costo
+- * che lo strumento aggiunge a ogni chiamata GL avvolta. Va confrontato con
+- * t_virgl (spec §7c): se e' dello stesso ordine, la misura non regge e la
+- * lista delle funzioni avvolte va accorciata. */
++/* Un milione di iterazioni a vuoto, senza niente in mezzo: e' il costo che lo
++ * strumento aggiunge a ogni chiamata GL avvolta. Va confrontato con t_virgl
++ * (spec §7c): se e' dello stesso ordine, la misura non regge e la lista
++ * delle funzioni avvolte va accorciata.
++ *
++ * QUARTA CORREZIONE DELL'11/08/2026: il ciclo ora legge anche
++ * winq_glspia_thread_id() insieme alle due letture dell'orologio, perche' da
++ * questa correzione in poi e' quello che il percorso caldo fa davvero a ogni
++ * chiamata avvolta (via winq_glspia_thread_indice(), che pero' NON e' quello
++ * che si chiama qui: quella ha l'effetto collaterale di registrare il thread
++ * nel registro, e chiamarla un milione di volte da un thread "forzato" o
++ * vero riempirebbe o sporcherebbe il registro. thread_id() e' la primitiva
++ * pura sotto, senza effetti collaterali, e misura lo stesso costo perche' e'
++ * la stessa chiamata a GetCurrentThreadId() -- solo il confronto e la
++ * scansione della tabella, che thread_indice() fa in piu', non sono qui:
++ * quel costo e' un confronto e una scansione di al piu' 8 elementi, ordini
++ * di grandezza sotto una lettura del TEB). */
+ uint64_t winq_glspia_taratura_ns(void)
+ {
+     const uint64_t giri = 1000000;
+     uint64_t i, a, b, tick;
+-    /* Accumulatore locale per impedire al compilatore di buttare via le due
++    /* Accumulatore locale per impedire al compilatore di buttare via le
+      * letture del ciclo: volatile forza una scrittura in memoria a ogni
+-     * iterazione, quindi le chiamate a winq_glspia_ora() non sono eliminabili
+-     * come codice morto. Locale e non spia.assurde: la taratura e' una
+-     * misura, non un evento da contare nelle statistiche di produzione che
+-     * QEMU legge. */
++     * iterazione, quindi le chiamate a winq_glspia_ora()/thread_id() non
++     * sono eliminabili come codice morto. Locale e non spia.assurde: la
++     * taratura e' una misura, non un evento da contare nelle statistiche di
++     * produzione che QEMU legge. */
+     volatile uint64_t anti_ottimizzazione = 0;
+ 
+     a = winq_glspia_ora();
+     for (i = 0; i < giri; i++) {
+         uint64_t x = winq_glspia_ora();
+         uint64_t y = winq_glspia_ora();
++        uint64_t t = winq_glspia_thread_id();
+ 
+-        if (y < x) {
++        if (y < x || t == 0) {
+             anti_ottimizzazione++;
+         }
+     }
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index 4af6607..958ce0a 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -57,9 +57,50 @@ enum {
+     WINQ_SPIA_N
+ };
+ 
++/* QUARTA CORREZIONE DELL'11/08/2026, la piu' seria delle quattro: i contatori
++ * sono static globali SENZA affinita' di thread, e in_finestra lo alzano e
++ * abbassano solo winq_glspia_finestra_apri()/chiudi(), chiamate solo dal
++ * thread che decodifica (vrend_decode_ctx_submit_cmd). Due conseguenze:
++ *
++ * 1. "fuori dalla finestra" non vuol dire "sul thread principale": vuol dire
++ *    "mentre il thread principale non stava decodificando". Qualunque altro
++ *    thread che chiami una entry point avvolta -- in questo fork, il thread
++ *    dedicato "vrend-sync" che fa i wait bloccanti veri su glClientWaitSync
++ *    (vrend_renderer.c:7312, do_wait con can_block=true; il thread principale
++ *    ci arriva solo con can_block=false e timeout zero via
++ *    vrend_renderer_check_fences) -- finisce in fuori_ns/fuori_chiamate,
++ *    attribuendo al "fuori" del thread principale un tempo che non e' suo.
++ * 2. Anche i secchi "dentro" sono contaminati: se il thread di sync chiama un
++ *    wrapper mentre il thread principale tiene la finestra aperta, quel
++ *    tempo finisce in ns[]/chiamate[] -- il flag e' globale, non sa quale
++ *    thread lo sta leggendo.
++ *
++ * Percio' ogni secchio (dentro E fuori) si sdoppia per thread:
++ * WINQ_THREAD_PRINCIPALE e WINQ_THREAD_ALTRI. Non un terzo, un quarto... per
++ * ogni thread reale: quello risponderebbe a "quale thread" con una
++ * granularita' che nessuno ha chiesto e complicherebbe la struct (e la sua
++ * ridichiarazione a mano in QEMU) senza necessita' -- la domanda che conta e'
++ * "principale o non principale", perche' solo il thread principale possiede
++ * la finestra e solo i suoi campioni "dentro" hanno senso nella sottrazione
++ * (vedi virgl in hw/display/virtio-gpu-virgl.c). "Quali sono gli altri" e
++ * "quanti sono" restano una domanda aperta, a cui risponde il piccolo
++ * registro thread_altri_* piu' sotto, non un secchio per identita'. */
++enum {
++    WINQ_THREAD_PRINCIPALE = 0,
++    WINQ_THREAD_ALTRI,
++    WINQ_THREAD_N
++};
++
++/* Quante identita' di thread "altri" il registro (sotto) ricorda per nome.
++ * Oggi si conosce un solo candidato (vrend-sync); 8 lascia spazio a scoprirne
++ * altri senza inseguire un numero esatto. Se thread_altri_fuori_tabella nella
++ * riga di riepilogo e' > 0 vuol dire che ce ne sono di piu' di 8, e questo
++ * numero va alzato -- stessa logica di WINQ_CONTESTI in winq-glspia-gpu.c. */
++#define WINQ_THREAD_TABELLA 8
++
+ struct winq_glspia {
+-    uint64_t ns[WINQ_SPIA_N];
+-    uint64_t chiamate[WINQ_SPIA_N];
++    uint64_t ns[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t chiamate[WINQ_THREAD_N][WINQ_SPIA_N];
+     uint64_t saltate;   /* query GPU non pronte quando la casella serviva */
+     uint64_t assurde;   /* campioni fuori banda o intervalli negativi */
+     /* CORREZIONE DELL'11/08/2026: la sottrazione virgl = cpu - gl - shader -
+@@ -87,8 +128,8 @@ struct winq_glspia {
+      * aprono solo dentro la finestra (winq-glspia-gpu.c), quindi per quel
+      * secchio "fuori" non esiste come concetto -- non un buco, una riga
+      * dell'array semplicemente mai scritta. */
+-    uint64_t fuori_ns[WINQ_SPIA_N];       /* lavoro GL per secchio, a finestra chiusa */
+-    uint64_t fuori_chiamate[WINQ_SPIA_N]; /* numero di quelle chiamate, per secchio */
++    uint64_t fuori_ns[WINQ_THREAD_N][WINQ_SPIA_N];       /* lavoro GL per thread e secchio, a finestra chiusa */
++    uint64_t fuori_chiamate[WINQ_THREAD_N][WINQ_SPIA_N]; /* numero di quelle chiamate */
+     uint64_t finestra_ns;    /* tempo CPU del tratto cronometrato (decodifica) */
+     /* SONDA glGetError, aggiunta l'11/08/2026: t_gpu non si raccoglie quasi
+      * mai (saltate resta alto anche con l'anello a 256 caselle, smentendo
+@@ -103,6 +144,15 @@ struct winq_glspia {
+     uint64_t sonda_eseguita;
+     uint64_t sonda_errore_inizio; /* glGetError() subito dopo glBeginQuery */
+     uint64_t sonda_errore_fine;   /* glGetError() subito dopo glEndQuery */
++    /* QUARTA CORREZIONE DELL'11/08/2026: il registro dei thread. A differenza
++     * dei campi sopra, questi NON si azzerano a ogni lettura (winq_glspia_azzera()
++     * li salta apposta): sono un'identita' di processo, non un accumulo al
++     * secondo -- azzerarli ogni ciclo farebbe "sparire" dalla riga di
++     * riepilogo un thread visto nel ciclo precedente ma silente in questo. */
++    uint64_t thread_principale;      /* id, 0 = non ancora registrato */
++    uint64_t thread_altri_n;         /* quanti "altri" thread distinti in thread_altri_id[] */
++    uint64_t thread_altri_id[WINQ_THREAD_TABELLA]; /* i loro id; 0 = casella non usata */
++    uint64_t thread_altri_fuori_tabella; /* chiamate da un "altro" thread non riconosciuto a tabella piena */
+ };
+ 
+ /* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
+@@ -111,7 +161,26 @@ struct winq_glspia {
+ int winq_glspia_accesa(void);
+ 
+ uint64_t winq_glspia_ora(void);
+-void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1);
++
++/* Il thread corrente, per l'etichetta dentro/altri della quarta correzione
++ * dell'11/08/2026 (vedi il commento sopra l'enum WINQ_THREAD_*). Lettura pura
++ * del TEB via GetCurrentThreadId(), NESSUN effetto collaterale -- a
++ * differenza di winq_glspia_thread_indice() sotto, non tocca il registro. E'
++ * la primitiva che sia il percorso caldo (via thread_indice()) sia
++ * winq_glspia_taratura_ns() chiamano, cosi' il costo che la taratura riporta
++ * e' lo stesso che il percorso caldo paga davvero. */
++uint64_t winq_glspia_thread_id(void);
++
++/* WINQ_THREAD_PRINCIPALE se il thread corrente e' quello registrato da
++ * winq_glspia_finestra_apri(), WINQ_THREAD_ALTRI altrimenti. Effetto
++ * collaterale se altri: registra l'id nel registro (struct winq_glspia,
++ * thread_altri_*) se non gia' visto -- una scansione di al piu'
++ * WINQ_THREAD_TABELLA elementi, niente allocazione, niente I/O. Chiamata una
++ * volta per chiamata GL avvolta (winq-glspia.h), non due: il chiamante passa
++ * il risultato ad aggiungi() o aggiungi_fuori(), non richiama questa. */
++int winq_glspia_thread_indice(void);
++
++void winq_glspia_aggiungi(int thread, int secchio, uint64_t t0, uint64_t t1);
+ /* Come aggiungi(), converte un intervallo fra due letture di winq_glspia_ora()
+  * in nanosecondi -- ma senza sommarlo in un secchio: serve a chi ha bisogno
+  * del solo numero. L'aggancio di virgl_renderer_submit_cmd lo usa per passare
+@@ -137,16 +206,18 @@ int winq_glspia_in_finestra(void);
+ 
+ void winq_glspia_conta_saltata(void);
+ void winq_glspia_conta_assurda(void);
+-/* Come aggiungi(), stesso secchio, ma per il lavoro GL visto a finestra
+- * chiusa: scrive in fuori_ns[secchio]/fuori_chiamate[secchio] invece di
+- * ns[secchio]/chiamate[secchio]. Un secchio fuori bounds (indice invalido,
+- * un errore di chi chiama) si conta come assurda, esattamente come in
+- * aggiungi() -- la struttura e' un array, e un indice sbagliato scriverebbe
+- * fuori dai bordi senza quella guardia. Le altre due guardie di aggiungi()
+- * (orologio indietro, frequenza non tarata) restano invece guardie silenziose
+- * qui: un campione scartato per quelle non e' un errore, e' lavoro fuori
+- * perimetro, e non tocca spia.assurde. */
+-void winq_glspia_aggiungi_fuori(int secchio, uint64_t t0, uint64_t t1);
++/* Come aggiungi(), stesso thread e stesso secchio, ma per il lavoro GL visto
++ * a finestra chiusa: scrive in fuori_ns[thread][secchio]/
++ * fuori_chiamate[thread][secchio] invece di ns[thread][secchio]/
++ * chiamate[thread][secchio]. Un thread o un secchio fuori bounds (indice
++ * invalido, un errore di chi chiama) si conta come assurda, esattamente come
++ * in aggiungi() -- la struttura e' un array a due dimensioni, e un indice
++ * sbagliato su uno dei due assi scriverebbe fuori dai bordi senza quella
++ * guardia. Le altre due guardie di aggiungi() (orologio indietro, frequenza
++ * non tarata) restano invece guardie silenziose qui: un campione scartato
++ * per quelle non e' un errore, e' lavoro fuori perimetro, e non tocca
++ * spia.assurde. */
++void winq_glspia_aggiungi_fuori(int thread, int secchio, uint64_t t0, uint64_t t1);
+ /* I nanosecondi arrivano gia' convertiti dalla query GL, quindi non passano
+  * per aggiungi(), che converte da tick. */
+ void winq_glspia_somma_gpu(uint64_t ns);
+@@ -188,6 +259,19 @@ WINQ_SPIA_ESPORTA void winq_glspia_leggi(struct winq_glspia *fuori);
+ void winq_glspia_freq_forza(uint64_t hz);
+ void winq_glspia_freq_vera(void);
+ 
++/* Solo per le prove: rendono deterministico il thread "corrente" che
++ * winq_glspia_thread_id() restituisce, senza dover creare un secondo thread
++ * vero per simulare "altri" -- stesso schema di freq_forza()/freq_vera().
++ * tid == 0 in winq_glspia_thread_forza() equivale a chiamare
++ * winq_glspia_thread_vero(): 0 non e' mai un id di thread vero su Windows,
++ * la stessa sentinella che thread_principale usa per "non registrato". */
++void winq_glspia_thread_forza(uint64_t tid);
++void winq_glspia_thread_vero(void);
++/* Solo per le prove: in produzione il registro (thread_principale e
++ * thread_altri_*) non si azzera mai -- vedi il commento sulla struct. Le
++ * prove hanno bisogno di uno stato di partenza noto fra un caso e l'altro. */
++void winq_glspia_thread_azzera_registro(void);
++
+ /* L'anello delle query GL_TIME_ELAPSED. Vive in winq-glspia-gpu.c, che e'
+  * l'unico file dello shim che tocca GL -- percio' le prove di
+  * research/scripts/test-glspia.sh non lo compilano. */
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+index 8e7ccaa..bc77e70 100644
+--- a/src/winq-glspia.h
++++ b/src/winq-glspia.h
+@@ -92,16 +92,30 @@
+  * a parte, nello stesso secchio del gruppo ma nell'array "fuori" (vedi la
+  * struct in winq-glspia-conta.h): non e' un errore da scartare, e' lavoro
+  * fuori perimetro, e la seconda correzione dell'11/08/2026 l'ha reso
+- * distinto per GL/SHADER/ATTESA invece di un unico contenitore cieco. */
++ * distinto per GL/SHADER/ATTESA invece di un unico contenitore cieco.
++ *
++ * QUARTA CORREZIONE, STESSO GIORNO, LA PIU' SERIA: in_finestra e' un flag
++ * GLOBALE, alzato e abbassato solo dal thread che decodifica -- ma qualunque
++ * thread puo' chiamare una di queste macro. "Fuori" non vuol dire "sul thread
++ * principale", vuol dire "mentre il principale non decodificava"; e "dentro"
++ * non vuol dire "e' il principale che ha lavorato", vuol dire "e' successo
++ * mentre il principale teneva la finestra aperta" -- un altro thread (in
++ * questo fork, vrend-sync) che chiami nel frattempo finisce comunque in
++ * ns[]/chiamate[], contaminandoli. winq_glspia_thread_indice() risolve
++ * l'ambiguita': dice se il thread corrente e' quello registrato da
++ * winq_glspia_finestra_apri() o no, e il risultato va ad aggiungi()/
++ * aggiungi_fuori() come indice aggiuntivo, non come un secchio in piu' --
++ * vedi l'enum WINQ_THREAD_* in winq-glspia-conta.h. */
+ #define WINQ_SPIA_VAL(secchio, espr) __extension__({                        \
+     uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
+     __typeof__(espr) winq_r_ = (espr);                                      \
+     if (winq_t0_) {                                                         \
+         uint64_t winq_t1_ = winq_glspia_ora();                              \
++        int winq_th_ = winq_glspia_thread_indice();                        \
+         if (winq_glspia_in_finestra()) {                                    \
+-            winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
++            winq_glspia_aggiungi(winq_th_, (secchio), winq_t0_, winq_t1_);  \
+         } else {                                                            \
+-            winq_glspia_aggiungi_fuori((secchio), winq_t0_, winq_t1_);      \
++            winq_glspia_aggiungi_fuori(winq_th_, (secchio), winq_t0_, winq_t1_); \
+         }                                                                    \
+     }                                                                       \
+     winq_r_;                                                                \
+@@ -112,10 +126,11 @@
+     (espr);                                                                 \
+     if (winq_t0_) {                                                         \
+         uint64_t winq_t1_ = winq_glspia_ora();                              \
++        int winq_th_ = winq_glspia_thread_indice();                        \
+         if (winq_glspia_in_finestra()) {                                    \
+-            winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
++            winq_glspia_aggiungi(winq_th_, (secchio), winq_t0_, winq_t1_);  \
+         } else {                                                            \
+-            winq_glspia_aggiungi_fuori((secchio), winq_t0_, winq_t1_);      \
++            winq_glspia_aggiungi_fuori(winq_th_, (secchio), winq_t0_, winq_t1_); \
+         }                                                                    \
+     }                                                                       \
+ } while (0)
+-- 
+2.53.0.vfs.0.7
+

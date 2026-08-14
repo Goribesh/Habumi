@@ -1,0 +1,22 @@
+# I fine di riga vanno fissati, non lasciati alla configurazione locale di git.
+#
+# Il motivo e' concreto: gli script .sh di questo repo vengono eseguiti dentro
+# la distro WSL, e bash su Linux non accetta il CR finale. Con la conversione
+# automatica attiva, git li riscrive in CRLF nel working tree e bash 5.3
+# risponde con un errore che indica una riga che non ha nulla a che vedere col
+# problema — "unexpected end of file from `{' command on line 39" — perche' il
+# CR fa parte del token e nasconde il `fi` o la graffa di chiusura.
+* text=auto eol=lf
+
+# Le patch devono conservare i byte esatti: una conversione dei fine di riga le
+# fa fallire, e in questo repo sono l'unico modo di ricostruire il ponte.
+*.patch -text
+
+# Binari: nessuna conversione, nessun diff testuale.
+*.img binary
+*.iso binary
+*.dll binary
+*.exe binary
+*.fd binary
+Image binary
+kernel-* binary

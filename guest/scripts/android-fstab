@@ -1,0 +1,19 @@
+# fstab minimo, installato da winq in /vendor/etc/fstab.waydroid tramite
+# l'overlay del vendor.
+#
+# Perche' serve. Queste immagini non hanno alcun fstab: l'init.rc fa
+# `mount_all /dev/null` con il commento "Do fake mount_all for Waydroid",
+# perche' nel container le partizioni le monta l'host. Ma vold non passa da
+# mount_all: legge il fstab di default per conto suo, e se non lo trova aborta.
+# Ha `reboot_on_failure reboot,vold-failed` in vold.rc, quindi si porta dietro
+# tutto il sistema — ed e' esattamente cosi' che moriva il nostro avvio a 5,4 s.
+#
+# Una riga sola, e system e vendor non ci sono di proposito: le monta il nostro
+# initramfs prima di passare la mano, e listarle qui farebbe tentare a init un
+# secondo montaggio sopra quello buono.
+#
+# Nessuna opzione di cifratura: senza `fileencryption` vold tratta /data come non
+# cifrata, che e' quello che vogliamo in una VM usa e getta.
+#
+# <src>          <mnt_point> <type> <mnt_flags>                  <fs_mgr_flags>
+/dev/block/vdc   /data       ext4   noatime,nosuid,nodev,discard  wait

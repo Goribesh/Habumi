@@ -1,0 +1,112 @@
+# Output grezzi della fase 0: rigenerabili, non versionati.
+# Il REPORT.md invece si versiona: e' la conclusione della fase.
+research/results/*
+!research/results/.gitkeep
+
+# Sorgenti e binari di terze parti, scaricati dagli script.
+# Le modifiche necessarie ai sorgenti stanno in research/patches/, che invece
+# si versiona: e' l'unico modo per ricostruire la build.
+research/virglrenderer/
+research/winq-virgl/
+research/mesa/
+research/vkenum.exe
+# Albero di lavoro git separato su mesa-src, allo stesso tag ma SENZA le nostre
+# patch Windows: serve per la cross verso Android, dove src/egl/meson.build
+# collega libgallium_wgl solo dentro "if with_platform_windows" e le nostre
+# aggiunte fuori da quel ramo non compilerebbero. Si ricrea con
+# "git -C research/mesa-src worktree add ../mesa-android mesa-26.2.0".
+research/mesa-android/
+
+# Artefatti di build
+build/
+*.obj
+*.pdb
+*.ilk
+
+# Scratch del workflow subagent-driven
+.superpowers/
+
+# Runtime assemblato da guest/scripts/build-all.ps1: rigenerabile, 470 MB.
+# config.txt pero' e' un sorgente scritto a mano, non un artefatto di
+# assemblaggio: senza l'eccezione ogni copia pulita del runtime riparte dai
+# default silenziosamente, perche' git non lo avrebbe mai tracciato.
+runtime/*
+!runtime/bin/
+runtime/bin/*
+!runtime/bin/config.txt
+
+# empty-data.zip e' un /data ext4 vuoto compresso che il prodotto spedisce,
+# non un artefatto di assemblaggio: senza l'eccezione ogni copia pulita del
+# runtime non avrebbe il /data e l'initramfs si fermerebbe al mount al primo
+# avvio. Stessa ragione e stessa forma di config.txt qui sopra.
+!runtime/empty-data.zip
+
+# generico.txt e' un profilo della mappa dei tasti scritto a mano che il
+# prodotto spedisce, non un artefatto di assemblaggio: stessa eccezione e
+# stessa ragione di config.txt qui sopra -- senza, ogni copia pulita
+# del runtime non avrebbe nessun profilo e il menu dei tasti si aprirebbe
+# vuoto al primo avvio. prova.txt (di lavoro, non spedito) resta ignorato.
+!runtime/keymaps/
+runtime/keymaps/*
+!runtime/keymaps/generico.txt
+
+# Immagini guest scaricate: grandi e ricostruibili
+guest/images/
+
+# Log delle esecuzioni guest: grandi, rumorosi, rigenerabili
+guest/logs/
+
+# Gli APK scaricati per le prove (glmark2 e' 9,5 MB): binari di terze parti,
+# stessa ragione di research/mesa/ e di adb.exe qui sotto. Chi rifa' le misure
+# li riscarica; chi legge la storia non ha bisogno di averli dentro. Gli script
+# che li usano dicono da dove vengono.
+guest/apk/
+
+# La testkey di piattaforma di AOSP, che firma l'app degli appunti. E' pubblica
+# a monte, ma resta una chiave privata: non si committa. Chi ricostruisce l'APK
+# la ripesca da build/target/product/security/ dell'albero AOSP, e build.sh si
+# ferma dicendolo se non la trova.
+guest/appunti-guest/chiavi/
+
+# Artefatti Cuttlefish: 1,8 GB, riscaricabili
+guest/images/cuttlefish/
+
+# I binari dei test si ricompilano in un secondo: non vanno tracciati, e senza
+# questa regola chiunque esegua qemu/scripts/test-coord.sh si ritrova l'albero
+# sporco e rischia di committarli insieme a qualcosa d'altro.
+qemu/ui-winq/*.exe
+qemu/probe/*.exe
+app/guscio/*.exe
+
+# adb e le sue DLL: binari di terze parti copiati a mano per le prove
+# manuali del canale adb, non vanno nella storia.
+app/guscio/adb.exe
+app/guscio/AdbWinApi.dll
+app/guscio/AdbWinUsbApi.dll
+research/mesa-src/
+
+# Gli scarti delle prove del guscio. test-guscio.sh compila ed esegue le suite
+# con la cartella corrente su app/guscio/, e i moduli del registro e
+# dell'archivio ci creano dentro i loro percorsi RELATIVI: nasce cosi' un
+# app/guscio/guest/logs/ che e' un albero di prova, non del progetto.
+# La riga "guest/logs/" piu' sopra non li copre, perche' un pattern che
+# contiene una barra e' ancorato alla cartella del .gitignore.
+# Senza queste righe finiscono in un commit al primo "git add app/guscio":
+# e' successo, dodici file.
+app/guscio/guest/
+app/guscio/cartella-che-non-esiste/
+
+# Le copie di sicurezza a mano, nella forma <file>.pre-<etichetta> che questo
+# progetto usa da sempre: qemu-nostro.exe.pre-mc-diag, config.txt.prima-prova,
+# libvirglrenderer-1.dll.pre-hwctx, vendor.img.pre-omx. Sono artefatti di una
+# sessione di lavoro -- il "prima" lo tiene git, che e' il suo mestiere -- e
+# versionarle duplicherebbe contenuto che la storia ha gia'. Restano su disco
+# perche' servono a tornare indietro senza ricompilare, e non devono comparire
+# in "git status" a sporcare la vista di chi cerca le modifiche vere.
+# Se una serve davvero nella storia: git add -f la mette dentro comunque.
+*.pre-*
+
+# Python lascia i .pyc accanto ai copioni: sono usciti fino in fondo
+# all esportazione una volta, dentro app/release/.
+__pycache__/
+*.pyc

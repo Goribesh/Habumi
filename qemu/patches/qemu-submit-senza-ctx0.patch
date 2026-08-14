@@ -1,0 +1,66 @@
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -953,7 +953,7 @@
+      *
+      * Resta spento, e ora per una misura invece che per prudenza. Non
+      * riprovarlo cosi' com'e': il problema non e' il lock, e' che il thread
+-     * resta dentro submit_cmd. Numeri in qemu/PRESTAZIONI.md. */
++     * resta dentro submit_cmd. Numeri in phase2/PRESTAZIONI.md. */
+     {
+         static int64_t winq_t_inizio;
+         static uint64_t winq_cpu_us, winq_submit;
+@@ -1865,8 +1865,54 @@
+  *   - SET_SCANOUT: la richiama pure per conto suo (virgl_cmd_set_scanout
+  *     qui sopra), ma restare comunque nella lista di chi chiama non costa
+  *     nulla per un comando a ~106/s (PRESTAZIONI.md). */
++/* WINQ_SUBMIT_SENZA_CTX0=1: rifa' l'esperimento dell'11/08/2026, con una
++ * premessa diversa.
++ *
++ * COSA FU PROVATO E COSA SUCCESSE. L'11/08 SUBMIT_3D fu tolto dalla lista di
++ * chi chiama force_ctx_0(). La verifica statica diceva sicuro -- il suo
++ * decoder commuta il contesto da se' -- e a schermo era falso: l'HUD di
++ * Android diventava NERO, launcher compreso. Fu rimesso dentro.
++ *
++ * PERCHE' RIPROVARLO. Il 12/08 si e' scoperto il meccanismo: su Mesa d3d12
++ * un wglMakeCurrent che cambia contesto fa ST_FLUSH_FRONT | ST_FLUSH_WAIT
++ * sul contesto uscente (stw_context.c), cioe' flush E ATTESA della GPU.
++ * Quella commutazione non costava soltanto: SINCRONIZZAVA. Toglierla toglieva
++ * la garanzia che il lavoro del guest fosse finito prima che il presentatore
++ * leggesse la texture -- ecco il nero.
++ *
++ * E la premessa e' cambiata. Quell'esperimento gira con il ritiro delle fence
++ * ROTTO: create_eventfd() falliva su Windows, il thread di sync non nasceva,
++ * e le fence venivano ritirate dal ciclo principale. Dal 12/08 il thread di
++ * sync esiste e le fence si ritirano davvero. La sincronizzazione che mancava
++ * potrebbe quindi esserci gia' per un'altra via, e il costo -- 368 ms/s di
++ * ciclo principale, misurati -- sparirebbe.
++ *
++ * SPENTO DI SERIE, e il default resta quello che funziona: la sicurezza sta
++ * nel comportamento predefinito, non nella speranza. Interruttore separato da
++ * WINQ_CTX0_SEMPRE apposta, cosi' i tre stati (oggi / senza ctx0 su SUBMIT_3D
++ * / comportamento pre-cura) sono confrontabili sullo stesso binario.
++ *
++ * IL CANCELLO NON E' IL PUNTEGGIO. E' uno screenshot dell'HUD e del launcher,
++ * come l'11/08: "sicuro per la correttezza" non vuol dire "corretto a
++ * schermo", e questo esperimento e' precisamente quello che l'ha dimostrato. */
++static bool winq_submit_senza_ctx0(void)
++{
++    static int acceso = -1;
++
++    if (acceso < 0) {
++        const char *v = getenv("WINQ_SUBMIT_SENZA_CTX0");
++
++        acceso = (v && *v == '1') ? 1 : 0;
++    }
++    return acceso != 0;
++}
++
+ static bool winq_ctx0_serve(uint32_t tipo)
+ {
++    if (tipo == VIRTIO_GPU_CMD_SUBMIT_3D && winq_submit_senza_ctx0()) {
++        return false;
++    }
++
+     switch (tipo) {
+     case VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE:
+     case VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE:

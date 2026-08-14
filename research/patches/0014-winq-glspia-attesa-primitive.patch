@@ -1,0 +1,514 @@
+From c3789759bfbe23c564a917f87247415e7f94e8a3 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 15:25:52 +0200
+[PATCH] winq: attesa in tre primitive e sonda glGetError
+ query GPU
+
+Lo split di "fuori" ha detto che fuori/gl e fuori/shader sono zero e
+fuori/attesa e' 645,3 ms/s da solo (~1.280 chiamate, 503 us/chiamata,
+il 64% del secondo). ATTESA sommava glFlush, glFinish e
+glClientWaitSync -- presentazione, GPU, fence, tre cause diverse in un
+solo numero. L'enum si allunga da GL/SHADER/ATTESA/GPU a
+GL/SHADER/FLUSH/FINISH/WAITSYNC/GPU: ns[]/chiamate[]/fuori_ns[]/
+fuori_chiamate[], tutti dimensionati su WINQ_SPIA_N, portano la
+scomposizione senza macchineria nuova. glReadPixels/glGetTexImage
+(approssimazione dichiarata, prima in ATTESA) vanno in FINISH: e' la
+semantica delle tre piu' vicina a un readback sincrono.
+
+Aggiunta nello stesso giro, dichiarata separatamente: la sonda
+glGetError attorno a glBeginQuery/glEndQuery in winq-glspia-gpu.c, per
+capire se l'anello GPU (256 caselle, saltate ancora alte) perde
+campioni per query che falliscono in silenzio. Letta una volta per
+ciclo di riepilogo tramite un flag armato/disarmato da
+winq_glspia_leggi()/sonda_registra_fine(), non per submit: a
+diagnostica spenta costa zero, a diagnostica accesa costa una lettura
+di variabile sugli altri submit del ciclo.
+---
+ src/test-winq-glspia-conta.c | 116 +++++++++++++++++++++++++++++++----
+ src/winq-glspia-conta.c      |  37 +++++++++++
+ src/winq-glspia-conta.h      |  47 +++++++++++++-
+ src/winq-glspia-gpu.c        |  23 +++++++
+ src/winq-glspia.h            |  75 ++++++++++++++--------
+ 5 files changed, 258 insertions(+), 40 deletions(-)
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index 9d3c07b..853e020 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -37,7 +37,7 @@ static void prova_accumulo(void)
+     esigi(s.chiamate[WINQ_SPIA_GL] == 2, "GL: due chiamate contate");
+     esigi(s.ns[WINQ_SPIA_SHADER] == 3000000, "SHADER: 3 ms in nanosecondi");
+     esigi(s.chiamate[WINQ_SPIA_SHADER] == 1, "SHADER: una chiamata contata");
+-    esigi(s.ns[WINQ_SPIA_ATTESA] == 0, "ATTESA: intatta");
++    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC: intatta");
+ }
+ 
+ /* Un orologio che torna indietro esiste davvero: QueryPerformanceCounter puo'
+@@ -71,13 +71,13 @@ static void prova_lettura_azzera(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi(WINQ_SPIA_ATTESA, 0, 1000);
++    winq_glspia_aggiungi(WINQ_SPIA_WAITSYNC, 0, 1000);
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_ATTESA] == 1000000, "prima lettura: 1 ms");
++    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: 1 ms");
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.ns[WINQ_SPIA_ATTESA] == 0, "seconda lettura: azzerata");
+-    esigi(s.chiamate[WINQ_SPIA_ATTESA] == 0, "seconda lettura: zero chiamate");
++    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: azzerata");
++    esigi(s.chiamate[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate");
+ }
+ 
+ /* Il secchio fuori intervallo non deve scrivere fuori dall'array. Se questa
+@@ -223,7 +223,7 @@ static void prova_finestra_flag(void)
+ /* CORREZIONE DEL 11/08/2026: sul campo la raccolta reale ha detto che "fuori"
+  * e' il 62% del secondo (623,9 ms/s contro 19,0 ms/s dentro), ma essendo un
+  * unico contenitore diceva solo quanto, non cosa. Ora e' parallelo ai secchi
+- * dentro-finestra (WINQ_SPIA_GL/SHADER/ATTESA): winq_glspia_aggiungi_fuori()
++ * dentro-finestra (WINQ_SPIA_GL/SHADER/FLUSH/FINISH/WAITSYNC): winq_glspia_aggiungi_fuori()
+  * prende un secchio come aggiungi(), e scrive in fuori_ns[secchio]/
+  * fuori_chiamate[secchio]. WINQ_SPIA_GPU non ha mai un campione fuori: le
+  * query GL_TIME_ELAPSED si aprono solo dentro la finestra (winq-glspia-gpu.c),
+@@ -247,7 +247,7 @@ static void prova_aggiungi_fuori(void)
+     esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 2, "GL fuori: due chiamate contate");
+     esigi(s.fuori_ns[WINQ_SPIA_SHADER] == 500000, "SHADER fuori: 0,5 ms in nanosecondi");
+     esigi(s.fuori_chiamate[WINQ_SPIA_SHADER] == 1, "SHADER fuori: una chiamata contata");
+-    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 0, "ATTESA fuori: intatto, nessuna chiamata");
++    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC fuori: intatto, nessuna chiamata");
+     esigi(s.ns[WINQ_SPIA_GL] == 0, "GL dentro-finestra: intatto, fuori e' parallelo");
+     esigi(s.assurde == 0, "fuori non e' un errore: nessuna assurda");
+ }
+@@ -341,19 +341,108 @@ static void prova_lettura_azzera_campi_nuovi(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(WINQ_SPIA_ATTESA, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_WAITSYNC, 0, 1000);
+     winq_glspia_somma_finestra(500000);
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 1000000, "prima lettura: fuori(ATTESA) 1 ms");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_ATTESA] == 1, "prima lettura: una chiamata fuori(ATTESA)");
++    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: fuori(WAITSYNC) 1 ms");
++    esigi(s.fuori_chiamate[WINQ_SPIA_WAITSYNC] == 1, "prima lettura: una chiamata fuori(WAITSYNC)");
+     esigi(s.finestra_ns == 500000, "prima lettura: finestra 0,5 ms");
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 0, "seconda lettura: fuori(ATTESA) azzerato");
+-    esigi(s.fuori_chiamate[WINQ_SPIA_ATTESA] == 0, "seconda lettura: zero chiamate fuori(ATTESA)");
++    esigi(s.fuori_ns[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: fuori(WAITSYNC) azzerato");
++    esigi(s.fuori_chiamate[WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate fuori(WAITSYNC)");
+     esigi(s.finestra_ns == 0, "seconda lettura: finestra azzerata");
+ }
+ 
++/* TERZA CORREZIONE DELL'11/08/2026: ATTESA sommava glFlush, glFinish e
++ * glClientWaitSync in un solo secchio. Qui si verifica che i tre secchi
++ * nuovi (FLUSH/FINISH/WAITSYNC) siano davvero indipendenti fra loro e dai
++ * secchi preesistenti (GL/SHADER/GPU) -- il livello macro (winq-glspia.h) non
++ * e' provabile senza GL, ma l'array sottostante (ns[]/chiamate[], dimensionato
++ * su WINQ_SPIA_N) e' lo stesso che le macro useranno, quindi provarlo qui
++ * copre la parte che conta: che allungare l'enum non abbia fatto collidere
++ * due secchi sullo stesso indice. */
++static void prova_secchi_attesa_distinti(void)
++{
++    struct winq_glspia s;
++
++    printf("i tre secchi di attesa sono distinti:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_SPIA_FLUSH, 0, 100);      /* 100 us */
++    winq_glspia_aggiungi(WINQ_SPIA_FINISH, 0, 200);     /* 200 us */
++    winq_glspia_aggiungi(WINQ_SPIA_WAITSYNC, 0, 300);   /* 300 us */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_SPIA_FLUSH] == 100000, "FLUSH: 100 us, non contaminato");
++    esigi(s.ns[WINQ_SPIA_FINISH] == 200000, "FINISH: 200 us, non contaminato");
++    esigi(s.ns[WINQ_SPIA_WAITSYNC] == 300000, "WAITSYNC: 300 us, non contaminato");
++    esigi(s.chiamate[WINQ_SPIA_FLUSH] == 1, "FLUSH: una chiamata");
++    esigi(s.chiamate[WINQ_SPIA_FINISH] == 1, "FINISH: una chiamata");
++    esigi(s.chiamate[WINQ_SPIA_WAITSYNC] == 1, "WAITSYNC: una chiamata");
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL: intatto");
++    esigi(s.ns[WINQ_SPIA_SHADER] == 0, "SHADER: intatto");
++    esigi(s.ns[WINQ_SPIA_GPU] == 0, "GPU: intatto");
++}
++
++/* SONDA glGetError, aggiunta l'11/08/2026. Qui si prova solo la logica di
++ * armo/richiesta/registrazione in winq-glspia-conta.c: le chiamate GL vere
++ * (epoxy_glGetError() dentro gpu_apri()/gpu_chiudi()) vivono in
++ * winq-glspia-gpu.c, che tocca GL e per questo resta fuori da
++ * test-glspia.sh (vedi il commento in cima al file). */
++static void prova_sonda_richiesta_e_registrazione(void)
++{
++    struct winq_glspia s;
++
++    printf("sonda: richiesta, registrazione, disarmo:\n");
++    winq_glspia_azzera();
++    /* Stato di partenza noto: forza un ciclo completo cosi' il test non
++     * dipende da come sonda_armata era lasciata dalla prova precedente. */
++    winq_glspia_sonda_registra_inizio(0);
++    winq_glspia_sonda_registra_fine(0);
++    winq_glspia_leggi(&s);   /* scarta: serve solo a riarmare in modo noto */
++
++    esigi(winq_glspia_sonda_richiesta(), "armata dopo la lettura");
++
++    winq_glspia_sonda_registra_inizio(0);
++    esigi(winq_glspia_sonda_richiesta(),
++          "ancora armata dopo registra_inizio: fine() la disarma, non inizio()");
++
++    winq_glspia_sonda_registra_fine(0x0502);   /* GL_INVALID_OPERATION */
++    esigi(!winq_glspia_sonda_richiesta(), "disarmata dopo registra_fine");
++
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 1, "eseguita: vera");
++    esigi(s.sonda_errore_inizio == 0, "inizio: GL_NO_ERROR");
++    esigi(s.sonda_errore_fine == 0x0502, "fine: il codice passato a registra_fine");
++}
++
++/* Un ciclo senza nessuna registrazione deve leggersi come "non eseguita", non
++ * come "eseguita con successo" (i codici a zero sarebbero indistinguibili da
++ * GL_NO_ERROR senza sonda_eseguita) -- e azzera() deve davvero azzerare i tre
++ * campi, non lasciare i valori del ciclo precedente. */
++static void prova_sonda_azzerata_se_non_eseguita(void)
++{
++    struct winq_glspia s;
++
++    printf("sonda non eseguita: azzerata, non un residuo del ciclo prima:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_sonda_registra_inizio(0x0500);   /* GL_INVALID_ENUM */
++    winq_glspia_sonda_registra_fine(0x0501);     /* GL_INVALID_VALUE */
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 1, "primo ciclo: eseguita (per costruzione della prova)");
++
++    /* Secondo ciclo: la lettura sopra ha riarmato la richiesta, ma qui
++     * nessuno la consuma -- come un ciclo reale in cui nessun gpu_apri()
++     * arriva a aprire una query. */
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 0, "secondo ciclo: non eseguita");
++    esigi(s.sonda_errore_inizio == 0, "secondo ciclo: inizio azzerato, non un residuo");
++    esigi(s.sonda_errore_fine == 0, "secondo ciclo: fine azzerata, non un residuo");
++}
++
+ int main(void)
+ {
+     prova_accumulo();
+@@ -372,6 +461,9 @@ int main(void)
+     prova_aggiungi_fuori_secchio_invalido();
+     prova_somma_finestra();
+     prova_lettura_azzera_campi_nuovi();
++    prova_secchi_attesa_distinti();
++    prova_sonda_richiesta_e_registrazione();
++    prova_sonda_azzerata_se_non_eseguita();
+ 
+     if (falliti) {
+         printf("\n%d PROVE FALLITE\n", falliti);
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index 7e9cd3f..1b867b9 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -24,6 +24,12 @@ static int acceso = -1;
+  * cronometrato in corso -- vive quanto una submit, non quanto un secondo. */
+ static int in_finestra;
+ 
++/* Come in_finestra: non e' un accumulo che azzera() ripulisce, e' la
++ * richiesta "sondare la prossima query aperta" che vive fra due letture.
++ * Parte armata (1) cosi' che il primo ciclo di riepilogo, non solo il
++ * secondo, contenga gia' un campione. */
++static int sonda_armata = 1;
++
+ int winq_glspia_accesa(void)
+ {
+     if (acceso < 0) {
+@@ -196,6 +202,30 @@ void winq_glspia_somma_finestra(uint64_t ns)
+     spia.finestra_ns += ns;
+ }
+ 
++int winq_glspia_sonda_richiesta(void)
++{
++    return sonda_armata;
++}
++
++/* Non disarma: fine() lo fa, dopo che ANCHE il secondo glGetError() e' stato
++ * letto. Se disarmasse qui, un chiamante che leggesse la richiesta una
++ * seconda volta fra begin e end (invece di ricordare la risposta come dice
++ * il commento in winq-glspia-conta.h) la vedrebbe gia' falsa e salterebbe la
++ * sonda di fine -- ma il contratto e' "leggi una volta, ricorda", quindi qui
++ * non e' la guardia contro quel caso: e' solo che il disarmo logicamente
++ * appartiene alla fine del ciclo begin/end, non al suo inizio. */
++void winq_glspia_sonda_registra_inizio(uint64_t errore)
++{
++    spia.sonda_eseguita = 1;
++    spia.sonda_errore_inizio = errore;
++}
++
++void winq_glspia_sonda_registra_fine(uint64_t errore)
++{
++    spia.sonda_errore_fine = errore;
++    sonda_armata = 0;
++}
++
+ void winq_glspia_azzera(void)
+ {
+     int i;
+@@ -209,12 +239,19 @@ void winq_glspia_azzera(void)
+     spia.saltate = 0;
+     spia.assurde = 0;
+     spia.finestra_ns = 0;
++    spia.sonda_eseguita = 0;
++    spia.sonda_errore_inizio = 0;
++    spia.sonda_errore_fine = 0;
+ }
+ 
+ void winq_glspia_leggi(struct winq_glspia *fuori)
+ {
+     *fuori = spia;
+     winq_glspia_azzera();
++    /* Riarma per il ciclo che comincia ora: senza questo, dopo il primo
++     * campione la sonda si disarmerebbe per sempre (fine() la disarma, e
++     * nessuno la rialzerebbe piu'). */
++    sonda_armata = 1;
+ }
+ 
+ /* Un milione di coppie di letture a vuoto, senza niente in mezzo: e' il costo
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index 49702fd..4af6607 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -38,10 +38,21 @@
+  * tutti gli altri quando c'era. */
+ #define WINQ_SPIA_ESPORTA __attribute__((visibility("default")))
+ 
++/* TERZA CORREZIONE DELL'11/08/2026: lo split di "fuori" ha detto che dentro
++ * quel 62% del secondo, fuori/gl e fuori/shader sono zero e fuori/attesa e'
++ * 645,3 ms/s da solo. ATTESA sommava glFlush, glFinish e glClientWaitSync:
++ * tre primitive con tre cause diverse (presentazione, GPU, fence), un solo
++ * numero. Non serve un secchio nuovo con macchineria nuova: si allunga
++ * l'enum, e ns[]/chiamate[]/fuori_ns[]/fuori_chiamate[] (tutti dimensionati
++ * su WINQ_SPIA_N) portano la scomposizione da soli. ATTESA come nome sparisce
++ * dall'enum; nella sottrazione e nelle righe di riepilogo torna come somma di
++ * FLUSH+FINISH+WAITSYNC (vedi hw/display/virtio-gpu-virgl.c). */
+ enum {
+     WINQ_SPIA_GL = 0,      /* disegno, buffer, texture: lavoro del driver */
+     WINQ_SPIA_SHADER,      /* glCompileShader, glLinkProgram: DXIL + PSO */
+-    WINQ_SPIA_ATTESA,      /* glFinish, glClientWaitSync: fermi ad aspettare */
++    WINQ_SPIA_FLUSH,       /* glFlush: manda in coda, non aspetta */
++    WINQ_SPIA_FINISH,      /* glFinish (e le due letture all'indietro, vedi winq-glspia.h) */
++    WINQ_SPIA_WAITSYNC,    /* glClientWaitSync: attesa su una fence esplicita */
+     WINQ_SPIA_GPU,         /* GL_TIME_ELAPSED: lavoro vero della Adreno */
+     WINQ_SPIA_N
+ };
+@@ -79,6 +90,19 @@ struct winq_glspia {
+     uint64_t fuori_ns[WINQ_SPIA_N];       /* lavoro GL per secchio, a finestra chiusa */
+     uint64_t fuori_chiamate[WINQ_SPIA_N]; /* numero di quelle chiamate, per secchio */
+     uint64_t finestra_ns;    /* tempo CPU del tratto cronometrato (decodifica) */
++    /* SONDA glGetError, aggiunta l'11/08/2026: t_gpu non si raccoglie quasi
++     * mai (saltate resta alto anche con l'anello a 256 caselle, smentendo
++     * l'ipotesi che fosse solo un problema di dimensione), e uno dei sospetti
++     * rimasti e' che glBeginQuery/glEndQuery falliscano in silenzio. Letta
++     * UNA volta per ciclo di riepilogo (non per submit: vedi
++     * winq_glspia_sonda_richiesta() e il commento in winq-glspia-gpu.c), non
++     * per ogni chiamata -- sarebbe percorso caldo altrimenti. sonda_eseguita
++     * dice se il ciclo appena letto ne conteneva una (0/1): senza questo
++     * campo un ciclo senza sonda e uno con GL_NO_ERROR (0) sarebbero
++     * indistinguibili leggendo solo i codici. */
++    uint64_t sonda_eseguita;
++    uint64_t sonda_errore_inizio; /* glGetError() subito dopo glBeginQuery */
++    uint64_t sonda_errore_fine;   /* glGetError() subito dopo glEndQuery */
+ };
+ 
+ /* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
+@@ -133,6 +157,27 @@ void winq_glspia_somma_gpu(uint64_t ns);
+  * virgl_renderer_submit_cmd, che e' piu' largo della finestra (vedi la nota
+  * sulla struct winq_glspia). */
+ void winq_glspia_somma_finestra(uint64_t ns);
++
++/* La sonda glGetError, letta una volta per ciclo di riepilogo. Il ciclo di
++ * vita, per chi implementa il lato GL (winq-glspia-gpu.c):
++ *   1. winq_glspia_leggi() arma la richiesta (per il ciclo che comincia ora).
++ *   2. Il primo gpu_apri() dopo l'armamento vede winq_glspia_sonda_richiesta()
++ *      vera, e chiama davvero epoxy_glGetError() subito dopo glBeginQuery --
++ *      passandone il risultato a winq_glspia_sonda_registra_inizio().
++ *   3. Lo stesso submit, in gpu_chiudi(), chiama epoxy_glGetError() subito
++ *      dopo glEndQuery e lo passa a winq_glspia_sonda_registra_fine(), che
++ *      DISARMA la richiesta: nessun altro submit la vedra' vera finche' la
++ *      prossima winq_glspia_leggi() non la riarma.
++ * Il chiamante deve leggere winq_glspia_sonda_richiesta() una volta in
++ * gpu_apri() e ricordare la risposta (es. in un campo della propria tabella
++ * per contesto) invece di richiamarla in gpu_chiudi(): la richiesta resta
++ * vera fra le due, ma un secondo contesto che si intromettesse nel frattempo
++ * (gpu_apri()/gpu_chiudi() di un'altra submit) altrimenti la vedrebbe vera
++ * anche lui e la sonderebbe due volte nello stesso ciclo. */
++int winq_glspia_sonda_richiesta(void);
++void winq_glspia_sonda_registra_inizio(uint64_t errore);
++void winq_glspia_sonda_registra_fine(uint64_t errore);
++
+ void winq_glspia_azzera(void);
+ uint64_t winq_glspia_taratura_ns(void);
+ 
+diff --git a/src/winq-glspia-gpu.c b/src/winq-glspia-gpu.c
+index eecac8e..1ae678f 100644
+--- a/src/winq-glspia-gpu.c
++++ b/src/winq-glspia-gpu.c
+@@ -80,6 +80,14 @@ struct winq_ctx {
+     int prossima;
+     int pronto;      /* -1 = estensione assente PER QUESTO contesto, 0 = da inizializzare, 1 = ok */
+     int in_corso;
++    /* SONDA glGetError, aggiunta l'11/08/2026 (vedi il commento sopra
++     * winq_glspia_sonda_richiesta() in winq-glspia-conta.h). Deciso qui, non
++     * riletto in gpu_chiudi(): la richiesta resta vera fra apri() e chiudi()
++     * della stessa submit, ma rileggerla in chiudi() invece di ricordare la
++     * risposta di apri() rischierebbe di sondare due volte se un'altra
++     * submit (altro contesto) si intromettesse nel frattempo e vedesse la
++     * stessa richiesta ancora armata. */
++    int sonda_in_corso;
+ };
+ 
+ static struct winq_ctx tabella[WINQ_CONTESTI];
+@@ -203,7 +211,18 @@ void winq_glspia_gpu_apri(void)
+         return;
+     }
+     raccogli(c, c->prossima);
++    /* Letta una volta, ricordata in c->sonda_in_corso: chiudi() la user
++     * senza richiamare winq_glspia_sonda_richiesta(), vedi il commento sul
++     * campo in struct winq_ctx sopra. Il costo a diagnostica accesa e' una
++     * lettura di variabile per submit, come winq_glspia_in_finestra(); le
++     * due chiamate GL vere a glGetError() (sotto e in chiudi()) scattano
++     * solo sulla submit che trova la richiesta armata, una volta per ciclo
++     * di riepilogo. */
++    c->sonda_in_corso = winq_glspia_sonda_richiesta();
+     epoxy_glBeginQuery(GL_TIME_ELAPSED, c->query[c->prossima]);
++    if (c->sonda_in_corso) {
++        winq_glspia_sonda_registra_inizio((uint64_t)epoxy_glGetError());
++    }
+     c->aperta[c->prossima] = 1;
+     c->in_corso = 1;
+ }
+@@ -221,6 +240,10 @@ void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns)
+         return;
+     }
+     epoxy_glEndQuery(GL_TIME_ELAPSED);
++    if (c->sonda_in_corso) {
++        winq_glspia_sonda_registra_fine((uint64_t)epoxy_glGetError());
++        c->sonda_in_corso = 0;
++    }
+     c->cpu_ns[c->prossima] = t_cpu_ns;
+     c->prossima = (c->prossima + 1) % WINQ_ANELLO;
+     c->in_corso = 0;
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+index a45ef8e..8e7ccaa 100644
+--- a/src/winq-glspia.h
++++ b/src/winq-glspia.h
+@@ -11,12 +11,19 @@
+  * arriva prima di qualunque #include del file compilato. epoxy/gl.h ha le
+  * proprie guardie, percio' l'inclusione successiva nei sorgenti e' innocua.
+  *
+- * PERCHE' TRE SECCHI E NON UNO. glFinish e glClientWaitSync non sono lavoro:
+- * sono attesa. Sommarle a glDrawElements gonfierebbe il costo del driver con
+- * tempo speso fermi, e la sottrazione della spec §3 attribuirebbe a
+- * virglrenderer un tempo che non ha speso lui. glCompileShader e glLinkProgram
+- * sono lavoro ma di prima volta, e mescolarle al regime nasconderebbe proprio
+- * il fenomeno che si vuole vedere.
++ * PERCHE' PIU' SECCHI E NON UNO. glFinish, glFlush e glClientWaitSync non
++ * sono lavoro: sono attesa, e per giunta attesa su tre cose diverse
++ * (rispettivamente: che la GPU smaltisca la coda, niente -- non aspetta --,
++ * una fence esplicita). Sommarle a glDrawElements gonfierebbe il costo del
++ * driver con tempo speso fermi, e la sottrazione della spec §3 attribuirebbe
++ * a virglrenderer un tempo che non ha speso lui; sommarle fra loro (com'era
++ * fino alla correzione dell'11/08/2026, un solo secchio ATTESA) nascondeva
++ * quale delle tre dominasse -- e lo split di "fuori" aveva appena mostrato
++ * che il grosso del secondo (64%, fuori/attesa) sta in una di queste tre,
++ * senza dire quale: la scomposizione qui e' apposta per rispondere a quella
++ * domanda, non per confermare un sospetto gia' deciso. glCompileShader e
++ * glLinkProgram sono lavoro ma di prima volta, e mescolarle al regime
++ * nasconderebbe proprio il fenomeno che si vuole vedere.
+  *
+  * PERCHE' PROPRIO QUESTI NOMI. Il criterio non e' "il nome inizia per glDraw"
+  * ne' un elenco copiato dall'API GL generica: e' "e' lavoro caldo del driver
+@@ -33,7 +40,7 @@
+  * allocazione di storage con puntatore NULL), l'azzeramento di un target
+  * (glClear e sorelle, glClearTexSubImage: lavoro reale sullo stesso piano
+  * CPU del disegno, non solo impostazione di stato) e la lettura all'indietro
+- * host <- GPU (glGetTexImage, glReadPixels), messa in ATTESA come
++ * host <- GPU (glGetTexImage, glReadPixels), messa in FINISH come
+  * approssimazione dichiarata: vedi il commento sopra quelle due macro, piu'
+  * sotto, per il perche'. Non copre invece la sola creazione di risorse
+  * (glTexStorage*, glTexImage* usate qui solo per allocare senza dati,
+@@ -346,39 +353,53 @@
+ #define glClearTexSubImageEXT(...) \
+     WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearTexSubImageEXT(__VA_ARGS__))
+ 
+-/* --- sincronizzazione: ATTESA, non lavoro -------------------------------- */
++/* --- sincronizzazione: ATTESA, non lavoro --------------------------------
++ * TERZA CORREZIONE DELL'11/08/2026: ATTESA sommava tre primitive con tre
++ * cause diverse -- glFlush manda in coda senza aspettare (presentazione),
++ * glFinish blocca finche' la GPU non ha smaltito tutto (GPU), glClientWaitSync
++ * blocca su una fence esplicita (fence) -- e lo split di "fuori" aveva appena
++ * mostrato che il grosso del tempo sta proprio qui dentro, senza dire quale
++ * dei tre. Ora tre secchi distinti, non uno: vedi l'enum in
++ * winq-glspia-conta.h. */
+ #undef glFlush
+ #define glFlush(...) \
+-    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glFlush(__VA_ARGS__))
++    WINQ_SPIA_VOID(WINQ_SPIA_FLUSH, epoxy_glFlush(__VA_ARGS__))
+ #undef glFinish
+ #define glFinish(...) \
+-    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glFinish(__VA_ARGS__))
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glFinish(__VA_ARGS__))
+ #undef glClientWaitSync
+ #define glClientWaitSync(...) \
+-    WINQ_SPIA_VAL(WINQ_SPIA_ATTESA, epoxy_glClientWaitSync(__VA_ARGS__))
++    WINQ_SPIA_VAL(WINQ_SPIA_WAITSYNC, epoxy_glClientWaitSync(__VA_ARGS__))
+ 
+-/* --- lettura all'indietro: ATTESA, per approssimazione dichiarata -------- *
++/* --- lettura all'indietro: FINISH, per approssimazione dichiarata -------- *
+  * glReadPixels e glGetTexImage sono sincrone: un readback e' insieme una
+  * copia (lavoro) e un blocco finche' la coda GPU non arriva a quel punto
+- * (attesa), e i tre secchi non hanno una casella per "tutti e due". Le
+- * mettiamo intere in ATTESA, non in GL, perche' delle due componenti l'attesa
+- * domina largamente: la copia costa microsecondi, il blocco costa quanto ci
+- * mette la GPU a smaltire la coda davanti. L'alternativa vera qui non e'
+- * "ATTESA oppure GL": e' "ATTESA oppure NIENTE", perche' senza questo
+- * wrapper le due chiamate cadrebbero in t_virgl per sottrazione, attribuendo
+- * tempo di blocco alla traduzione di virglrenderer -- la distorsione
+- * peggiore delle due, e proprio quella per cui esistono questi giri di
+- * correzione. Chi legge i numeri deve sapere che, per queste due funzioni
+- * soltanto, il secchio ATTESA include anche del lavoro di copia: un quarto
+- * secchio "lavoro+attesa" sarebbe piu' preciso, ma cambierebbe l'aritmetica
+- * e il formato della riga di riepilogo su cui si costruiscono le task
+- * successive, quindi non si introduce qui. */
++ * (attesa), e i secchi non hanno una casella per "tutti e due". Le mettiamo
++ * intere in attesa, non in GL, perche' delle due componenti l'attesa domina
++ * largamente: la copia costa microsecondi, il blocco costa quanto ci mette
++ * la GPU a smaltire la coda davanti. L'alternativa vera qui non e' "attesa
++ * oppure GL": e' "attesa oppure NIENTE", perche' senza questo wrapper le due
++ * chiamate cadrebbero in t_virgl per sottrazione, attribuendo tempo di
++ * blocco alla traduzione di virglrenderer -- la distorsione peggiore delle
++ * due, e proprio quella per cui esistono questi giri di correzione.
++ *
++ * TERZA CORREZIONE DELL'11/08/2026: con ATTESA sparita dall'enum, queste due
++ * vanno in uno dei tre secchi nuovi. FINISH, non FLUSH ne' WAITSYNC: un
++ * readback sincrono blocca la CPU finche' la GPU non ha smaltito la coda
++ * fino a quel punto -- la stessa semantica di "aspetta che la GPU finisca"
++ * di glFinish, non il "manda e non aspettare" di glFlush ne' l'attesa su una
++ * fence esplicita di glClientWaitSync. E' la scelta piu' vicina fra tre
++ * caselle nate per altro, non una quarta primitiva reale: chi legge i numeri
++ * deve sapere che, per queste due funzioni soltanto, il secchio FINISH
++ * include anche del lavoro di copia. Un quinto secchio "lettura all'indietro"
++ * sarebbe piu' preciso, ma cambierebbe di nuovo l'aritmetica e il formato
++ * della riga di riepilogo, quindi non si introduce qui. */
+ #undef glReadPixels
+ #define glReadPixels(...) \
+-    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glReadPixels(__VA_ARGS__))
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glReadPixels(__VA_ARGS__))
+ #undef glGetTexImage
+ #define glGetTexImage(...) \
+-    WINQ_SPIA_VOID(WINQ_SPIA_ATTESA, epoxy_glGetTexImage(__VA_ARGS__))
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glGetTexImage(__VA_ARGS__))
+ 
+ /* --- shader: DXIL + PSO, costo di prima volta ---------------------------- */
+ #undef glCompileShader
+-- 
+2.53.0.vfs.0.7
+

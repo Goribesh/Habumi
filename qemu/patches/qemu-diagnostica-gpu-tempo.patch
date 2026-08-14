@@ -1,0 +1,478 @@
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -24,6 +24,159 @@
+ 
+ #include <virglrenderer.h>
+ 
++/* winq: LA RIPARTIZIONE DEI 3,2 ms DI UNA SUBMIT_3D, dietro WINQ_GPU_DIAG.
++ *
++ * La misura del 04/08 dice che il ciclo principale passa l'86-90% del secondo
++ * dentro la coda dei comandi, e che il tipo colpevole e' 0x207. Non dice DI
++ * COSA sia fatto quel tempo. Qui si cronometra la chiamata intera (t_cpu) e si
++ * leggono da virglrenderer i quattro termini che la compongono.
++ *
++ * La struttura e' RIDICHIARATA e non inclusa: l'albero di QEMU non vede gli
++ * header di virglrenderer. Se un giorno winq-glspia-conta.h cambia ordine o
++ * numero di campi, questa copia va cambiata insieme -- e il cancello §7a della
++ * spec (la somma deve tornare) e' cio' che se ne accorgerebbe.
++ *
++ * CORREZIONE DELL'11/08/2026: la prima raccolta vera dava virgl=0 su 9 righe
++ * su 10, perche' la sottrazione usava winq_cpu_us (il tempo attorno
++ * all'INTERA virgl_renderer_submit_cmd) come minuendo, mentre i quattro
++ * secchi contano solo il lavoro visto dentro vrend_decode_ctx_submit_cmd --
++ * una finestra piu' stretta. virglrenderer chiama GL anche fuori da quella
++ * finestra (attesa sulle fence, trasferimenti, creazione di oggetti):
++ * numeratore e denominatore non coprivano lo stesso tratto. I tre campi
++ * aggiunti sotto (fuori_ns/fuori_chiamate/finestra_ns) chiudono il buco:
++ * finestra_ns e' il tempo CPU dello stesso tratto dei secchi, e va usato al
++ * posto di winq_cpu_us nella sottrazione qui sotto; fuori_ns/fuori_chiamate
++ * e' quanto lavoro GL virglrenderer fa fuori da quella finestra, cosi' che il
++ * numero cieco non prenda il posto del numero sbagliato. winq_cpu_us resta,
++ * stampato con un nome diverso (cpu_qemu): la differenza fra i due "cpu" e'
++ * proprio il tempo che virglrenderer passa fuori dal ciclo di decodifica.
++ *
++ * SECONDA CORREZIONE, STESSO GIORNO: la prima raccolta con la finestra
++ * corretta ha detto che "fuori" e' il 62% del secondo (623,9 ms/s contro
++ * 19,0 ms/s dentro), ma fuori_ns/fuori_chiamate erano scalari: dicevano
++ * quanto, non cosa. Ora sono array, PARALLELI a ns[]/chiamate[] con la stessa
++ * indicizzazione (fuori_ns[WINQ_SPIA_GL] e' il disegno/buffer/texture fuori
++ * finestra, ecc.) -- vedi la riga winq-fuori/s qui sotto, che li stampa uno
++ * per secchio. fuori_ns[WINQ_SPIA_GPU] resta sempre zero: le query
++ * GL_TIME_ELAPSED si aprono solo dentro la finestra, quindi per quel secchio
++ * "fuori" non e' un concetto che esiste.
++ *
++ * TERZA CORREZIONE, STESSO GIORNO: lo split di "fuori" ha detto che dentro
++ * quel 62%, fuori/gl e fuori/shader sono zero e fuori/attesa e' 645,3 ms/s da
++ * solo -- ma ATTESA sommava glFlush, glFinish e glClientWaitSync, tre
++ * primitive con tre cause diverse (presentazione, GPU, fence), un solo
++ * numero. Non un secchio nuovo con macchineria nuova: l'enum si allunga, e
++ * ns[]/chiamate[]/fuori_ns[]/fuori_chiamate[] (tutti dimensionati su
++ * WINQ_SPIA_N) portano la scomposizione da soli. ATTESA sparisce dall'enum;
++ * nella sottrazione e nelle righe sotto torna come somma di
++ * FLUSH+FINISH+WAITSYNC.
++ *
++ * Aggiunta nello stesso giro, non richiesta dal compito originale ma dichiarata
++ * insieme per non pagare due riavvii: la SONDA glGetError (sonda_eseguita/
++ * sonda_errore_inizio/sonda_errore_fine). t_gpu non si raccoglie quasi mai
++ * (l'anello a 256 caselle non ha cambiato "saltate", smentendo l'ipotesi
++ * della dimensione), e un sospetto rimasto e' che glBeginQuery/glEndQuery
++ * falliscano in silenzio. Letta una volta per ciclo di riepilogo, non per
++ * submit -- vedi winq_glspia_sonda_richiesta() in winq-glspia-conta.h.
++ *
++ * QUARTA CORREZIONE, LA PIU' SERIA: tre indagini sul codice hanno trovato che
++ * i contatori sono static SENZA affinita' di thread, e in_finestra lo alzano
++ * e abbassano solo winq_glspia_finestra_apri()/chiudi(), chiamate solo dal
++ * thread che decodifica (vrend_decode_ctx_submit_cmd). Conseguenza: il numero
++ * pubblicato per glClientWaitSync (624,9 ms/s) non e' dimostrato essere del
++ * ciclo principale -- l'unico sito bloccante (vrend_renderer.c:7312, do_wait
++ * con can_block=true) e' raggiunto solo dal thread dedicato "vrend-sync"; il
++ * principale ci arriva solo con can_block=false e timeout zero. E i secchi
++ * "dentro" sono ugualmente contaminabili, perche' il flag e' globale: un
++ * altro thread che chiami mentre il principale tiene la finestra aperta
++ * finisce comunque in ns[]/chiamate[].
++ *
++ * Ogni secchio (dentro E fuori) si sdoppia quindi per thread:
++ * WINQ_THREAD_PRINCIPALE/WINQ_THREAD_ALTRI, prima dimensione dei quattro
++ * array sotto. "virgl" (la sottrazione) ha senso solo sul sottoinsieme
++ * dentro/principale -- vedi le righe qui sotto. thread_principale/
++ * thread_altri_* sono un registro, non un accumulo al secondo: identita' di
++ * processo, mai azzerati da winq_glspia_azzera() lato DLL.
++ *
++ * QUINTA CORREZIONE DELL'11/08/2026: il primo consumatore del ciclo
++ * principale, con finestra e thread corretti, non e' SUBMIT_3D ma 0x202
++ * CTX_ATTACH_RESOURCE (923 us/chiamata, 393/s, 363 ms/s) -- il detach ne
++ * costa 231, pur facendo lo stesso lavoro O(1) in tabella hash. Il sospetto,
++ * dedotto dal codice: virgl_renderer_force_ctx_0() (chiamata da QEMU
++ * incondizionatamente prima di ogni comando, subito sopra in
++ * virtio_gpu_virgl_process_cmd) azzera lo stato di virglrenderer prima di
++ * richiedere lo switch a ctx0, quindi la scorciatoia "e' gia' il contesto
++ * giusto" non scatta mai per una richiesta arrivata da li' -- ogni chiamata
++ * da force_ctx_0() arriva sempre a vrend_clicbs->make_current(), anche
++ * quando a livello di sistema operativo il contesto era gia' quello giusto.
++ * ctx_richiesti/ctx_veri/ctx_ns (per WINQ_CTX_FORCE0/WINQ_CTX_ALTRO, vedi
++ * l'enum sotto) sono il conteggio che lo confermerebbe o lo smentirebbe --
++ * dedotto, non misurato, finora. Vedi il commento sopra
++ * vrend_hw_switch_context() in vrend_renderer.c (research/winq-virgl) per
++ * la classificazione completa dei chiamanti.
++ *
++ * Spec: docs/superpowers/specs/2026-08-11-attribuzione-tempo-gpu-design.md */
++enum { WINQ_SPIA_GL = 0, WINQ_SPIA_SHADER, WINQ_SPIA_FLUSH, WINQ_SPIA_FINISH,
++       WINQ_SPIA_WAITSYNC, WINQ_SPIA_GPU, WINQ_SPIA_N };
++enum { WINQ_THREAD_PRINCIPALE = 0, WINQ_THREAD_ALTRI, WINQ_THREAD_N };
++#define WINQ_THREAD_TABELLA 8
++enum { WINQ_CTX_FORCE0 = 0, WINQ_CTX_ALTRO, WINQ_CTX_N };
++
++struct winq_glspia {
++    uint64_t ns[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t chiamate[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t saltate;
++    uint64_t assurde;
++    uint64_t fuori_ns[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t fuori_chiamate[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t finestra_ns;
++    uint64_t sonda_eseguita;
++    uint64_t sonda_errore_inizio;
++    uint64_t sonda_errore_fine;
++    uint64_t thread_principale;
++    uint64_t thread_altri_n;
++    uint64_t thread_altri_id[WINQ_THREAD_TABELLA];
++    uint64_t thread_altri_fuori_tabella;
++    uint64_t ctx_richiesti[WINQ_CTX_N];
++    uint64_t ctx_veri[WINQ_CTX_N];
++    uint64_t ctx_ns[WINQ_CTX_N];
++};
++
++typedef void (*winq_spia_leggi_fn)(struct winq_glspia *);
++
++/* Risolto una volta sola. GetModuleHandle e non LoadLibrary: la DLL e' gia'
++ * caricata, e caricarla una seconda volta darebbe un'altra istanza dei
++ * contatori, cioe' zeri per sempre. */
++static winq_spia_leggi_fn winq_spia_leggi;
++static int winq_spia_stato;   /* 0 = da risolvere, 1 = c'e', -1 = assente */
++
++static int winq_spia_pronta(void)
++{
++#ifdef _WIN32
++    HMODULE dll;
++
++    if (winq_spia_stato) {
++        return winq_spia_stato > 0;
++    }
++    dll = GetModuleHandleA("libvirglrenderer-1.dll");
++    if (dll) {
++        winq_spia_leggi = (winq_spia_leggi_fn)
++            GetProcAddress(dll, "winq_glspia_leggi");
++    }
++    if (!winq_spia_leggi) {
++        /* Si DICE, invece di stampare zeri che sembrerebbero una misura. */
++        error_report("winq-tempo: shim assente in libvirglrenderer-1.dll, "
++                     "diagnostica spenta");
++        winq_spia_stato = -1;
++        return 0;
++    }
++    winq_spia_stato = 1;
++    return 1;
++#else
++    return 0;
++#endif
++}
++
+ /*
+  * VIRGL_CHECK_VERSION available since libvirglrenderer 1.0.1 and was fixed
+  * in 1.1.0. Undefine bugged version of the macro and provide our own.
+@@ -674,19 +827,305 @@
+      * riprovarlo cosi' com'e': il problema non e' il lock, e' che il thread
+      * resta dentro submit_cmd. Numeri in qemu/PRESTAZIONI.md. */
+     {
+-        static int winq_senza_bql = -1;
++        static int64_t winq_t_inizio;
++        static uint64_t winq_cpu_us, winq_submit;
++        int64_t winq_t0 = 0;
+ 
+-        if (winq_senza_bql < 0) {
+-            const char *v = getenv("WINQ_GPU_SENZA_BQL");
++        if (getenv("WINQ_GPU_DIAG") && winq_spia_pronta()) {
++            winq_t0 = g_get_monotonic_time();
++        }
++
++        {
++            static int winq_senza_bql = -1;
+ 
+-            winq_senza_bql = (v && *v == '1') ? 1 : 0;
++            if (winq_senza_bql < 0) {
++                const char *v = getenv("WINQ_GPU_SENZA_BQL");
++
++                winq_senza_bql = (v && *v == '1') ? 1 : 0;
++            }
++            if (winq_senza_bql && bql_locked()) {
++                bql_unlock();
++                virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++                bql_lock();
++            } else {
++                virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++            }
+         }
+-        if (winq_senza_bql && bql_locked()) {
+-            bql_unlock();
+-            virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
+-            bql_lock();
+-        } else {
+-            virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++
++        if (winq_t0) {
++            int64_t winq_t1 = g_get_monotonic_time();
++            struct winq_glspia s;
++
++            winq_cpu_us += (uint64_t)(winq_t1 - winq_t0);
++            winq_submit++;
++
++            if (!winq_t_inizio) {
++                winq_t_inizio = winq_t1;
++            } else if (winq_t1 - winq_t_inizio >= 1000000) {
++                uint64_t gl_us, sh_us, gpu_us, virgl_us;
++                uint64_t fl_us, fi_us, ws_us, attesa_us;
++                uint64_t a_gl_us, a_sh_us, a_fl_us, a_fi_us, a_ws_us;
++                uint64_t finestra_us;
++                uint64_t f_gl_us, f_sh_us, f_fl_us, f_fi_us, f_ws_us;
++                uint64_t fa_gl_us, fa_sh_us, fa_fl_us, fa_fi_us, fa_ws_us;
++                char thread_altri_buf[256];
++                size_t thread_altri_off = 0;
++                uint64_t ti;
++
++                winq_spia_leggi(&s);
++                /* QUARTA CORREZIONE DELL'11/08/2026: ogni ns[]/chiamate[]/
++                 * fuori_ns[]/fuori_chiamate[] e' ora indicizzato anche per
++                 * thread. Le variabili gl_us/sh_us/... (senza prefisso)
++                 * restano il sottoinsieme dentro/PRINCIPALE -- lo stesso
++                 * significato che avevano prima di questa correzione, letto
++                 * ora dalla fetta giusta invece che da un array a una sola
++                 * dimensione. a_*, f_* e fa_* sono i tre sottoinsiemi nuovi:
++                 * dentro/altri, fuori/principale, fuori/altri. */
++                gl_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] / 1000;
++                sh_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] / 1000;
++                fl_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] / 1000;
++                fi_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] / 1000;
++                ws_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] / 1000;
++                gpu_us = s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] / 1000;
++                finestra_us = s.finestra_ns / 1000;
++
++                a_gl_us = s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_GL] / 1000;
++                a_sh_us = s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_SHADER] / 1000;
++                a_fl_us = s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_FLUSH] / 1000;
++                a_fi_us = s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_FINISH] / 1000;
++                a_ws_us = s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] / 1000;
++
++                f_gl_us = s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] / 1000;
++                f_sh_us = s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] / 1000;
++                f_fl_us = s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] / 1000;
++                f_fi_us = s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] / 1000;
++                f_ws_us = s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] / 1000;
++
++                fa_gl_us = s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_GL] / 1000;
++                fa_sh_us = s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_SHADER] / 1000;
++                fa_fl_us = s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_FLUSH] / 1000;
++                fa_fi_us = s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_FINISH] / 1000;
++                fa_ws_us = s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] / 1000;
++
++                /* TERZA CORREZIONE DELL'11/08/2026: attesa_us e' la somma
++                 * delle tre primitive invece di un solo accumulatore ATTESA
++                 * -- stessa quantita' di prima (la sottrazione non cambia
++                 * aritmetica, la spezza solo in tre addendi visibili).
++                 * QUARTA CORREZIONE: solo il sottoinsieme PRINCIPALE entra
++                 * nella sottrazione -- vedi il commento su virgl_us sotto. */
++                attesa_us = fl_us + fi_us + ws_us;
++
++                /* La sottrazione della spec §3, CORRETTA l'11/08/2026 e di
++                 * nuovo dalla quarta correzione: "virgl" ha senso solo sui
++                 * campioni del thread principale DENTRO la finestra -- e'
++                 * l'unico sottoinsieme per cui finestra_us (il tempo CPU
++                 * dello stesso tratto, sempre e solo dal thread principale:
++                 * vedi winq_glspia_somma_finestra() in winq-glspia-conta.c)
++                 * e' un minuendo che ha senso. Il sottoinsieme altri/dentro
++                 * (a_*_us sopra) non entra: non e' lavoro del ciclo che
++                 * finestra_us cronometra, e sottrarlo qui produrrebbe un
++                 * numero senza significato, non solo un numero sbagliato.
++                 * L'identita' aritmetica e' verificata sul sottoinsieme
++                 * giusto: finestra_us e' interamente popolato dal thread
++                 * principale (winq_glspia_somma_finestra() e' chiamata solo
++                 * da vrend_decode_ctx_submit_cmd, mai da vrend-sync), quindi
++                 * numeratore e denominatore coprono lo stesso thread oltre
++                 * che lo stesso ciclo -- la condizione che le correzioni
++                 * precedenti avevano gia' verificato per la finestra, ora
++                 * verificata anche per il thread. Se i termini superano
++                 * finestra_us la differenza sarebbe negativa: si riporta
++                 * zero e il cancello §7a lo raccogliera' come "la somma non
++                 * torna". */
++                virgl_us = finestra_us > gl_us + sh_us + attesa_us
++                         ? finestra_us - gl_us - sh_us - attesa_us : 0;
++
++                error_report("winq-tempo/s: submit=%llu cpu_qemu=%llu us "
++                             "cpu_finestra=%llu us gl=%llu us(%llu) "
++                             "shader=%llu us(%llu) virgl=%llu us "
++                             "gpu=%llu us(%llu) saltate=%llu assurde=%llu",
++                             (unsigned long long)winq_submit,
++                             (unsigned long long)winq_cpu_us,
++                             (unsigned long long)finestra_us,
++                             (unsigned long long)gl_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL],
++                             (unsigned long long)sh_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER],
++                             (unsigned long long)virgl_us,
++                             (unsigned long long)gpu_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU],
++                             (unsigned long long)s.saltate,
++                             (unsigned long long)s.assurde);
++                /* TERZA CORREZIONE DELL'11/08/2026: lo split di "fuori" aveva
++                 * appena mostrato che fuori/attesa e' 645,3 ms/s (il 64% del
++                 * secondo) da solo, ma ATTESA era un solo secchio per tre
++                 * primitive con tre cause diverse. Riga propria, nello
++                 * stesso stile di winq-fuori/s qui sotto: non infilata nella
++                 * prima riga, che sarebbe diventata illeggibile. Solo il
++                 * sottoinsieme principale: quello altri ha la sua riga qui
++                 * sotto (winq-attesa-altri/s), per lo stesso motivo. */
++                error_report("winq-attesa/s: flush=%llu us(%llu) "
++                             "finish=%llu us(%llu) waitsync=%llu us(%llu)",
++                             (unsigned long long)fl_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH],
++                             (unsigned long long)fi_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH],
++                             (unsigned long long)ws_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC]);
++                /* QUARTA CORREZIONE DELL'11/08/2026: la riga che risponde
++                 * alla domanda che ha motivato tutta la correzione -- il
++                 * 624,9 ms/s di glClientWaitSync pubblicato era davvero del
++                 * thread principale, o del thread di sync che si intrometteva
++                 * mentre la finestra era aperta? Qui il dato, non l'ipotesi.
++                 * Non solo attesa: la conseguenza 2 del difetto ("anche i
++                 * secchi dentro sono contaminati") riguarda GL/SHADER allo
++                 * stesso modo, quindi la riga li include -- un'unica riga
++                 * "dentro/altri", non due, perche' a differenza del
++                 * principale questo sottoinsieme non ha un "winq-tempo"
++                 * proprio (nessun submit/cpu/virgl/gpu ha senso per un
++                 * thread che non possiede la finestra). */
++                error_report("winq-dentro-altri/s: gl=%llu us(%llu) "
++                             "shader=%llu us(%llu) flush=%llu us(%llu) "
++                             "finish=%llu us(%llu) waitsync=%llu us(%llu)",
++                             (unsigned long long)a_gl_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_GL],
++                             (unsigned long long)a_sh_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_SHADER],
++                             (unsigned long long)a_fl_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_FLUSH],
++                             (unsigned long long)a_fi_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_FINISH],
++                             (unsigned long long)a_ws_us,
++                             (unsigned long long)s.chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC]);
++                /* CORREZIONE DELL'11/08/2026 (secondo giro): "fuori" era un
++                 * unico contenitore cieco (623,9 ms/s misurati, il 62% del
++                 * secondo, senza dire cosa). Riga separata, nello stile di
++                 * winq-gpu/s e winq-cmd/s. Terzo giro: attesa si spezza qui
++                 * come sopra, in flush/finish/waitsync invece dell'aggregato.
++                 * Quarto giro: solo il sottoinsieme principale -- "fuori" del
++                 * thread di sync ha la sua riga qui sotto, perche' "fuori"
++                 * per un thread che non possiede mai la finestra e' un
++                 * concetto diverso da "fuori" per il principale (vedi il
++                 * commento sull'enum WINQ_THREAD_* in winq-glspia-conta.h). */
++                error_report("winq-fuori/s: gl=%llu us(%llu) "
++                             "shader=%llu us(%llu) flush=%llu us(%llu) "
++                             "finish=%llu us(%llu) waitsync=%llu us(%llu)",
++                             (unsigned long long)f_gl_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL],
++                             (unsigned long long)f_sh_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER],
++                             (unsigned long long)f_fl_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH],
++                             (unsigned long long)f_fi_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH],
++                             (unsigned long long)f_ws_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC]);
++                error_report("winq-fuori-altri/s: gl=%llu us(%llu) "
++                             "shader=%llu us(%llu) flush=%llu us(%llu) "
++                             "finish=%llu us(%llu) waitsync=%llu us(%llu)",
++                             (unsigned long long)fa_gl_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_GL],
++                             (unsigned long long)fa_sh_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_SHADER],
++                             (unsigned long long)fa_fl_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_FLUSH],
++                             (unsigned long long)fa_fi_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_FINISH],
++                             (unsigned long long)fa_ws_us,
++                             (unsigned long long)s.fuori_chiamate[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC]);
++                /* SONDA glGetError, aggiunta l'11/08/2026: eseguita=0 vuol
++                 * dire "nessun gpu_apri()/gpu_chiudi() ha consumato la
++                 * richiesta in questo ciclo" -- i due codici sotto sono
++                 * allora da ignorare (0x0000 non e' GL_NO_ERROR qui, e'
++                 * "non misurato"). Sempre stampata, stesso formato: piu'
++                 * facile da grep-are di una riga che cambia forma. */
++                error_report("winq-sonda/s: eseguita=%llu inizio=0x%04llx "
++                             "fine=0x%04llx",
++                             (unsigned long long)s.sonda_eseguita,
++                             (unsigned long long)s.sonda_errore_inizio,
++                             (unsigned long long)s.sonda_errore_fine);
++                /* QUARTA CORREZIONE DELL'11/08/2026: il registro dei thread,
++                 * sul modello di winq-fence (piu' in basso in questo file):
++                 * il thread corrente si confronta con quello registrato
++                 * all'inizializzazione, e si riportano entrambi. Qui non
++                 * c'e' un "corrente" (la riga e' emessa dal thread che
++                 * chiama virgl_renderer_submit_cmd, che e' il principale per
++                 * definizione), quindi si riporta il principale e l'intero
++                 * registro degli altri: quanti, quali (fino a
++                 * WINQ_THREAD_TABELLA), e quanti sono rimasti fuori dal
++                 * piccolo insieme. thread_altri_id[] usa 0 come "casella non
++                 * usata" (nessun thread reale ha id 0), quindi il ciclo si
++                 * ferma a thread_altri_n, non a WINQ_THREAD_TABELLA. */
++                thread_altri_buf[0] = '\0';
++                for (ti = 0; ti < s.thread_altri_n && ti < WINQ_THREAD_TABELLA;
++                     ti++) {
++                    int n = snprintf(thread_altri_buf + thread_altri_off,
++                                     sizeof(thread_altri_buf) - thread_altri_off,
++                                     "%s%llu", ti ? "," : "",
++                                     (unsigned long long)s.thread_altri_id[ti]);
++                    if (n > 0) {
++                        thread_altri_off += (size_t)n;
++                    }
++                }
++                if (thread_altri_buf[0] == '\0') {
++                    snprintf(thread_altri_buf, sizeof(thread_altri_buf), "-");
++                }
++                error_report("winq-thread/s: principale=%llu altri_visti=%llu "
++                             "altri_id=%s altri_fuori_tabella=%llu",
++                             (unsigned long long)s.thread_principale,
++                             (unsigned long long)s.thread_altri_n,
++                             thread_altri_buf,
++                             (unsigned long long)s.thread_altri_fuori_tabella);
++                /* QUINTA CORREZIONE DELL'11/08/2026: la diagnostica dello
++                 * switch di contesto GL. "richiesti" e' ogni chiamata a
++                 * vrend_hw_switch_context() (entrambe le origini); "veri" e'
++                 * quante di quelle sono arrivate davvero a
++                 * vrend_clicbs->make_current() invece di tornare subito
++                 * perche' il contesto era gia' quello giusto; "saltati" e'
++                 * la differenza, non un contatore a parte (stessa scelta di
++                 * "saltate" per l'anello GPU: un numero derivato non puo'
++                 * disallinearsi dai due che lo compongono). "tempo" e' il
++                 * cumulativo dentro make_current(), "tempo_per_switch" e'
++                 * quello diviso per i veri -- zero se non ce ne sono stati,
++                 * non una divisione per zero. da_force0 e da_decode sono
++                 * veri/richiesti per origine: da_force0 e' letteralmente
++                 * "quante delle chiamate arrivate da
++                 * vrend_renderer_force_ctx_0() sono switch veri"; da_decode
++                 * e' lo stesso per WINQ_CTX_ALTRO, che nonostante il nome in
++                 * questa riga (per leggibilita', e perche' e' il chiamante
++                 * dominante) raggruppa anche i trasferimenti e il ripristino
++                 * dopo la distruzione di un contesto -- vedi il commento
++                 * sopra vrend_hw_switch_context() in vrend_renderer.c per
++                 * l'elenco completo. Aspettativa da confermare: ~400 switch
++                 * veri al secondo da ~1 ms l'uno, quasi tutti da_force0. */
++                {
++                    uint64_t ctx_richiesti_tot = s.ctx_richiesti[WINQ_CTX_FORCE0] +
++                                                  s.ctx_richiesti[WINQ_CTX_ALTRO];
++                    uint64_t ctx_veri_tot = s.ctx_veri[WINQ_CTX_FORCE0] +
++                                             s.ctx_veri[WINQ_CTX_ALTRO];
++                    uint64_t ctx_ns_tot = s.ctx_ns[WINQ_CTX_FORCE0] +
++                                           s.ctx_ns[WINQ_CTX_ALTRO];
++                    uint64_t ctx_us_tot = ctx_ns_tot / 1000;
++                    uint64_t ctx_us_per_switch = ctx_veri_tot ?
++                                                  ctx_us_tot / ctx_veri_tot : 0;
++
++                    error_report("winq-ctx/s: richiesti=%llu veri=%llu "
++                                 "saltati=%llu tempo=%llu us "
++                                 "tempo_per_switch=%llu us "
++                                 "da_force0=%llu/%llu da_decode=%llu/%llu",
++                                 (unsigned long long)ctx_richiesti_tot,
++                                 (unsigned long long)ctx_veri_tot,
++                                 (unsigned long long)(ctx_richiesti_tot - ctx_veri_tot),
++                                 (unsigned long long)ctx_us_tot,
++                                 (unsigned long long)ctx_us_per_switch,
++                                 (unsigned long long)s.ctx_veri[WINQ_CTX_FORCE0],
++                                 (unsigned long long)s.ctx_richiesti[WINQ_CTX_FORCE0],
++                                 (unsigned long long)s.ctx_veri[WINQ_CTX_ALTRO],
++                                 (unsigned long long)s.ctx_richiesti[WINQ_CTX_ALTRO]);
++                }
++                winq_cpu_us = 0;
++                winq_submit = 0;
++                winq_t_inizio = winq_t1;
++            }
+         }
+     }
+ 

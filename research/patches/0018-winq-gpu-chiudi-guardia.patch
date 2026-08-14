@@ -1,0 +1,81 @@
+From c5f019515085433c4642f51cd459a9e28810fe9e Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Wed, 12 Aug 2026 09:56:17 +0200
+[PATCH] winq: guardia in gpu_chiudi
+ scritto accanto
+
+winq_glspia_gpu_chiudi() non aveva la guardia winq_glspia_accesa() che
+apri() ha da sempre. Chiamata incondizionatamente da
+vrend_decode_ctx_submit_cmd a ogni submit, eseguiva comunque
+wglGetCurrentContext() e soprattutto trova_o_crea(), che CREA voci: la
+tabella degli otto contesti si riempiva anche in una corsa senza
+WINQ_GPU_DIAG, e le voci non si liberano mai. Uno strumento spento
+lasciava tracce, e quelle tracce rompevano lo strumento acceso dopo.
+
+Scritto accanto, non riparato, il difetto che resta: i due ritorni
+silenziosi lasciano c->in_corso a 1 sulla voce di quel contesto, e da
+li' in poi ogni apri() su di esso esce senza aprire nulla. E' uno dei
+due candidati per t_gpu che riporta zero campioni su 769 cicli
+consecutivi; l'altro e' la tabella piena. Distinguerli richiede di
+sdoppiare "saltate" nelle sue cause, che vuole campi nuovi nella
+struttura e non entra qui. Sbloccare a tappeto NON e' il rimedio: la
+query GL resterebbe aperta e il glBeginQuery successivo fallirebbe con
+GL_INVALID_OPERATION.
+
+Costruita in CLANGARM64, 50 export verificati con objdump (nessuno
+sparito rispetto alla DLL precedente), 31 prove di test-glspia.sh
+passate.
+---
+ src/winq-glspia-gpu.c | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/src/winq-glspia-gpu.c b/src/winq-glspia-gpu.c
+index 1ae678f..96fdb17 100644
+--- a/src/winq-glspia-gpu.c
++++ b/src/winq-glspia-gpu.c
+@@ -227,11 +227,41 @@ void winq_glspia_gpu_apri(void)
+     c->in_corso = 1;
+ }
+ 
++/* La guardia winq_glspia_accesa() qui in cima e' asimmetrica rispetto ad
++ * apri(), che ce l'ha da sempre (vedi :185): AGGIUNTA perche' mancava, ed era
++ * un effetto collaterale di STATO a diagnostica completamente spenta.
++ * Senza di essa questa funzione, chiamata incondizionatamente da
++ * vrend_decode_ctx_submit_cmd (vrend_decode.c) a ogni submit, eseguiva
++ * comunque wglGetCurrentContext() e soprattutto trova_o_crea(), che CREA
++ * voci: la tabella dei WINQ_CONTESTI (8) si riempiva anche in una corsa senza
++ * WINQ_GPU_DIAG. E poiche' le voci non si liberano mai (dichiarato sopra
++ * trova_o_crea), da quel momento ogni contesto nuovo era senza
++ * cronometraggio -- comprese le corse in cui la diagnostica veniva accesa
++ * dopo. Uno strumento spento non deve lasciare tracce, men che meno tracce
++ * che rompono lo strumento acceso.
++ *
++ * DIFETTO NOTO, NON RIPARATO QUI, e va scritto perche' non si perda. I due
++ * ritorni silenziosi qui sotto (nessun contesto corrente, oppure contesto
++ * diverso da quello che aveva aperto) lasciano c->in_corso a 1 sulla voce di
++ * QUEL contesto: da quel momento ogni apri() su di esso esce a :210 senza
++ * aprire nulla, per sempre. E' un candidato per il fatto misurato che t_gpu
++ * riporti zero campioni su 769 cicli consecutivi -- l'altro candidato e' la
++ * tabella piena a WINQ_CONTESTI (8), che non si libera mai. I due si
++ * distinguono solo sdoppiando il contatore "saltate" nelle sue cause, che
++ * richiede campi nuovi nella struttura e non entra in questa patch. Sbloccare
++ * a tappeto NON e' il rimedio: la query GL_TIME_ELAPSED su quel contesto
++ * resterebbe aperta, e il glBeginQuery successivo fallirebbe con
++ * GL_INVALID_OPERATION -- si sposterebbe il guasto, non lo si toglierebbe. */
+ void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns)
+ {
+-    HGLRC corrente = wglGetCurrentContext();
++    HGLRC corrente;
+     struct winq_ctx *c;
+ 
++    if (!winq_glspia_accesa()) {
++        return;
++    }
++
++    corrente = wglGetCurrentContext();
+     if (!corrente) {
+         return;
+     }
+-- 
+2.53.0.vfs.0.7
+

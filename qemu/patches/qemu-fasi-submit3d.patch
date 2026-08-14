@@ -1,0 +1,539 @@
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -771,6 +771,103 @@
+     g->parent_obj.scanout[ss.scanout_id].resource_id = ss.resource_id;
+ }
+ 
++/* winq: LE FASI DENTRO IL GESTORE DI UN COMANDO, dietro WINQ_GPU_DIAG.
++ *
++ * PERCHE'. winq-cmd/s (virtio-gpu.c) dice quanto costa un TIPO di comando;
++ * winq-tempo/s dice cosa succede dentro virgl_renderer_submit_cmd. Fra i due
++ * c'e' un buco, e sotto carico e' il buco piu' grosso rimasto: il gestore di
++ * SUBMIT_3D costa ~800 us e cpu_qemu ne spiega ~290. I ~510 us restanti
++ * stanno in tratti che NESSUNA delle due diagnostiche avvolge -- la
++ * force_ctx_0() prima dello switch, la copia degli iov, la coda che crea la
++ * fence. Non si deduce quale pesi: si cronometra uno per uno.
++ *
++ * PERCHE' SOLO PER SUBMIT_3D. E' il comando su cui verte la domanda, e
++ * filtrare tiene i contatori a cinque caselle invece di 1024x5: la riga si
++ * legge senza sommare a mano. Gli altri tipi restano coperti da winq-cmd/s.
++ *
++ * LE FASI SI ANNIDANO, e va saputo leggendo la riga: DISPATCH contiene IOV e
++ * SUBMIT (sono dentro il gestore chiamato dallo switch). FORCE0 e CODA sono
++ * invece disgiunte da tutto. Quindi il conto che deve tornare e'
++ * FORCE0 + DISPATCH + CODA ~= il numero di winq-cmd/s per il tipo 0x207,
++ * e dentro DISPATCH resta IOV + SUBMIT + il resto del gestore.
++ *
++ * LA SUBMIT CHE STAMPA IL RIEPILOGO NON SI CONTA. Le otto (ora nove)
++ * error_report del riepilogo escono da dentro virgl_cmd_submit_3d, cioe' da
++ * dentro la fase DISPATCH di quella submit: misurate 22 us con il lettore
++ * della pipe veloce e fino a 2,85 ms con il lettore lento, quanto un'intera
++ * submit. Contare quel campione sposterebbe la media di DISPATCH. Si salta e
++ * si conta quante volte (winq_fase_scartate), invece di nasconderlo.
++ * NON e' il rimedio completo: quel burst resta dentro il numero di
++ * winq-cmd/s per 0x207 e dentro peggior_blocco, come prima di questa patch.
++ * Il rimedio vero -- emettere il riepilogo da virtio_gpu_gl_handle_ctrl,
++ * fuori da ogni finestra per-comando -- e' una ristrutturazione piu' grande e
++ * resta da fare. */
++enum {
++    WINQ_FASE_FORCE0 = 0,   /* virgl_renderer_force_ctx_0(), prima dello switch */
++    WINQ_FASE_IOV,          /* g_malloc + iov_to_buf del command buffer */
++    WINQ_FASE_SUBMIT,       /* virgl_renderer_submit_cmd() -- lo stesso di cpu_qemu */
++    WINQ_FASE_DISPATCH,     /* lo switch dei tipi per intero: contiene IOV e SUBMIT */
++    WINQ_FASE_CODA,         /* risposta sulla virtqueue e creazione della fence */
++    WINQ_FASE_N
++};
++
++static uint64_t winq_fase_us[WINQ_FASE_N];
++static uint64_t winq_fase_n[WINQ_FASE_N];
++static unsigned long winq_fase_scartate;
++static int winq_fase_sporca;    /* questa submit ha stampato il riepilogo */
++
++/* Le due meta' di virtio_gpu_fence_poll(), che winq-gpu/s somma in un termine
++ * solo chiamandolo "fence". Vedi il commento dentro virtio_gpu_fence_poll(). */
++static uint64_t winq_poll_us;        /* virgl_renderer_poll() vero */
++static uint64_t winq_poll_cmdq_us;   /* il secondo giro di comandi che ci sta dentro */
++static uint64_t winq_poll_n;
++
++/* Il controllo della variabile d'ambiente, memorizzato in una statica.
++ *
++ * MISURATO su questa macchina: getenv() su UCRT costa 2,7 us -- ventidue
++ * volte GetEnvironmentVariableA -- perche' rimaterializza il blocco
++ * d'ambiente stretto a ogni chiamata, e il costo non dipende dal fatto che la
++ * variabile ci sia. I siti non memorizzati di questo albero ne facevano
++ * ~2400 al secondo sul ciclo principale: 8,1 ms/s pagati SEMPRE, anche a
++ * diagnostica spenta. E' una tassa sulla linea di base, quindi falsa il
++ * confronto con un QEMU non strumentato (i confronti A/B fra due corse
++ * strumentate invece si annullano). Quello dentro virgl_cmd_submit_3d cadeva
++ * per giunta DENTRO la finestra che winq-cmd/s cronometra per il tipo 0x207:
++ * gonfiava di 2,7 us proprio il numero che stiamo inseguendo.
++ *
++ * SEMANTICA INVARIATA DI PROPOSITO: "impostata", non "vale 1" -- come faceva
++ * il getenv() nudo che questa funzione sostituisce. Il fork invece pretende
++ * '1' (winq_glspia_accesa(), src/winq-glspia-conta.c). La divergenza esiste
++ * da prima ed e' qui DICHIARATA, non corretta: allinearla dentro una patch
++ * che vuole cambiare solo il costo introdurrebbe un cambio di comportamento
++ * silenzioso, ed e' esattamente il genere di cosa che costa ore. */
++static bool winq_gpu_diag(void)
++{
++    static int acceso = -1;
++
++    if (acceso < 0) {
++        acceso = getenv("WINQ_GPU_DIAG") ? 1 : 0;
++    }
++    return acceso != 0;
++}
++
++/* Un intervallo negativo non e' un campione corto: e' l'orologio che e'
++ * tornato indietro fra i due core. Sommato senza segno diventerebbe un numero
++ * enorme e falserebbe l'intero secondo -- stessa guardia di
++ * winq_glspia_aggiungi() nel fork. Si scarta in silenzio: qui non c'e' un
++ * secchio "assurde" da alimentare. */
++static void winq_fase_somma(uint32_t tipo, int fase, int64_t us)
++{
++    if (tipo != VIRTIO_GPU_CMD_SUBMIT_3D) {
++        return;
++    }
++    if (fase < 0 || fase >= WINQ_FASE_N || us < 0) {
++        return;
++    }
++    winq_fase_us[fase] += (uint64_t)us;
++    winq_fase_n[fase]++;
++}
++
+ static void virgl_cmd_submit_3d(VirtIOGPU *g,
+                                 struct virtio_gpu_ctrl_command *cmd)
+ {
+@@ -789,9 +886,20 @@
+         return;
+     }
+ 
+-    buf = g_malloc(cs.size);
+-    s = iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num,
+-                   sizeof(cs), buf, cs.size);
++    /* FASE IOV. Il cronometro si chiude PRIMA del controllo su s, cosi' il
++     * campione c'e' anche quando la copia fallisce e si salta a out: -- e'
++     * proprio il caso in cui si vorrebbe sapere quanto e' costata. */
++    {
++        int64_t winq_tf = winq_gpu_diag() ? g_get_monotonic_time() : 0;
++
++        buf = g_malloc(cs.size);
++        s = iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num,
++                       sizeof(cs), buf, cs.size);
++        if (winq_tf) {
++            winq_fase_somma(cmd->cmd_hdr.type, WINQ_FASE_IOV,
++                            g_get_monotonic_time() - winq_tf);
++        }
++    }
+     if (s != cs.size) {
+         qemu_log_mask(LOG_GUEST_ERROR, "%s: size mismatch (%zd/%d)",
+                       __func__, s, cs.size);
+@@ -851,7 +959,7 @@
+         static uint64_t winq_cpu_us, winq_submit;
+         int64_t winq_t0 = 0;
+ 
+-        if (getenv("WINQ_GPU_DIAG") && winq_spia_pronta()) {
++        if (winq_gpu_diag() && winq_spia_pronta()) {
+             winq_t0 = g_get_monotonic_time();
+         }
+ 
+@@ -878,6 +986,12 @@
+ 
+             winq_cpu_us += (uint64_t)(winq_t1 - winq_t0);
+             winq_submit++;
++            /* FASE SUBMIT: e' lo stesso intervallo di cpu_qemu, riusato senza
++             * altre letture d'orologio. Sta nella riga delle fasi perche' li'
++             * si legge accanto alle altre quattro, e il conto DISPATCH meno
++             * IOV meno SUBMIT diventa il residuo del gestore. */
++            winq_fase_somma(cmd->cmd_hdr.type, WINQ_FASE_SUBMIT,
++                            winq_t1 - winq_t0);
+ 
+             if (!winq_t_inizio) {
+                 winq_t_inizio = winq_t1;
+@@ -1128,20 +1242,89 @@
+                     uint64_t ctx_us_per_switch = ctx_veri_tot ?
+                                                   ctx_us_tot / ctx_veri_tot : 0;
+ 
++                    /* us_force0 / us_decode: il tempo SPEZZATO PER ORIGINE,
++                     * aggiunto il 12/08/2026. Prima si stampava solo il
++                     * totale, e da quel totale non si poteva dire se i ~560
++                     * ms/s stessero nella force_ctx_0() (che sotto carico
++                     * scatta davvero dal polling delle fence, non dai
++                     * comandi -- vrend_renderer.c:11484) o nel percorso di
++                     * decodifica. Sono due bersagli diversi con due cure
++                     * diverse, e il numero per deciderlo era gia' nella
++                     * struttura: mancava solo stamparlo. */
+                     error_report("winq-ctx/s: richiesti=%llu veri=%llu "
+                                  "saltati=%llu tempo=%llu us "
+                                  "tempo_per_switch=%llu us "
++                                 "us_force0=%llu us_decode=%llu "
+                                  "da_force0=%llu/%llu da_decode=%llu/%llu",
+                                  (unsigned long long)ctx_richiesti_tot,
+                                  (unsigned long long)ctx_veri_tot,
+                                  (unsigned long long)(ctx_richiesti_tot - ctx_veri_tot),
+                                  (unsigned long long)ctx_us_tot,
+                                  (unsigned long long)ctx_us_per_switch,
++                                 (unsigned long long)(s.ctx_ns[WINQ_CTX_FORCE0] / 1000),
++                                 (unsigned long long)(s.ctx_ns[WINQ_CTX_ALTRO] / 1000),
+                                  (unsigned long long)s.ctx_veri[WINQ_CTX_FORCE0],
+                                  (unsigned long long)s.ctx_richiesti[WINQ_CTX_FORCE0],
+                                  (unsigned long long)s.ctx_veri[WINQ_CTX_ALTRO],
+                                  (unsigned long long)s.ctx_richiesti[WINQ_CTX_ALTRO]);
+                 }
++                /* winq-fasi/s: la ripartizione del gestore di 0x207. Le fasi
++                 * SI ANNIDANO -- DISPATCH contiene IOV e SUBMIT, FORCE0 e CODA
++                 * sono disgiunte -- quindi non si sommano tutte e cinque: vedi
++                 * il commento sopra l'enum WINQ_FASE_*. Il conto che deve
++                 * tornare e' force0 + dispatch + coda ~= il numero di
++                 * winq-cmd/s per il tipo 0x207. */
++                {
++                    static const char *const winq_fase_nome[WINQ_FASE_N] = {
++                        "force0", "iov", "submit", "dispatch", "coda"
++                    };
++                    char winq_fasi_buf[256];
++                    size_t winq_fasi_off = 0;
++                    unsigned winq_f;
++
++                    winq_fasi_buf[0] = '\0';
++                    for (winq_f = 0; winq_f < WINQ_FASE_N; winq_f++) {
++                        int n = snprintf(winq_fasi_buf + winq_fasi_off,
++                                         sizeof(winq_fasi_buf) - winq_fasi_off,
++                                         "%s=%llu us(%llu) ",
++                                         winq_fase_nome[winq_f],
++                                         (unsigned long long)winq_fase_us[winq_f],
++                                         (unsigned long long)winq_fase_n[winq_f]);
++
++                        if (n <= 0 ||
++                            (size_t)n >= sizeof(winq_fasi_buf) - winq_fasi_off) {
++                            break;
++                        }
++                        winq_fasi_off += (size_t)n;
++                    }
++                    error_report("winq-fasi/s (0x207): %sscartate=%lu",
++                                 winq_fasi_buf, winq_fase_scartate);
++                    for (winq_f = 0; winq_f < WINQ_FASE_N; winq_f++) {
++                        winq_fase_us[winq_f] = 0;
++                        winq_fase_n[winq_f] = 0;
++                    }
++                    winq_fase_scartate = 0;
++                }
++                /* winq-poll/s: le due meta' di cio' che winq-gpu/s chiama
++                 * "fence". "poll" e' virgl_renderer_poll() vero;
++                 * "cmdq_annidata" e' il secondo giro di comandi che
++                 * virtio_gpu_fence_poll() esegue al suo interno e che finisce
++                 * anche in winq-cmd/s. La somma dei due deve dare il termine
++                 * "fence" di winq-gpu/s: se non lo da', uno dei due
++                 * cronometri e' nel posto sbagliato. */
++                error_report("winq-poll/s: giri=%llu poll=%llu us "
++                             "cmdq_annidata=%llu us",
++                             (unsigned long long)winq_poll_n,
++                             (unsigned long long)winq_poll_us,
++                             (unsigned long long)winq_poll_cmdq_us);
++                winq_poll_us = 0;
++                winq_poll_cmdq_us = 0;
++                winq_poll_n = 0;
++                /* Questa submit ha appena stampato dieci righe su stderr dal
++                 * ciclo principale: la sua fase DISPATCH non e' un campione
++                 * del lavoro, e' un campione dello strumento. Il chiamante la
++                 * scarta. Vedi il commento sopra l'enum WINQ_FASE_*. */
++                winq_fase_sporca = 1;
+                 winq_cpu_us = 0;
+                 winq_submit = 0;
+                 winq_t_inizio = winq_t1;
+@@ -1298,7 +1481,7 @@
+ {
+     int64_t ora;
+ 
+-    if (!getenv("WINQ_GPU_DIAG")) {
++    if (!winq_gpu_diag()) {
+         return;
+     }
+ 
+@@ -1708,17 +1891,98 @@
+     }
+ }
+ 
++/* La coda del gestore di un comando, estratta perche' abbia un cronometro.
++ *
++ * PERCHE' UNA FUNZIONE E NON UN CRONOMETRO IN LINEA. Questo tratto ha CINQUE
++ * uscite: comando sospeso o gia' finito, errore, nessuna fence richiesta,
++ * fence con ring_idx, fence normale. Un cronometro in linea andrebbe chiuso
++ * su tutte e cinque, e la sesta che qualcuno aggiungera' domani non lo
++ * chiuderebbe: quel tempo sparirebbe in silenzio invece di dare un errore.
++ * Spostando le uscite dentro una funzione, il cronometro si chiude una volta
++ * sola al sito di chiamata e non puo' essere saltato.
++ *
++ * NESSUN CAMBIO DI COMPORTAMENTO: il corpo e' quello di prima, spostato senza
++ * modifiche. `ret` era una locale di virtio_gpu_virgl_process_cmd usata solo
++ * qui dentro, e si e' spostata con lui. */
++static void winq_process_cmd_coda(VirtIOGPU *g,
++                                  struct virtio_gpu_ctrl_command *cmd,
++                                  bool cmd_suspended)
++{
++    int ret;
++
++    if (cmd_suspended || cmd->finished) {
++        return;
++    }
++    if (cmd->error) {
++        fprintf(stderr, "%s: ctrl 0x%x, error 0x%x\n", __func__,
++                cmd->cmd_hdr.type, cmd->error);
++        virtio_gpu_ctrl_response_nodata(g, cmd, cmd->error);
++        return;
++    }
++    if (!(cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_FENCE)) {
++        virtio_gpu_ctrl_response_nodata(g, cmd, VIRTIO_GPU_RESP_OK_NODATA);
++        return;
++    }
++
++    trace_virtio_gpu_fence_ctrl(cmd->cmd_hdr.fence_id, cmd->cmd_hdr.type);
++#if VIRGL_VERSION_MAJOR >= 1
++    if (cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_INFO_RING_IDX) {
++        const uint32_t flags = VIRGL_RENDERER_FENCE_FLAG_MERGEABLE;
++
++        ret = virgl_renderer_context_create_fence(cmd->cmd_hdr.ctx_id, flags,
++                                                  cmd->cmd_hdr.ring_idx,
++                                                  cmd->cmd_hdr.fence_id);
++        if (ret) {
++            qemu_log_mask(LOG_GUEST_ERROR,
++                          "%s: virgl_renderer_context_create_fence error: %s",
++                          __func__, strerror(-ret));
++        }
++        return;
++    }
++#endif
++
++    /*
++     * Unlike other virglrenderer functions, this one returns a positive
++     * error code.
++     */
++    ret = virgl_renderer_create_fence(cmd->cmd_hdr.fence_id, 0);
++    if (ret) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: virgl_renderer_create_fence error: %s",
++                      __func__, strerror(ret));
++    }
++}
++
+ void virtio_gpu_virgl_process_cmd(VirtIOGPU *g,
+                                       struct virtio_gpu_ctrl_command *cmd)
+ {
+     bool cmd_suspended = false;
+-    int ret;
++    uint32_t winq_tipo;
++    int64_t winq_t;
+ 
+     VIRTIO_GPU_FILL_CMD(cmd->cmd_hdr);
+ 
+-    if (winq_ctx0_sempre() || winq_ctx0_serve(cmd->cmd_hdr.type)) {
++    /* Copiato subito DOPO VIRTIO_GPU_FILL_CMD, che e' cio' che riempie
++     * cmd_hdr: prima di li' il tipo e' memoria non inizializzata, e leggerlo
++     * da' valori plausibili ma inventati -- la stessa trappola gia' pagata e
++     * documentata in virtio-gpu.c per winq-cmd/s.
++     *
++     * E si copia invece di rileggere cmd->cmd_hdr.type tre volte: il gestore
++     * chiamato dallo switch puo' rispondere sulla virtqueue, e il comando
++     * cambia stato sotto di noi. Il tipo che si cronometra deve restare
++     * quello con cui il comando e' entrato. */
++    winq_tipo = cmd->cmd_hdr.type;
++
++    if (winq_ctx0_sempre() || winq_ctx0_serve(winq_tipo)) {
++        winq_t = winq_gpu_diag() ? g_get_monotonic_time() : 0;
+         virgl_renderer_force_ctx_0();
++        if (winq_t) {
++            winq_fase_somma(winq_tipo, WINQ_FASE_FORCE0,
++                            g_get_monotonic_time() - winq_t);
++        }
+     }
++
++    winq_t = winq_gpu_diag() ? g_get_monotonic_time() : 0;
+     switch (cmd->cmd_hdr.type) {
+     case VIRTIO_GPU_CMD_CTX_CREATE:
+         virgl_cmd_context_create(g, cmd);
+@@ -1797,47 +2061,24 @@
+         cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
+         break;
+     }
+-
+-    if (cmd_suspended || cmd->finished) {
+-        return;
+-    }
+-    if (cmd->error) {
+-        fprintf(stderr, "%s: ctrl 0x%x, error 0x%x\n", __func__,
+-                cmd->cmd_hdr.type, cmd->error);
+-        virtio_gpu_ctrl_response_nodata(g, cmd, cmd->error);
+-        return;
+-    }
+-    if (!(cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_FENCE)) {
+-        virtio_gpu_ctrl_response_nodata(g, cmd, VIRTIO_GPU_RESP_OK_NODATA);
+-        return;
+-    }
+-
+-    trace_virtio_gpu_fence_ctrl(cmd->cmd_hdr.fence_id, cmd->cmd_hdr.type);
+-#if VIRGL_VERSION_MAJOR >= 1
+-    if (cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_INFO_RING_IDX) {
+-        const uint32_t flags = VIRGL_RENDERER_FENCE_FLAG_MERGEABLE;
+-
+-        ret = virgl_renderer_context_create_fence(cmd->cmd_hdr.ctx_id, flags,
+-                                                  cmd->cmd_hdr.ring_idx,
+-                                                  cmd->cmd_hdr.fence_id);
+-        if (ret) {
+-            qemu_log_mask(LOG_GUEST_ERROR,
+-                          "%s: virgl_renderer_context_create_fence error: %s",
+-                          __func__, strerror(-ret));
++    if (winq_t) {
++        /* La submit che ha stampato il riepilogo ha nove error_report dentro
++         * questo intervallo: e' un campione dello strumento, non del lavoro.
++         * Si scarta e si conta. Vedi il commento sopra l'enum WINQ_FASE_*. */
++        if (winq_fase_sporca) {
++            winq_fase_sporca = 0;
++            winq_fase_scartate++;
++        } else {
++            winq_fase_somma(winq_tipo, WINQ_FASE_DISPATCH,
++                            g_get_monotonic_time() - winq_t);
+         }
+-        return;
+     }
+-#endif
+ 
+-    /*
+-     * Unlike other virglrenderer functions, this one returns a positive
+-     * error code.
+-     */
+-    ret = virgl_renderer_create_fence(cmd->cmd_hdr.fence_id, 0);
+-    if (ret) {
+-        qemu_log_mask(LOG_GUEST_ERROR,
+-                      "%s: virgl_renderer_create_fence error: %s",
+-                      __func__, strerror(ret));
++    winq_t = winq_gpu_diag() ? g_get_monotonic_time() : 0;
++    winq_process_cmd_coda(g, cmd, cmd_suspended);
++    if (winq_t) {
++        winq_fase_somma(winq_tipo, WINQ_FASE_CODA,
++                        g_get_monotonic_time() - winq_t);
+     }
+ }
+ 
+@@ -2113,8 +2354,37 @@
+         return;
+     }
+ 
+-    virgl_renderer_poll();
+-    virtio_gpu_process_cmdq(g);
++    /* winq: IL TERMINE "fence" DI winq-gpu/s NON E' IL POLLING DELLE FENCE.
++     *
++     * virtio-gpu-gl.c cronometra separatamente virtio_gpu_process_cmdq() e
++     * virtio_gpu_virgl_fence_poll(), e il commento li' promette che la
++     * separazione distingua "sottomettere comandi" da "aspettare la GPU". Il
++     * codice non la realizza: questa funzione, che e' il corpo del secondo
++     * termine, esegue un virtio_gpu_process_cmdq(g) COMPLETO qui sotto.
++     * Quindi "fence=" contiene un secondo giro di comandi, quei comandi
++     * finiscono anche in winq-cmd/s, e i due riepiloghi non si possono
++     * sottrarre l'uno dall'altro. Misurato: cmdq ~360 ms/s e fence ~440 ms/s,
++     * e la seconda meta' e' stata letta per giorni come "attesa sulla GPU".
++     *
++     * Il rimedio non e' spostare la chiamata -- serve, e toglierla cambia il
++     * comportamento -- ma cronometrare i due pezzi da qui, cosi' che il
++     * termine "fence" diventi leggibile invece che sbagliato. */
++    {
++        int64_t winq_t = winq_gpu_diag() ? g_get_monotonic_time() : 0;
++
++        virgl_renderer_poll();
++        if (winq_t) {
++            int64_t winq_t1 = g_get_monotonic_time();
++
++            winq_poll_us += (uint64_t)(winq_t1 - winq_t);
++            winq_poll_n++;
++            winq_t = winq_t1;
++        }
++        virtio_gpu_process_cmdq(g);
++        if (winq_t) {
++            winq_poll_cmdq_us += (uint64_t)(g_get_monotonic_time() - winq_t);
++        }
++    }
+     if (!QTAILQ_EMPTY(&g->cmdq) || !QTAILQ_EMPTY(&g->fenceq)) {
+         timer_mod(gl->fence_poll, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 10);
+     }
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -1046,6 +1046,35 @@
+     qemu_bh_schedule(g->cursor_bh);
+ }
+ 
++/* winq: il controllo di WINQ_SND_DIAG, memorizzato in una statica.
++ *
++ * PERCHE'. Era un getenv() nudo dentro il ciclo dei comandi, cioe' una
++ * chiamata PER COMANDO: ~1500 al secondo sul thread principale. Misurato su
++ * questa macchina, getenv() su UCRT costa 2,7 us -- ventidue volte
++ * GetEnvironmentVariableA -- perche' rimaterializza il blocco d'ambiente
++ * stretto a ogni chiamata, e il costo lo si paga anche quando la variabile
++ * non e' impostata. Da questo sito soltanto: 4 ms/s di ciclo principale
++ * bruciati a diagnostica SPENTA.
++ *
++ * Perche' importa piu' del suo peso: il numero che questo file misura e'
++ * "quanto la grafica ruba al ciclo principale". Uno strumento che ruba 4 ms/s
++ * al ciclo principale per decidere se misurare falsa esattamente quello.
++ *
++ * SEMANTICA INVARIATA: "impostata", come il getenv() nudo che sostituisce --
++ * non "vale 1". Diversa da winq_ev_attivo() in virtio-gpu-gl.c, che esclude
++ * "0", e dal fork che pretende '1'. La divergenza e' preesistente e qui
++ * dichiarata, non corretta: allinearla dentro una patch sul costo sarebbe un
++ * cambio di comportamento silenzioso. */
++static bool winq_snd_diag(void)
++{
++    static int acceso = -1;
++
++    if (acceso < 0) {
++        acceso = getenv("WINQ_SND_DIAG") ? 1 : 0;
++    }
++    return acceso != 0;
++}
++
+ void virtio_gpu_process_cmdq(VirtIOGPU *g)
+ {
+     struct virtio_gpu_ctrl_command *cmd;
+@@ -1117,7 +1146,7 @@
+          * submit_3d sincrona verso il driver Vulkan no. Si stampano solo i
+          * tipi che in un secondo superano il millesimo, cioe' quelli che
+          * bucano l'audio. Il tipo e' il codice virtio (0x1xx / 0x2xx). */
+-        if (getenv("WINQ_SND_DIAG")) {
++        if (winq_snd_diag()) {
+             /* I comandi virtio-gpu stanno su due blocchi: 0x1xx per il 2D e
+              * 0x2xx per il 3D. Mascherare con & 63 li fa collidere e produce
+              * tipi inesistenti: qui si tiene il valore vero, 512 caselle. */
+--- a/hw/display/virtio-gpu-gl.c
++++ b/hw/display/virtio-gpu-gl.c
+@@ -85,6 +85,25 @@
+     return stato == 1;
+ }
+ 
++/* Stessa ragione di winq_ev_attivo() qui sopra, applicata a WINQ_SND_DIAG:
++ * era un getenv() per ogni giro del ciclo (~600/s) e getenv() su UCRT costa
++ * 2,7 us misurati. La copia gemella sta in virtio-gpu.c, con il commento
++ * lungo: due unita' di traduzione separate, otto righe duplicate invece di un
++ * simbolo condiviso e di un header nuovo da giustificare in una patch che
++ * vive sopra l'upstream.
++ *
++ * SEMANTICA INVARIATA: "impostata", come il getenv() nudo -- deliberatamente
++ * diversa da winq_ev_attivo() qui sopra, che esclude anche "0". */
++static bool winq_snd_diag(void)
++{
++    static int acceso = -1;
++
++    if (acceso < 0) {
++        acceso = getenv("WINQ_SND_DIAG") ? 1 : 0;
++    }
++    return acceso != 0;
++}
++
+ static int64_t winq_ev_soglia_us(void)
+ {
+     static int64_t soglia;
+@@ -128,7 +147,7 @@
+      * si aggiusta con il buffer e la strada e' togliere la grafica da qui.
+      * Il ramo utile e' questo, non virtio_gpu_handle_ctrl: la classe GL
+      * sovrascrive handle_ctrl e quello di base non viene mai chiamato. */
+-    if (getenv("WINQ_SND_DIAG")) {
++    if (winq_snd_diag()) {
+         static int64_t winq_inizio;
+         static unsigned long winq_giri, winq_cmd, winq_fence, winq_peggio;
+         int64_t winq_t0 = g_get_monotonic_time();

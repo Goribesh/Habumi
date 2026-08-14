@@ -1,0 +1,942 @@
+--- a/hw/audio/virtio-snd.c
++++ b/hw/audio/virtio-snd.c
+@@ -31,6 +31,18 @@
+ #define VIRTIO_SOUND_CHMAP_DEFAULT 0
+ #define VIRTIO_SOUND_HDA_FN_NID 0
+ 
++static bool winq_snd_diag(void);
++static bool winq_ev_attivo(void);
++static int64_t winq_ev_soglia_us(void);
++/* Aggiornati dentro il ciclo di scrittura, letti una volta al secondo. */
++static unsigned long winq_snd_byte, winq_snd_zeri;
++static void winq_snd_conta(unsigned long *byte, unsigned long *zeri)
++{
++    *byte += winq_snd_byte;
++    *zeri += winq_snd_zeri;
++    winq_snd_byte = 0;
++    winq_snd_zeri = 0;
++}
+ static void virtio_snd_pcm_out_cb(void *data, int available);
+ static void virtio_snd_process_cmdq(VirtIOSound *s);
+ static void virtio_snd_pcm_flush(VirtIOSoundPCMStream *stream);
+@@ -467,6 +479,21 @@
+     stream->positions[1] = VIRTIO_SND_CHMAP_FR;
+     stream->as = as;
+ 
++    if (winq_snd_diag()) {
++        /* IL FORMATO CON CUI SI APRE LA VOCE VERSO L'HOST. Il guest manda
++         * SET_PARAMS una volta sola e poi ripete PREPARE una ventina di volte:
++         * ogni apertura riusa i parametri memorizzati. Se quei parametri non
++         * sono quelli dello stream che sta davvero suonando, l'host consuma al
++         * ritmo sbagliato e il throughput cala della stessa proporzione --
++         * 16000 invece di 48000 fa esattamente il terzo che si misura. Questa
++         * riga e' l'unico modo di sapere quale rate viene usato per davvero. */
++        error_report("winq-snd: PREPARE stream %u: %d Hz, %d canali, "
++                     "period=%u byte, buffer=%u byte",
++                     stream_id, as.freq, as.nchannels,
++                     le32_to_cpu(params->period_bytes),
++                     le32_to_cpu(params->buffer_bytes));
++    }
++
+     if (stream->info.direction == VIRTIO_SND_D_OUTPUT) {
+         stream->voice.out = audio_be_open_out(s->audio_be,
+                                          stream->voice.out,
+@@ -720,6 +747,17 @@
+         cmd->resp.code = cpu_to_le32(VIRTIO_SND_S_BAD_MSG);
+     }
+ 
++    if (winq_snd_diag()) {
++        /* La RISPOSTA, non solo la domanda: senza questa riga si vede il guest
++         * che chiede PREPARE e non si sa se il dispositivo abbia accettato. */
++        uint32_t r = le32_to_cpu(cmd->resp.code);
++        error_report("winq-snd: comando %"PRIu32" -> risposta %"PRIu32" (%s)",
++                     code, r,
++                     r == VIRTIO_SND_S_OK ? "OK" :
++                     r == VIRTIO_SND_S_BAD_MSG ? "BAD_MSG" :
++                     r == VIRTIO_SND_S_NOT_SUPP ? "NOT_SUPP" :
++                     r == VIRTIO_SND_S_IO_ERR ? "IO_ERR" : "?");
++    }
+     iov_from_buf(cmd->elem->in_sg,
+                  cmd->elem->in_num,
+                  0,
+@@ -863,6 +901,10 @@
+         return;
+     }
+     trace_virtio_snd_handle_tx_xfer();
++    if (winq_snd_diag()) {
++        static unsigned long kick;
++        error_report("winq-snd: il guest ha bussato sulla coda TX (#%lu)", ++kick);
++    }
+ 
+     for (;;) {
+         VirtIOSoundPCMStream *stream;
+@@ -905,6 +947,36 @@
+ 
+             QSIMPLEQ_INSERT_TAIL(&stream->queue, buffer, entry);
+         }
++
++        /* Passo 3: QUANDO IL GUEST CONSEGNA UN PERIODO, e quanto ha tardato.
++         *
++         * Questo e' il punto esatto in cui un periodo del guest entra in QEMU:
++         * prima di qui il dato sta nella memoria condivisa e QEMU non lo ha
++         * ancora visto. Il nominale e' 21 ms (1024 frame a 48 kHz), quindi un
++         * intervallo molto oltre quel valore e' una consegna in ritardo.
++         *
++         * Sta qui e non in out_cb perche' out_cb misura quando QEMU CONSUMA la
++         * propria coda interna, che e' un'altra cosa: se il guest e' in ritardo
++         * ma QEMU aveva scorta, out_cb non se ne accorge. Un lotto di piu'
++         * periodi consegnati in una sola bussata produce un solo gap grande,
++         * seguito da gap quasi nulli: e' cio' che si vuole, il gap grande
++         * segna il vuoto.
++         *
++         * Limite noto: l'istante e' quando QEMU se ne accorge. Se una bussata
++         * viene soppressa, il SOCCORSO in out_cb raccoglie entro ~4 ms e passa
++         * di qui, quindi l'errore resta dentro quell'ordine di grandezza. */
++        if (winq_ev_attivo()) {
++            static int64_t winq_precedente;
++            int64_t winq_ora = g_get_monotonic_time();
++
++            if (winq_precedente &&
++                winq_ora - winq_precedente > winq_ev_soglia_us()) {
++                error_report("winq-ev: snd-guest mono=%" PRId64
++                             " gap=%" PRId64,
++                             winq_ora, winq_ora - winq_precedente);
++            }
++            winq_precedente = winq_ora;
++        }
+         continue;
+ 
+ tx_err:
+@@ -1134,7 +1206,29 @@
+     virtqueue_push(buffer->vq,
+                    buffer->elem,
+                    sizeof(virtio_snd_pcm_status));
+-    virtio_notify(VIRTIO_DEVICE(stream->s), buffer->vq);
++    if (winq_snd_diag()) {
++        /* winq: quanto costa restituire un buffer al guest. virtio_notify
++         * passa da WHPX per iniettare l'interruzione, e se costa millisecondi
++         * bastano 2 buffer a battito per mangiarsi i 18 ms che rallentano il
++         * timer audio da 400 a 47 Hz. Aggregato al secondo per non pesare. */
++        static int64_t winq_inizio;
++        static unsigned long winq_resi, winq_costo;
++        int64_t winq_t0 = g_get_monotonic_time();
++
++        virtio_notify(VIRTIO_DEVICE(stream->s), buffer->vq);
++        winq_costo += g_get_monotonic_time() - winq_t0;
++        winq_resi++;
++        if (!winq_inizio) {
++            winq_inizio = winq_t0;
++        } else if (winq_t0 - winq_inizio >= 1000000) {
++            error_report("winq-notify/s: buffer_resi=%lu costo_medio=%lu us",
++                         winq_resi, winq_costo / winq_resi);
++            winq_inizio = winq_t0;
++            winq_resi = winq_costo = 0;
++        }
++    } else {
++        virtio_notify(VIRTIO_DEVICE(stream->s), buffer->vq);
++    }
+     QSIMPLEQ_REMOVE(&stream->queue,
+                     buffer,
+                     VirtIOSoundPCMBuffer,
+@@ -1148,12 +1242,172 @@
+  * @data: VirtIOSoundPCMStream stream
+  * @available: number of bytes that can be written with audio_be_write()
+  */
++/* Diagnostica temporanea, dietro WINQ_SND_DIAG: dice se questa callback viene
++ * chiamata, con quanto spazio, e cosa trova in coda. Serve a distinguere "il
++ * sottosistema audio non chiede dati" da "la coda del guest e' vuota". */
++static bool winq_snd_diag(void)
++{
++    static int stato = -1;
++    if (stato < 0) {
++        const char *v = getenv("WINQ_SND_DIAG");
++        stato = (v && *v && *v != '0') ? 1 : 0;
++    }
++    return stato == 1;
++}
++
++/* winq: EVENTI CON ORARIO, dietro WINQ_EVENTI, spenti di serie. Il contatore
++ * al secondo qui sopra dice quanti byte il guest ha consegnato in un secondo;
++ * non dice se dentro quel secondo c'e' stato un vuoto di 30 ms. Il jitter
++ * misurato nel guest (max=61,6 ms con media 0,03) e' esattamente il caso in cui
++ * la somma sta bene e l'istante sta male. Statica per il controllo
++ * dell'ambiente: a regime costa un confronto fra interi. */
++static bool winq_ev_attivo(void)
++{
++    static int stato = -1;
++
++    if (stato < 0) {
++        const char *v = getenv("WINQ_EVENTI");
++
++        stato = (v && *v && *v != '0') ? 1 : 0;
++    }
++    return stato == 1;
++}
++
++static int64_t winq_ev_soglia_us(void)
++{
++    static int64_t soglia;
++
++    if (!soglia) {
++        const char *v = getenv("WINQ_EVENTI_SOGLIA_US");
++        int n = v ? atoi(v) : 0;
++
++        soglia = n > 0 ? n : 4000;
++    }
++    return soglia;
++}
++
+ static void virtio_snd_pcm_out_cb(void *data, int available)
+ {
+     VirtIOSoundPCMStream *stream = data;
+     VirtIOSoundPCMBuffer *buffer;
+     size_t size;
+ 
++    if (winq_snd_diag()) {
++        /* Contatori AL SECONDO, uno per stadio della catena: senza, si
++         * confrontano numeri raccolti su finestre diverse e si conclude a caso.
++         * Il riferimento e' 192000 byte al secondo (48 kHz, 2 canali, 16 bit). */
++        static int64_t inizio;
++        static unsigned long chiamate, byte_scritti, zeri, disponibile_tot;
++        int64_t ora = g_get_monotonic_time();
++
++        chiamate++;
++        disponibile_tot += (unsigned)available;
++        if (!inizio) {
++            inizio = ora;
++        } else if (ora - inizio >= 1000000) {
++            /* LE DUE CODE, e perche' vanno guardate insieme. coda_qemu e' cio'
++             * che questo device ha gia' raccolto; virtqueue e' cio' che il
++             * guest ha messo in memoria condivisa. Se la virtqueue e' PIENA
++             * mentre coda_qemu e' vuota, il guest ha spedito e QEMU non se
++             * n'e' accorto: notifica persa, e non si riprende mai, perche'
++             * out_cb drena solo la coda interna e non ricontrolla mai la
++             * virtqueue. Se sono vuote entrambe, il guest non ha spedito
++             * niente e il difetto e' nel driver. E' l'unico bivio rimasto. */
++            VirtQueue *vq_tx = stream->s->queues[VIRTIO_SND_VQ_TX];
++
++            error_report("winq-snd/s: out_cb=%lu byte=%lu (%lu%% dei 192000 "
++                         "che servono) write_zero=%lu available_medio=%lu "
++                         "coda_qemu=%s virtqueue=%s",
++                         chiamate, byte_scritti, byte_scritti * 100 / 192000,
++                         zeri, chiamate ? disponibile_tot / chiamate : 0,
++                         QSIMPLEQ_EMPTY(&stream->queue) ? "vuota" : "PIENA",
++                         virtio_queue_empty(vq_tx) ? "vuota" : "PIENA");
++            inizio = ora;
++            chiamate = byte_scritti = zeri = disponibile_tot = 0;
++        }
++        winq_snd_conta(&byte_scritti, &zeri);
++    }
++
++    /* winq: IL SOCCORSO, che e' insieme la sonda e il rimedio candidato.
++     * Fotografato in flagrante: stream RUNNING nel guest, appl_ptr pieno,
++     * hw_ptr fermo a 0, ed entrambe le code qui sotto vuote -- ma i messaggi
++     * del guest stanno nell'anello avail della virtqueue e NESSUNO li ha mai
++     * raccolti, perche' handle_tx_xfer viene chiamato solo alla bussata e la
++     * bussata non e' arrivata (soppressa da event-idx o persa). Questo
++     * blocco, chiamato ~250 volte al secondo a stream attivo, controlla la
++     * virtqueue e raccoglie cio' che trova: se il difetto e' il kick perso,
++     * l'audio riparte da solo entro 4 ms e la riga SOCCORSO lo dimostra.
++     * Gira sotto BQL come la bussata vera, quindi niente corse nuove. */
++    if (stream->active && QSIMPLEQ_EMPTY(&stream->queue)) {
++        VirtQueue *vq_tx = stream->s->queues[VIRTIO_SND_VQ_TX];
++
++        if (!virtio_queue_empty(vq_tx)) {
++            if (winq_snd_diag()) {
++                static unsigned long soccorsi;
++                error_report("winq-snd: SOCCORSO #%lu: la virtqueue ha dati "
++                             "ma nessuna bussata e' arrivata -- raccolgo",
++                             ++soccorsi);
++            }
++            virtio_snd_handle_tx_xfer(VIRTIO_DEVICE(stream->s), vq_tx);
++        }
++    }
++
++    /* winq: IL BOCCONE MASSIMO, e perche' senza di esso non esiste un buffer
++     * host buono.
++     *
++     * MISURATO all'uscita della scheda (loopback WASAPI, 30 s con Spotify):
++     * 7 silenzi da 5 a 29 ms, ZERO blocchi ripetuti. Sono underrun: il buffer
++     * verso l'host si svuota mentre il ciclo principale e' fermo dentro
++     * VIRTIO_GPU_CMD_SUBMIT_3D, che blocca 15 ms tipici e fino a 88 nei casi
++     * peggiori. La lunghezza dei buchi coincide con quegli stalli.
++     *
++     * Il guaio e' che i due rimedi ovvi si annullano:
++     *   buffer host GRANDE  copre lo stallo, ma out_cb svuota in un colpo
++     *                       l'anello del guest, che e' di soli 21 ms, e il
++     *                       guest va in XRUN (misurato: a 200 ms il throughput
++     *                       crolla da 50-80% a 25-29%)
++     *   buffer host PICCOLO non svuota il guest ma non copre lo stallo
++     *                       (misurato: a 15 ms l'ascolto peggiora nettamente)
++     *
++     * Sono due vincoli su due scorte quasi uguali, e nessun singolo valore li
++     * soddisfa entrambi. Qui si spezza il legame: si tiene il buffer host
++     * grande e si limita quanto se ne riempie PER CHIAMATA, cosi' l'anello del
++     * guest non viene mai prosciugato.
++     *
++     * L'unita' e' il PERIODO DEL GUEST, non i byte ne' i millisecondi: e'
++     * quello che il guest ha dichiarato in SET_PARAMS, quindi il limite resta
++     * giusto in proporzione qualunque formato negozi. Con 4 periodi
++     * nell'anello, prenderne 2 per chiamata lascia sempre meta' scorta.
++     *
++     * PROVATO E SPENTO DI SERIE. Misurato all'uscita con 2 periodi e buffer
++     * host da 200 ms: 11 silenzi per 1712 ms (5,71%) contro i 7 per 93 ms
++     * (0,31%) del comportamento originale, e ogni buco lungo ~150 ms invece
++     * di 5-30. Il ragionamento era sbagliato: il limite impedisce a QEMU di
++     * RECUPERARE dopo uno stallo, e dopo un blocco da 88 ms serve proprio un
++     * boccone grande per rimettersi in pari. Tolta la capacita' di recupero,
++     * la caduta si allunga invece di sparire. Si accende con
++     * WINQ_SND_BOCCONE_PERIODI, ma non risolve. */
++    {
++        static int winq_periodi = -1;
++        uint32_t periodo = le32_to_cpu(stream->params.period_bytes);
++
++        if (winq_periodi < 0) {
++            const char *v = getenv("WINQ_SND_BOCCONE_PERIODI");
++
++            winq_periodi = v ? atoi(v) : 0;
++            if (winq_periodi < 0) {
++                winq_periodi = 0;
++            }
++        }
++        if (winq_periodi > 0 && periodo > 0) {
++            int massimo = (int)periodo * winq_periodi;
++
++            if (available > massimo) {
++                available = massimo;
++            }
++        }
++    }
++
+     WITH_QEMU_LOCK_GUARD(&stream->queue_mutex) {
+         while (!QSIMPLEQ_EMPTY(&stream->queue)) {
+             buffer = QSIMPLEQ_FIRST(&stream->queue);
+@@ -1178,6 +1432,10 @@
+                                  stream->voice.out,
+                                  buffer->data + buffer->offset,
+                                  MIN(buffer->size, available));
++                winq_snd_byte += size;
++                if (size == 0) {
++                    winq_snd_zeri++;
++                }
+                 assert(size <= MIN(buffer->size, available));
+                 if (size == 0) {
+                     /* break out of both loops */
+--- a/audio/audio-mixeng-be.c
++++ b/audio/audio-mixeng-be.c
+@@ -43,6 +43,66 @@
+ #endif
+ };
+ 
++/* winq: EVENTI CON ORARIO, dietro WINQ_EVENTI, spenti di serie.
++ *
++ * Le diagnostiche di questo file aggregano al secondo, e proprio per questo
++ * non hanno chiuso la questione: dicono che il motore consuma 48000 frame al
++ * secondo e che il timer gira regolare, mentre in cuffia si sentono buchi da
++ * 5 a 30 ms. Una media sana e una coda cattiva convivono benissimo. Qui si
++ * emette UN evento per anomalia con l'istante monotono, cosi' che si possa
++ * dire, per ciascun buco registrato all'uscita di Windows, chi era in ritardo
++ * in QUELL'istante.
++ *
++ * Il controllo dell'ambiente sta in una statica: a regime, con WINQ_EVENTI
++ * assente, il costo per battito e' un confronto fra interi. */
++static bool winq_ev_attivo(void)
++{
++    static int stato = -1;
++
++    if (stato < 0) {
++        const char *v = getenv("WINQ_EVENTI");
++
++        stato = (v && *v && *v != '0') ? 1 : 0;
++    }
++    return stato == 1;
++}
++
++static int64_t winq_ev_soglia_us(void)
++{
++    static int64_t soglia;
++
++    if (!soglia) {
++        const char *v = getenv("WINQ_EVENTI_SOGLIA_US");
++        int n = v ? atoi(v) : 0;
++
++        soglia = n > 0 ? n : 4000;
++    }
++    return soglia;
++}
++
++/* Passo 1: L'ORIGINE DEI TEMPI, e perche' senza di essa il resto non serve.
++ *
++ * Gli eventi riportano g_get_monotonic_time(), che e' economico ma non ha
++ * significato fuori dal processo. Il registratore in loopback timbra i propri
++ * pacchetti con l'orologio della macchina. Serve UNA riga che leghi i due, e
++ * una sola: emetterla a ogni evento costerebbe una lettura dell'ora di sistema
++ * per niente.
++ *
++ * Sta qui e non nei file della grafica perche' il timer audio e' l'unica cosa
++ * che gira sicuramente durante una misura dell'audio; gli eventi degli altri
++ * file usano lo stesso orologio monotono di processo, quindi una sola origine
++ * li data tutti. */
++static void winq_ev_origine(void)
++{
++    static bool fatto;
++
++    if (!fatto) {
++        fatto = true;
++        error_report("winq-ev: origine mono=%" PRId64 " unix_ms=%" PRId64,
++                     g_get_monotonic_time(), g_get_real_time() / 1000);
++    }
++}
++
+ /*
+  * Convert audio format to mixeng_clip index. Used by audio_pcm_sw_init_ and
+  * audio_mixeng_backend_add_capture()
+@@ -617,7 +677,35 @@
+     }
+     s->timer_last = now;
+ 
+-    audio_run(s, "timer");
++    if (winq_ev_attivo()) {
++        winq_ev_origine();
++    }
++
++    /* winq: quanto costa UN giro del gestore. Il timer e' armato a 2,5 ms ma
++     * quando l'audio scorre gira a ~47 Hz: 1/(2,5ms + T) = 47/s da' T = 18 ms
++     * di lavoro per battito. Questo cronometro dice se T sta qui dentro e
++     * quanto vale davvero; il sospetto (virtio_notify via WHPX) si misura
++     * nell'altro capo, in hw/audio/virtio-snd.c. */
++    if (getenv("WINQ_SND_DIAG")) {
++        static int64_t winq_inizio;
++        static unsigned long winq_n, winq_costo;
++        int64_t winq_t0 = g_get_monotonic_time();
++
++        audio_run(s, "timer");
++        winq_costo += g_get_monotonic_time() - winq_t0;
++        winq_n++;
++        if (!winq_inizio) {
++            winq_inizio = winq_t0;
++        } else if (winq_t0 - winq_inizio >= 1000000) {
++            error_report("winq-timer/s: giri=%lu costo_medio=%lu us "
++                         "(armato a 2500 us)",
++                         winq_n, winq_costo / winq_n);
++            winq_inizio = winq_t0;
++            winq_n = winq_costo = 0;
++        }
++    } else {
++        audio_run(s, "timer");
++    }
+     audio_reset_timer(s);
+ }
+ 
+@@ -919,6 +1007,45 @@
+         size_t hw_free = audio_pcm_hw_get_free(hw);
+         int nb_live;
+ 
++        /* Passo 4: IL PUNTO CHE NESSUNA MISURA PRECEDENTE HA GUARDATO.
++         *
++         * Qui QEMU alimenta il buffer di DirectSound, che e' lungo 30 ms
++         * (out.buffer-length=30000 in app/guscio/vm.c) e viene rifornito da
++         * un timer armato a 2500 us. Due cose possono bucare l'altoparlante
++         * senza che ne' la grafica ne' il guest c'entrino:
++         *
++         *   gap     fra due alimentazioni passa piu' del dovuto, cioe' il
++         *           ciclo principale non e' arrivato in tempo. Attenzione: un
++         *           gap grande lo produce anche un blocco della grafica, ma
++         *           quello si vede nella colonna gpu; se il gap c'e' e la gpu
++         *           no, il ritardo e' del percorso host (scheduling del
++         *           processo, DirectSound, mixeng).
++         *   libero  quanto spazio c'era nel buffer host. Se e' quasi tutto
++         *           libero, l'altoparlante ha finito i dati: il buco e' nato
++         *           qui, a valle sia del guest sia della grafica. E' la sola
++         *           lettura diretta del prosciugamento, e nessuna delle
++         *           misure aggregate di prima la conteneva.
++         *
++         * La statica del gap non e' per voce: con una sola voce di uscita
++         * attiva -- il caso reale -- coincide, e con piu' voci resterebbe un
++         * intervallo fra passaggi del ciclo, che e' comunque cio' che conta. */
++        if (winq_ev_attivo()) {
++            static int64_t winq_precedente;
++            int64_t winq_ora = g_get_monotonic_time();
++            size_t winq_libero = hw_free * hw->info.bytes_per_frame;
++            size_t winq_totale = hw->samples * hw->info.bytes_per_frame;
++            int64_t winq_gap = winq_precedente ? winq_ora - winq_precedente : 0;
++            bool winq_prosciugato = winq_totale &&
++                                    winq_libero * 10 >= winq_totale * 9;
++
++            if (winq_precedente &&
++                (winq_gap > winq_ev_soglia_us() || winq_prosciugato)) {
++                error_report("winq-ev: snd-host mono=%" PRId64 " gap=%" PRId64
++                             " libero=%zu", winq_ora, winq_gap, winq_libero);
++            }
++            winq_precedente = winq_ora;
++        }
++
+         if (!audio_get_pdo_out(s->dev)->mixing_engine) {
+             /* there is exactly 1 sw for each hw with no mixeng */
+             sw = hw->sw_head.lh_first;
+@@ -999,6 +1126,39 @@
+         prev_rpos = hw->mix_buf.pos;
+         played = audio_pcm_hw_run_out(hw, live);
+         replay_audio_out(&played);
++
++        /* winq: il conto del motore, una riga al secondo (WINQ_SND_DIAG=1).
++         * Il guest produce al 30% del tempo reale con QUALSIASI backend,
++         * incluso "none" che non puo' fare da tappo, quindi il fattore 5
++         * sta in uno di questi numeri:
++         *   battiti  quante volte al secondo gira questo ciclo con dati vivi
++         *   free     spazio medio che il backend dichiara (in frame)
++         *   live     frame in attesa nel mix buffer a ogni giro
++         *   played   frame CONSUMATI al secondo: e' il clock vero dell'audio,
++         *            48000 = tempo reale, 14000 = il 30% che si misura
++         * Confrontare played con free*battiti dice se il limite e' il
++         * consumo del backend o l'alimentazione dal guest. */
++        if (getenv("WINQ_SND_DIAG")) {
++            static int64_t winq_inizio;
++            static unsigned long winq_giri, winq_free, winq_live, winq_played;
++            int64_t winq_ora = g_get_monotonic_time();
++
++            winq_giri++;
++            winq_free += hw_free;
++            winq_live += live;
++            winq_played += played;
++            if (!winq_inizio) {
++                winq_inizio = winq_ora;
++            } else if (winq_ora - winq_inizio >= 1000000) {
++                error_report("winq-mix/s: battiti=%lu free_medio=%lu "
++                             "live_medio=%lu played=%lu (%lu%% di 48000)",
++                             winq_giri, winq_free / winq_giri,
++                             winq_live / winq_giri, winq_played,
++                             winq_played * 100 / 48000);
++                winq_inizio = winq_ora;
++                winq_giri = winq_free = winq_live = winq_played = 0;
++            }
++        }
+         if (hw->mix_buf.pos >= hw->mix_buf.size) {
+             audio_bug("hw->mix_buf.pos=%zu hw->mix_buf.size=%zu played=%zu",
+                       hw->mix_buf.pos, hw->mix_buf.size, played);
+--- a/hw/display/virtio-gpu-gl.c
++++ b/hw/display/virtio-gpu-gl.c
+@@ -61,6 +61,43 @@
+     virtio_gpu_process_cmdq(g);
+ }
+ 
++/* winq: EVENTI CON ORARIO, dietro WINQ_EVENTI, spenti di serie.
++ *
++ * Perche' accanto a winq-gpu/s e non invece di esso. La diagnostica al secondo
++ * dice quanto costa la grafica in media e qual e' il peggior blocco del
++ * secondo, ma non dice QUANDO. Due misure aggregate che si contraddicono --
++ * peggior_blocco fra 1,5 e 7,7 ms contro buchi da 29,5 ms all'altoparlante --
++ * non si risolvono aggregando meglio: serve l'istante di ogni blocco, per
++ * vedere se cade dentro la finestra di un buco registrato oppure no. Quindi
++ * qui si EMETTE l'evento, non si aggrega.
++ *
++ * Il controllo dell'ambiente sta in una statica: a regime, con WINQ_EVENTI
++ * assente, il costo per giro e' un confronto fra interi. */
++static bool winq_ev_attivo(void)
++{
++    static int stato = -1;
++
++    if (stato < 0) {
++        const char *v = getenv("WINQ_EVENTI");
++
++        stato = (v && *v && *v != '0') ? 1 : 0;
++    }
++    return stato == 1;
++}
++
++static int64_t winq_ev_soglia_us(void)
++{
++    static int64_t soglia;
++
++    if (!soglia) {
++        const char *v = getenv("WINQ_EVENTI_SOGLIA_US");
++        int n = v ? atoi(v) : 0;
++
++        soglia = n > 0 ? n : 4000;
++    }
++    return soglia;
++}
++
+ static void virtio_gpu_gl_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
+ {
+     VirtIOGPU *g = VIRTIO_GPU(vdev);
+@@ -83,6 +120,75 @@
+         cmd = virtqueue_pop(vq, sizeof(struct virtio_gpu_ctrl_command));
+     }
+ 
++    /* winq: QUANTO COSTA LA GRAFICA AL CICLO PRINCIPALE, dietro WINQ_SND_DIAG.
++     * Con Spotify che lavora il timer audio scende da 285 a 80 giri al secondo
++     * e l'audio gracchia, ma ne' la presentazione (0-2 ms/s) ne' il timer
++     * stesso (~50 ms/s) spiegano il buco. Questi comandi Venus girano sullo
++     * STESSO thread del timer audio: se il tempo mancante e' qui, l'audio non
++     * si aggiusta con il buffer e la strada e' togliere la grafica da qui.
++     * Il ramo utile e' questo, non virtio_gpu_handle_ctrl: la classe GL
++     * sovrascrive handle_ctrl e quello di base non viene mai chiamato. */
++    if (getenv("WINQ_SND_DIAG")) {
++        static int64_t winq_inizio;
++        static unsigned long winq_giri, winq_cmd, winq_fence, winq_peggio;
++        int64_t winq_t0 = g_get_monotonic_time();
++        int64_t winq_t1;
++        unsigned long winq_questo;
++
++        /* Le due meta' separate: sottomettere i comandi e raccogliere le fence
++         * si riparano in modi diversi. Se il tempo sta in cmdq, dentro c'e' una
++         * chiamata sincrona al driver Vulkan e va resa asincrona; se sta in
++         * fence_poll, si sta aspettando la GPU e quell'attesa va tolta da qui.
++         * "peggio" e' il singolo blocco piu' lungo del secondo: e' quello che
++         * buca l'audio, non la media. */
++        virtio_gpu_process_cmdq(g);
++        winq_t1 = g_get_monotonic_time();
++        virtio_gpu_virgl_fence_poll(g);
++
++        winq_questo = (unsigned long)(g_get_monotonic_time() - winq_t0);
++        winq_cmd += (unsigned long)(winq_t1 - winq_t0);
++        winq_fence += (unsigned long)(g_get_monotonic_time() - winq_t1);
++        if (winq_questo > winq_peggio) {
++            winq_peggio = winq_questo;
++        }
++        /* Passo 2: l'evento, con l'istante d'inizio. Non sostituisce il
++         * conteggio qui sopra, gli sta accanto. */
++        if (winq_ev_attivo() &&
++            (int64_t)winq_questo > winq_ev_soglia_us()) {
++            error_report("winq-ev: gpu mono=%" PRId64 " dur=%lu",
++                         winq_t0, winq_questo);
++        }
++        winq_giri++;
++        if (!winq_inizio) {
++            winq_inizio = winq_t0;
++        } else if (winq_t0 - winq_inizio >= 1000000) {
++            error_report("winq-gpu/s: giri=%lu cmdq=%lu us fence=%lu us "
++                         "peggior_blocco=%lu us (totale %lu ms al secondo)",
++                         winq_giri, winq_cmd / winq_giri,
++                         winq_fence / winq_giri, winq_peggio,
++                         (winq_cmd + winq_fence) / 1000);
++            winq_inizio = winq_t0;
++            winq_giri = winq_cmd = winq_fence = winq_peggio = 0;
++        }
++        return;
++    }
++
++    /* Gli eventi devono funzionare anche senza WINQ_SND_DIAG, altrimenti la
++     * misura sarebbe possibile solo con l'aggregazione accesa. */
++    if (winq_ev_attivo()) {
++        int64_t winq_t0 = g_get_monotonic_time();
++        int64_t winq_dur;
++
++        virtio_gpu_process_cmdq(g);
++        virtio_gpu_virgl_fence_poll(g);
++        winq_dur = g_get_monotonic_time() - winq_t0;
++        if (winq_dur > winq_ev_soglia_us()) {
++            error_report("winq-ev: gpu mono=%" PRId64 " dur=%" PRId64,
++                         winq_t0, winq_dur);
++        }
++        return;
++    }
++
+     virtio_gpu_process_cmdq(g);
+     virtio_gpu_virgl_fence_poll(g);
+ }
+--- a/hw/display/virtio-gpu.c
++++ b/hw/display/virtio-gpu.c
+@@ -1054,6 +1054,47 @@
+     if (g->processing_cmdq) {
+         return;
+     }
++    /* winq: IL RESPIRO. Quanti microsecondi al massimo questo ciclo puo'
++     * tenere il thread principale prima di cedere il passo.
++     *
++     * PERCHE'. VIRTIO_GPU_CMD_SUBMIT_3D (0x207) costa 3-4 ms per chiamata --
++     * e' Venus che passa per Mesa e il driver D3D12 di Qualcomm, e non
++     * possiamo renderla piu' veloce. Ne arrivano ~114 al secondo, in lotti:
++     * un lotto da dieci tiene il thread per 40-55 ms di fila. Su quello stesso
++     * thread c'e' il timer audio di QEMU, e il buffer verso Windows ha 30 ms
++     * di scorta: dopo 30 ms senza essere alimentato va a secco, il guest va in
++     * XRUN e si sente il gracchio.
++     *
++     * Non serve che la grafica sia piu' veloce, serve che non tenga il thread
++     * senza interruzioni. Superato il tempo concesso si esce e si riaccoda il
++     * bottom half: i comandi rimasti si fanno al giro dopo, DOPO che il ciclo
++     * principale ha fatto girare i timer. La grafica perde qualche frazione di
++     * millisecondo di latenza, l'audio smette di andare a secco.
++     *
++     * SPENTO DI SERIE, e perche'. Con 8000 us le medie migliorano molto --
++     * jitter di scrittura di AudioFlinger da 29 a 13,8 ms, throughput da
++     * 36-51% a 60-71% -- ma il gracchio si sente uguale, giudicato
++     * all'orecchio il 02/08/2026. Il motivo e' nella coda, non nella media:
++     * il picco del jitter resta 146 ms, perche' esistono singole SUBMIT_3D
++     * che durano quanto un lotto intero e il controllo sta FRA un comando e
++     * l'altro, non dentro. Un miglioramento che non si sente non vale un
++     * cambio di comportamento di serie: si accende con
++     * WINQ_GPU_RESPIRO_US=8000 quando serve il throughput.
++     */
++    static int winq_respiro_us = -1;
++
++    if (winq_respiro_us < 0) {
++        const char *v = getenv("WINQ_GPU_RESPIRO_US");
++
++        winq_respiro_us = v ? atoi(v) : 0;
++        if (winq_respiro_us < 0) {
++            winq_respiro_us = 0;
++        }
++    }
++
++    int64_t winq_scadenza = winq_respiro_us
++        ? g_get_monotonic_time() + winq_respiro_us : 0;
++
+     g->processing_cmdq = true;
+     while (!QTAILQ_EMPTY(&g->cmdq)) {
+         cmd = QTAILQ_FIRST(&g->cmdq);
+@@ -1062,8 +1103,61 @@
+             break;
+         }
+ 
++        if (winq_scadenza && g_get_monotonic_time() >= winq_scadenza) {
++            /* Tempo scaduto: il resto al giro dopo, cosi' i timer respirano. */
++            qemu_bh_schedule(g->ctrl_bh);
++            break;
++        }
++
+         /* process command */
+-        vgc->process_cmd(g, cmd);
++        /* winq: QUALE COMANDO BLOCCA, dietro WINQ_SND_DIAG.
++         * La sottomissione costa 14 ms per lotto contro 0,7 della raccolta
++         * fence, quindi il tempo e' qui dentro. Il tipo di comando decide la
++         * cura: un flush che aspetta la presentazione si puo' spostare, una
++         * submit_3d sincrona verso il driver Vulkan no. Si stampano solo i
++         * tipi che in un secondo superano il millesimo, cioe' quelli che
++         * bucano l'audio. Il tipo e' il codice virtio (0x1xx / 0x2xx). */
++        if (getenv("WINQ_SND_DIAG")) {
++            /* I comandi virtio-gpu stanno su due blocchi: 0x1xx per il 2D e
++             * 0x2xx per il 3D. Mascherare con & 63 li fa collidere e produce
++             * tipi inesistenti: qui si tiene il valore vero, 512 caselle. */
++            static int64_t winq_inizio;
++            static unsigned long winq_us[1024], winq_n[1024];
++            int64_t winq_t0 = g_get_monotonic_time();
++            uint32_t winq_tipo;
++            unsigned winq_i;
++
++            vgc->process_cmd(g, cmd);
++
++            /* Il tipo si legge DOPO: cmd->cmd_hdr viene riempito da
++             * VIRTIO_GPU_FILL_CMD dentro process_cmd, e prima della chiamata
++             * contiene memoria non inizializzata -- letto prima dava tipi
++             * plausibili ma inventati. */
++            winq_tipo = cmd->cmd_hdr.type;
++            winq_i = winq_tipo < 1024 ? winq_tipo : 1023;
++
++            winq_us[winq_i] += (unsigned long)(g_get_monotonic_time() - winq_t0);
++            winq_n[winq_i]++;
++            if (!winq_inizio) {
++                winq_inizio = winq_t0;
++            } else if (winq_t0 - winq_inizio >= 1000000) {
++                unsigned winq_k;
++
++                for (winq_k = 0; winq_k < 1024; winq_k++) {
++                    if (winq_us[winq_k] >= 1000) {
++                        error_report("winq-cmd/s: tipo 0x%03x: %lu volte, "
++                                     "%lu us in tutto, %lu us l'una",
++                                     winq_k, winq_n[winq_k], winq_us[winq_k],
++                                     winq_us[winq_k] / winq_n[winq_k]);
++                    }
++                    winq_us[winq_k] = 0;
++                    winq_n[winq_k] = 0;
++                }
++                winq_inizio = winq_t0;
++            }
++        } else {
++            vgc->process_cmd(g, cmd);
++        }
+ 
+         /* command suspended */
+         if (!cmd->finished && !(cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_FENCE)) {
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -631,7 +631,64 @@
+         g->stats.bytes_3d += cs.size;
+     }
+ 
+-    virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++    /* winq: LASCIARE IL LOCK GLOBALE DURANTE LA SOTTOMISSIONE A VENUS.
++     *
++     * PERCHE'. Misurato: questa chiamata costa 4 ms in media e fino a 88 nei
++     * casi peggiori, 114 volte al secondo, e gira sul thread principale
++     * tenendo il BQL. Sullo stesso thread c'e' il timer audio di QEMU, e il
++     * buffer verso la scheda ha 30 ms di scorta: quando la chiamata supera
++     * quella finestra il buffer si svuota. Registrando l'uscita degli
++     * altoparlanti in loopback si contano 7 silenzi da 5-30 ms in 30 s, con
++     * ZERO frammenti ripetuti: sono underrun, e la loro durata coincide con
++     * questi blocchi.
++     *
++     * Non si puo' rendere veloce la chiamata -- e' Venus che passa per Mesa e
++     * il driver D3D12 di Qualcomm -- ma non deve tenere fermo tutto il resto.
++     *
++     * PERCHE' QUI E' RAGIONEVOLE. buf e' una copia privata gia' estratta dagli
++     * iov (g_malloc + iov_to_buf poco sopra): durante la chiamata non si legge
++     * memoria del guest ne' si tocca la virtqueue. L'unico stato condiviso e'
++     * l'interno di virglrenderer.
++     *
++     * IL RISCHIO, dichiarato. Se virglrenderer richiama QEMU dall'interno di
++     * submit_cmd -- le callback delle fence toccano g->fenceq e rispondono
++     * sulla virtqueue -- quel codice girerebbe senza BQL. In condizioni normali
++     * le fence arrivano da virgl_renderer_poll, che sta altrove e mantiene il
++     * lock. Per questo la cosa e' SPENTA di serie: si accende con
++     * WINQ_GPU_SENZA_BQL=1 per misurare, e si spedisce solo se la misura
++     * regge e non compaiono corse.
++     *
++     * MISURATO IL 04/08/2026, E NON REGGE. Due corse indipendenti con
++     * WINQ_GPU_SENZA_BQL=1: la coda dei comandi passa da 550-690 giri al
++     * secondo a 5-10, il costo per giro da 1,2-1,5 ms a 14-18, e il guest NON
++     * COMPLETA L'AVVIO -- oltre quattro minuti contro i trenta secondi
++     * abituali, con adb che non risponde mai. Confermato due volte, perche' un
++     * inchiodamento all'avvio ha in questo guest anche un'altra causa nota.
++     *
++     * La causa e' il rimedio stesso: rilasciare e riprendere il BQL a OGNI
++     * comando trasforma una presa lunga e non contesa in centinaia di
++     * riacquisizioni CONTESE al secondo, con sei vCPU che se lo disputano, e il
++     * ciclo principale perde la corsa quasi sempre.
++     *
++     * Resta spento, e ora per una misura invece che per prudenza. Non
++     * riprovarlo cosi' com'e': il problema non e' il lock, e' che il thread
++     * resta dentro submit_cmd. Numeri in qemu/PRESTAZIONI.md. */
++    {
++        static int winq_senza_bql = -1;
++
++        if (winq_senza_bql < 0) {
++            const char *v = getenv("WINQ_GPU_SENZA_BQL");
++
++            winq_senza_bql = (v && *v == '1') ? 1 : 0;
++        }
++        if (winq_senza_bql && bql_locked()) {
++            bql_unlock();
++            virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++            bql_lock();
++        } else {
++            virgl_renderer_submit_cmd(buf, cs.hdr.ctx_id, cs.size / 4);
++        }
++    }
+ 
+ out:
+     g_free(buf);
+@@ -1163,10 +1220,41 @@
+     }
+ }
+ 
++/* winq: il thread che ha inizializzato virgl, cioe' il ciclo principale.
++ * Riempito in virtio_gpu_virgl_init, letto dalle callback delle fence. */
++static unsigned long winq_thread_principale;
++
++/* winq: QUALE RAMO DI RITIRO DELLE FENCE E' ATTIVO. Non si deduce dai flag
++ * passati a virgl_renderer_init: il fork puo' rispegnere il ramo asincrono da
++ * se' se il thread di sync non nasce (vrend_renderer.c:7773). Contare le
++ * chiamate ai callback e' l'unica prova.
++ *
++ * Il thread va riportato insieme al ramo, perche' se il ramo asincrono e'
++ * attivo ma la callback arriva dal thread principale non si e' guadagnato
++ * niente: il blocco resta dov'era.
++ *
++ * Una riga per callback, alla prima chiamata: serve sapere QUALI si accendono,
++ * non quante volte. Il conteggio non e' atomico ed e' solo diagnostico. */
++static void winq_fence_ramo(const char *ramo, unsigned long *n)
++{
++    if (!getenv("WINQ_SND_DIAG")) {
++        return;
++    }
++    if (++*n == 1) {
++        error_report("winq-fence: ramo %s attivo, thread %lu "
++                     "(principale: %lu)",
++                     ramo, (unsigned long)qemu_get_thread_id(),
++                     winq_thread_principale);
++    }
++}
++
+ static void virgl_write_fence(void *opaque, uint32_t fence)
+ {
+     VirtIOGPU *g = opaque;
+     struct virtio_gpu_ctrl_command *cmd, *tmp;
++    static unsigned long winq_n;
++
++    winq_fence_ramo("SINCRONO", &winq_n);
+ 
+     QTAILQ_FOREACH_SAFE(cmd, &g->fenceq, next, tmp) {
+         /*
+@@ -1197,6 +1285,12 @@
+                                       uint32_t ring_idx, uint64_t fence_id) {
+     VirtIOGPU *g = opaque;
+     struct virtio_gpu_ctrl_command *cmd, *tmp;
++    static unsigned long winq_n;
++
++    /* winq: con venus=on il traffico Vulkan passa da QUI, non da
++     * virgl_write_fence: senza questa riga il ramo attivo si vedrebbe solo per
++     * il traffico GL. */
++    winq_fence_ramo("SINCRONO (context)", &winq_n);
+ 
+     QTAILQ_FOREACH_SAFE(cmd, &g->fenceq, next, tmp) {
+         if (cmd->cmd_hdr.flags & VIRTIO_GPU_FLAG_INFO_RING_IDX &&
+@@ -1299,6 +1393,9 @@
+ static void virgl_write_async_fence(void *opaque, uint32_t fence)
+ {
+     VirtIOGPU *g = opaque;
++    static unsigned long winq_n;
++
++    winq_fence_ramo("ASINCRONO", &winq_n);
+ 
+     virtio_gpu_virgl_push_async_fence(g, 0, UINT32_MAX, fence);
+ }
+@@ -1307,6 +1404,11 @@
+                                             uint32_t ring_idx, uint64_t fence)
+ {
+     VirtIOGPU *g = opaque;
++    static unsigned long winq_n;
++
++    /* winq: con venus=on e' questo, non virgl_write_async_fence, il callback
++     * che ci si aspetta di vedere accendersi. */
++    winq_fence_ramo("ASINCRONO (context)", &winq_n);
+ 
+     virtio_gpu_virgl_push_async_fence(g, ctx_id, ring_idx, fence);
+ }
+@@ -1441,16 +1543,44 @@
+     uint32_t flags = 0;
+     VirtIOGPUGL *gl = VIRTIO_GPU_GL(g);
+ 
++    winq_thread_principale = (unsigned long)qemu_get_thread_id();
++
+ #if VIRGL_RENDERER_CALLBACKS_VERSION >= 4
+     if (qemu_egl_display) {
+         virtio_gpu_3d_cbs.version = 4;
+         virtio_gpu_3d_cbs.get_egl_display = virgl_get_egl_display;
++    }
++#endif
+ #if VIRGL_CHECK_VERSION(1, 1, 2)
++    /* winq: IL RITIRO ASINCRONO DELLE FENCE NON DIPENDE DA EGL, e prima stava
++     * dentro if (qemu_egl_display) -- quindi con gl=wgl non si accendeva mai.
++     * Misurato il 03/08/2026: su WGL il termine "fence" della diagnostica vale
++     * ~1006 us contro 1-2 us su ANGLE, e il ciclo principale passa il 52-80%
++     * del tempo di parete nel gestore grafico con meno del 19% di CPU: sta
++     * aspettando la GPU, col BQL in mano, mentre il timer audio ha un buffer
++     * di 30 ms.
++     *
++     * version RESTA 3 sul percorso WGL: a versione 4 make_current_surfaceless
++     * in virglrenderer.c:687 fa assert se la make-current fallisce, e non si
++     * vuole un abort in un esperimento. Solo version=4 e get_egl_display sono
++     * davvero EGL; i due flag e i due callback asincroni no.
++     *
++     * Nel fork la catena e': ASYNC_FENCE_CB richiede il thread di sync
++     * (vrend_renderer.c:7766-7774), il thread chiama make_current_surfaceless
++     * (riga 7408), e quella senza winsys proprio ricade sul nostro callback
++     * make_current (virglrenderer.c:679-686). Nessun anello vuole EGL.
++     *
++     * Se il thread non nasce, il fork RISPEGNE use_async_fence_cb da se'
++     * (riga 7773) e si torna al sondaggio: il fallimento e' graceful, non
++     * rompe il prodotto. Per questo il tentativo e' a basso rischio.
++     *
++     * WINQ_FENCE_SINCRONE=1 torna al comportamento di prima, per A/B senza
++     * ricostruire. */
++    if (!getenv("WINQ_FENCE_SINCRONE")) {
+         virtio_gpu_3d_cbs.write_fence         = virgl_write_async_fence;
+         virtio_gpu_3d_cbs.write_context_fence = virgl_write_async_context_fence;
+         flags |= VIRGL_RENDERER_ASYNC_FENCE_CB;
+         flags |= VIRGL_RENDERER_THREAD_SYNC;
+-#endif
+     }
+ #endif
+ #ifdef VIRGL_RENDERER_D3D11_SHARE_TEXTURE

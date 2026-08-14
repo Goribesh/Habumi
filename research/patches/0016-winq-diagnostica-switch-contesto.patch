@@ -1,0 +1,469 @@
+From 7f332c6ba253d4ca166ef74d2f63b1091e2872b8 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 17:12:41 +0200
+[PATCH] winq: diagnostica sullo switch di contesto
+ force_ctx_0
+
+Con finestra e thread corretti (giri precedenti), il primo consumatore
+del ciclo principale non e' SUBMIT_3D ma 0x202 CTX_ATTACH_RESOURCE
+(923 us/chiamata, 393/s, 363 ms/s) contro 231 us del detach, pur
+facendo lo stesso lavoro O(1) in tabella hash. Il sospetto dedotto dal
+codice: virgl_renderer_force_ctx_0() (chiamata da QEMU incondizionatamente
+prima di ogni comando) azzera lo stato di virglrenderer prima di
+richiedere lo switch a ctx0, quindi vrend_hw_switch_context() non puo'
+mai prendere la sua scorciatoia per una richiesta arrivata da li'.
+
+vrend_hw_switch_context() prende un parametro origine in piu' (interno
+al fork, non nella API pubblica): WINQ_CTX_FORCE0 per l'unica chiamata
+da vrend_renderer_force_ctx_0(), WINQ_CTX_ALTRO per gli altri quattro
+chiamanti (decodifica, trasferimenti, ripristino dopo distruzione di
+un contesto, reset). vrend_finish_context_switch() restituisce ora se
+ha chiamato davvero make_current(), cosi' il chiamante sa distinguere
+uno switch vero da uno saltato senza una seconda guardia. Contatori
+richiesti/veri/tempo per origine, dietro winq_glspia_accesa() come
+sempre: dedotto dal codice, non ancora misurato.
+---
+ src/test-winq-glspia-conta.c |  77 +++++++++++++++++++++++++
+ src/vrend/vrend_decode.c     |   5 +-
+ src/vrend/vrend_renderer.c   | 105 +++++++++++++++++++++++++++++++----
+ src/vrend/vrend_renderer.h   |   7 ++-
+ src/winq-glspia-conta.c      |  29 ++++++++++
+ src/winq-glspia-conta.h      |  49 ++++++++++++++++
+ 6 files changed, 259 insertions(+), 13 deletions(-)
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index c620094..27b4400 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -707,6 +707,80 @@ static void prova_dentro_e_fuori_per_thread_indipendenti(void)
+           "fuori/altri: 950 us, non nel secchio del principale");
+ }
+ 
++/* QUINTA CORREZIONE DELL'11/08/2026: winq_glspia_ctx_richiesto()/ctx_vero()
++ * sono incrementi banali (un confronto sui bordi, poi ++ o +=) -- non c'e'
++ * comportamento interessante da provare oltre a "scrivono nella casella
++ * giusta" e "un indice invalido non scrive fuori dall'array". Non invento
++ * prove piu' elaborate di quello che il codice fa davvero: la logica vera di
++ * questo giro (dove vrend_hw_switch_context() classifica l'origine e quando
++ * chiama davvero make_current) vive in vrend_renderer.c, tocca GL/vrend, e
++ * resta fuori da test-glspia.sh per lo stesso motivo di sempre -- vedi il
++ * commento in cima al file. */
++static void prova_ctx_richiesto_e_vero(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: richiesto e vero, per origine:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_richiesto(WINQ_CTX_ALTRO);
++    winq_glspia_ctx_vero(WINQ_CTX_FORCE0, 1000000);   /* 1 ms */
++    winq_glspia_ctx_vero(WINQ_CTX_ALTRO, 250000);     /* 0,25 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 2, "FORCE0: due richieste");
++    esigi(s.ctx_richiesti[WINQ_CTX_ALTRO] == 1, "ALTRO: una richiesta, non contaminata da FORCE0");
++    esigi(s.ctx_veri[WINQ_CTX_FORCE0] == 1, "FORCE0: un switch vero");
++    esigi(s.ctx_veri[WINQ_CTX_ALTRO] == 1, "ALTRO: un switch vero, non contaminato da FORCE0");
++    esigi(s.ctx_ns[WINQ_CTX_FORCE0] == 1000000, "FORCE0: 1 ms cumulativo");
++    esigi(s.ctx_ns[WINQ_CTX_ALTRO] == 250000, "ALTRO: 0,25 ms cumulativo");
++    esigi(s.assurde == 0, "nessuna assurda su un origine valido");
++}
++
++/* Stesso rischio di ogni altro indice in questa struttura: un'origine fuori
++ * bounds deve scartarsi come assurda, non scrivere fuori da ctx_richiesti[]/
++ * ctx_veri[]/ctx_ns[]. */
++static void prova_ctx_origine_invalida(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: origine invalida:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(-1);
++    winq_glspia_ctx_richiesto(WINQ_CTX_N);
++    winq_glspia_ctx_vero(-1, 1000);
++    winq_glspia_ctx_vero(WINQ_CTX_N + 99, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 4, "quattro scarti contati, nessuna scrittura fuori dall'array");
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 0, "FORCE0 intatto");
++    esigi(s.ctx_richiesti[WINQ_CTX_ALTRO] == 0, "ALTRO intatto");
++}
++
++/* leggi()/azzera() devono ripulire anche questi tre campi: sono un accumulo
++ * al secondo come ns[]/chiamate[], non un registro persistente come
++ * thread_principale/thread_altri_*. */
++static void prova_ctx_azzerato_da_leggi(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: azzerato dalla lettura:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_vero(WINQ_CTX_FORCE0, 500000);
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 1, "prima lettura: una richiesta");
++
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++    esigi(s.ctx_veri[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++    esigi(s.ctx_ns[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++}
++
+ int main(void)
+ {
+     prova_accumulo();
+@@ -737,6 +811,9 @@ int main(void)
+     prova_thread_registro_tabella();
+     prova_thread_registro_persiste();
+     prova_dentro_e_fuori_per_thread_indipendenti();
++    prova_ctx_richiesto_e_vero();
++    prova_ctx_origine_invalida();
++    prova_ctx_azzerato_da_leggi();
+ 
+     if (falliti) {
+         printf("\n%d PROVE FALLITE\n", falliti);
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index 7ae80e2..9213597 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -2059,7 +2059,10 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+ 
+ #define TRANSFER_HEADER_SIZE 4096
+ 
+-   bret = vrend_hw_switch_context(gdctx->grctx, true);
++   /* WINQ_CTX_ALTRO: il percorso di decodifica, non force_ctx_0() -- vedi
++    * il commento sopra vrend_hw_switch_context() in vrend_renderer.c per
++    * la classificazione completa (QUINTA CORREZIONE dell'11/08/2026). */
++   bret = vrend_hw_switch_context(gdctx->grctx, WINQ_CTX_ALTRO, true);
+    if (bret == false)
+       return EINVAL;
+ 
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 562efdc..aae3e21 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -54,6 +54,7 @@
+ #include "vrend_debug.h"
+ #include "vrend_winsys.h"
+ #include "vrend_blitter.h"
++#include "winq-glspia-conta.h"
+ 
+ #include "virgl_util.h"
+ 
+@@ -887,7 +888,12 @@ static void vrend_pause_render_condition(struct vrend_context *ctx, bool pause);
+ static void vrend_update_viewport_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_update_scissor_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_destroy_query_object(void *obj_ptr);
+-static void vrend_finish_context_switch(struct vrend_context *ctx);
++/* QUINTA CORREZIONE DELL'11/08/2026: restituisce se ha chiamato davvero
++ * vrend_clicbs->make_current() (true) o e' tornata subito perche' non
++ * serviva (false) -- vedi il commento sopra vrend_hw_switch_context() per
++ * come questo distingue "switch vero" da "switch saltato" nella
++ * diagnostica. */
++static bool vrend_finish_context_switch(struct vrend_context *ctx);
+ static void vrend_patch_blend_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_update_frontface_state(struct vrend_sub_context *ctx);
+ static void vrend_destroy_program(struct vrend_linked_shader_program *ent);
+@@ -8016,8 +8022,10 @@ void vrend_destroy_context(struct vrend_context *ctx)
+ 
+    FREE(ctx);
+ 
++   /* WINQ_CTX_ALTRO: ripristino del contesto precedente dopo una distruzione,
++    * non force_ctx_0(). */
+    if (!switch_0 && cur)
+-      vrend_hw_switch_context(cur, true);
++      vrend_hw_switch_context(cur, WINQ_CTX_ALTRO, true);
+ }
+ 
+ struct vrend_context *vrend_create_context(int id, uint32_t nlen, const char *debug_name)
+@@ -10024,7 +10032,8 @@ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
+    if (!info->box)
+       return EINVAL;
+ 
+-   if (!vrend_hw_switch_context(ctx, true))
++   /* WINQ_CTX_ALTRO: i trasferimenti, non force_ctx_0(). */
++   if (!vrend_hw_switch_context(ctx, WINQ_CTX_ALTRO, true))
+       return EINVAL;
+ 
+    assert(check_transfer_iovec(res, info));
+@@ -11634,11 +11643,74 @@ static void vrend_renderer_check_queries(void)
+                 !list_is_empty(&vrend_state.waiting_query_list));
+ }
+ 
+-bool vrend_hw_switch_context(struct vrend_context *ctx, bool now)
+-{
++/* QUINTA CORREZIONE DELL'11/08/2026, dietro WINQ_GPU_DIAG: il primo
++ * consumatore del ciclo principale, misurato con la finestra e il thread
++ * corretti (i giri precedenti), non era SUBMIT_3D ma 0x202
++ * CTX_ATTACH_RESOURCE -- 923 us/chiamata contro 231 del detach, pur
++ * facendo lo stesso lavoro O(1) in tabella hash (vrend_ctx_resource_insert,
++ * niente scansioni, niente lock: l'ipotesi del lock condiviso col thread
++ * delle fence e' stata verificata e respinta, fence_mutex si rilascia prima
++ * di glClientWaitSync).
++ *
++ * Il sospetto, dedotto dal codice: virgl_renderer_force_ctx_0() (chiamata
++ * da QEMU incondizionatamente prima di OGNI comando,
++ * virtio_gpu_virgl_process_cmd, hw/display/virtio-gpu-virgl.c:1471) passa
++ * per vrend_renderer_force_ctx_0() (sotto in questo file), che azzera
++ * vrend_state.current_ctx/current_hw_ctx PRIMA di chiedere lo switch a
++ * ctx0. La scorciatoia qui sotto ("e' gia' il contesto giusto, non fare
++ * niente") non puo' quindi mai scattare per una richiesta arrivata da li':
++ * ogni chiamata da force_ctx_0() arriva sempre a
++ * vrend_finish_context_switch(), che arriva sempre a
++ * vrend_clicbs->make_current() -- anche quando il contesto GL a livello di
++ * sistema operativo era gia' quello giusto. L'asimmetria attach/detach si
++ * spiegherebbe con l'ordine dei comandi: SUBMIT_3D commuta al contesto
++ * dell'app (vrend_decode_ctx_submit_cmd), l'attach subito dopo trova
++ * quell'altro contesto e il suo force_ctx_0() paga lo switch vero verso
++ * ctx0, il detach lo trova gia' li' e il suo force_ctx_0() ritorna in
++ * fretta (anche se, come appena detto, "ritorna in fretta" e' una
++ * questione di wglMakeCurrent lato sistema operativo, non della
++ * scorciatoia qui sotto: quella e' comunque saltata da entrambi).
++ *
++ * DEDOTTO, NON MISURATO -- questo e' il conteggio che lo confermerebbe o lo
++ * smentirebbe. Origine (WINQ_CTX_FORCE0 contro WINQ_CTX_ALTRO) e' un
++ * parametro nuovo su questa funzione: e' interna al fork (dichiarata in
++ * vrend_renderer.h, non nella API pubblica virglrenderer.h), quindi
++ * aggiungerlo non tocca il confine con QEMU. I cinque chiamanti:
++ *   - vrend_decode.c:2062 (vrend_decode_ctx_submit_cmd, il percorso di
++ *     decodifica) -> WINQ_CTX_ALTRO;
++ *   - vrend_renderer.c, dentro vrend_destroy_context() (il ripristino del
++ *     contesto precedente dopo aver distrutto quello corrente) -> ALTRO;
++ *   - vrend_renderer.c, dentro vrend_renderer_transfer_internal() (i
++ *     trasferimenti) -> ALTRO;
++ *   - vrend_renderer_force_ctx_0() qui sotto -> FORCE0, l'unico;
++ *   - vrend_renderer_prepare_reset() (piu' in basso in questo file): chiama
++ *     vrend_hw_switch_context(ctx0, true) DIRETTAMENTE, non passando per
++ *     vrend_renderer_force_ctx_0() -- e' un evento di reset del renderer,
++ *     non il percorso caldo per-comando che il sospetto riguarda, quindi
++ *     -> ALTRO. L'origine segue "e' passato per force_ctx_0()?", non "il
++ *     contesto di destinazione e' ctx0?": sono domande diverse, e la
++ *     seconda avrebbe messo prepare_reset() nel secchio sbagliato.
++ *
++ * FUORI SCOPE, deliberatamente: vrend_hw_switch_context_with_sub() (usata
++ * solo da vrend_renderer_check_queries()) chiama
++ * vrend_finish_context_switch() direttamente, non attraverso questa
++ * funzione -- non e' "vrend_hw_switch_context", che e' esattamente cosa
++ * questa diagnostica misura, letteralmente. Le sue chiamate a make_current()
++ * non sono contate qui. Idem le chiamate DIRETTE a
++ * vrend_clicbs->make_current() dentro vrend_destroy_sub_context() e
++ * vrend_renderer_set_sub_ctx() (switch di SUB-contesto entro lo stesso
++ * vrend_context, un meccanismo diverso da questo). */
++bool vrend_hw_switch_context(struct vrend_context *ctx, int origine, bool now)
++{
++   int accesa = winq_glspia_accesa();
++
+    if (!ctx)
+       return false;
+ 
++   if (accesa) {
++      winq_glspia_ctx_richiesto(origine);
++   }
++
+    if (ctx == vrend_state.current_ctx && ctx->ctx_switch_pending == false)
+       return true;
+ 
+@@ -11648,24 +11720,30 @@ bool vrend_hw_switch_context(struct vrend_context *ctx, bool now)
+ 
+    ctx->ctx_switch_pending = true;
+    if (now == true) {
+-      vrend_finish_context_switch(ctx);
++      uint64_t t0 = accesa ? winq_glspia_ora() : 0;
++      bool vero = vrend_finish_context_switch(ctx);
++
++      if (t0 && vero) {
++         winq_glspia_ctx_vero(origine, winq_glspia_intervallo_ns(t0, winq_glspia_ora()));
++      }
+    }
+    vrend_state.current_ctx = ctx;
+    return true;
+ }
+ 
+-static void vrend_finish_context_switch(struct vrend_context *ctx)
++static bool vrend_finish_context_switch(struct vrend_context *ctx)
+ {
+    if (ctx->ctx_switch_pending == false)
+-      return;
++      return false;
+    ctx->ctx_switch_pending = false;
+ 
+    if (vrend_state.current_hw_ctx == ctx)
+-      return;
++      return false;
+ 
+    vrend_state.current_hw_ctx = ctx;
+ 
+    vrend_clicbs->make_current(ctx->sub->gl_context);
++   return true;
+ }
+ 
+ void
+@@ -13040,7 +13118,9 @@ void vrend_renderer_force_ctx_0(void)
+    TRACE_FUNC();
+    vrend_state.current_ctx = NULL;
+    vrend_state.current_hw_ctx = NULL;
+-   vrend_hw_switch_context(vrend_state.ctx0, true);
++   /* WINQ_CTX_FORCE0: l'unico chiamante classificato cosi', vedi il commento
++    * sopra vrend_hw_switch_context(). */
++   vrend_hw_switch_context(vrend_state.ctx0, WINQ_CTX_FORCE0, true);
+ }
+ 
+ void vrend_renderer_get_rect(struct pipe_resource *pres,
+@@ -13319,7 +13399,10 @@ void vrend_renderer_prepare_reset(void)
+ {
+    /* make sure user contexts are no longer accessed */
+    vrend_free_sync_thread();
+-   vrend_hw_switch_context(vrend_state.ctx0, true);
++   /* WINQ_CTX_ALTRO: va a ctx0 come force_ctx_0(), ma non passa per
++    * quella funzione -- e' un evento di reset, non il percorso caldo
++    * per-comando. Vedi il commento sopra vrend_hw_switch_context(). */
++   vrend_hw_switch_context(vrend_state.ctx0, WINQ_CTX_ALTRO, true);
+ }
+ 
+ void vrend_renderer_reset(void)
+diff --git a/src/vrend/vrend_renderer.h b/src/vrend/vrend_renderer.h
+index adb1213..51cdcaa 100644
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -464,7 +464,12 @@ void vrend_renderer_check_fences(void);
+ int vrend_renderer_create_ctx0_fence(uint32_t fence_id);
+ int vrend_renderer_export_ctx0_fence(uint32_t fence_id, int* out_fd);
+ 
+-bool vrend_hw_switch_context(struct vrend_context *ctx, bool now);
++/* origine: WINQ_CTX_FORCE0 se la richiesta viene da vrend_renderer_force_ctx_0(),
++ * WINQ_CTX_ALTRO per ogni altro chiamante -- vedi il commento sopra la
++ * definizione (vrend_renderer.c) per l'elenco e il perche' della QUINTA
++ * CORREZIONE dell'11/08/2026. Parametro interno al fork: questa funzione
++ * non e' nella API pubblica di virglrenderer.h. */
++bool vrend_hw_switch_context(struct vrend_context *ctx, int origine, bool now);
+ uint32_t vrend_renderer_object_insert(struct vrend_context *ctx, void *data,
+                                       uint32_t handle, enum virgl_object_type type);
+ void vrend_renderer_object_destroy(struct vrend_context *ctx, uint32_t handle);
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index 69444f7..49f8d7c 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -310,6 +310,30 @@ void winq_glspia_sonda_registra_fine(uint64_t errore)
+     sonda_armata = 0;
+ }
+ 
++/* Un'origine fuori bounds e' un errore di chi chiama (indice invalido),
++ * esattamente come un secchio o un thread fuori bounds in aggiungi(): si
++ * conta come assurda, non come richiesta. Il chiamante (vrend_hw_switch_context())
++ * e' gia' dietro winq_glspia_accesa(), quindi qui non c'e' bisogno di
++ * un'altra guardia sulla diagnostica. */
++void winq_glspia_ctx_richiesto(int origine)
++{
++    if (origine < 0 || origine >= WINQ_CTX_N) {
++        spia.assurde++;
++        return;
++    }
++    spia.ctx_richiesti[origine]++;
++}
++
++void winq_glspia_ctx_vero(int origine, uint64_t ns)
++{
++    if (origine < 0 || origine >= WINQ_CTX_N) {
++        spia.assurde++;
++        return;
++    }
++    spia.ctx_veri[origine]++;
++    spia.ctx_ns[origine] += ns;
++}
++
+ void winq_glspia_azzera(void)
+ {
+     int t, i;
+@@ -331,6 +355,11 @@ void winq_glspia_azzera(void)
+     /* thread_principale/thread_altri_* NON si azzerano: vedi il commento
+      * sulla struct in winq-glspia-conta.h. Sono un registro per la vita del
+      * processo, non un accumulo al secondo. */
++    for (i = 0; i < WINQ_CTX_N; i++) {
++        spia.ctx_richiesti[i] = 0;
++        spia.ctx_veri[i] = 0;
++        spia.ctx_ns[i] = 0;
++    }
+ }
+ 
+ void winq_glspia_leggi(struct winq_glspia *fuori)
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index 958ce0a..52e2609 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -98,6 +98,21 @@ enum {
+  * numero va alzato -- stessa logica di WINQ_CONTESTI in winq-glspia-gpu.c. */
+ #define WINQ_THREAD_TABELLA 8
+ 
++/* QUINTA CORREZIONE DELL'11/08/2026: chi ha richiesto lo switch di contesto
++ * GL, non "quale contesto" -- il sospetto e' su una funzione chiamante
++ * (vrend_renderer_force_ctx_0(), invocata da QEMU prima di ogni comando),
++ * non su un contesto target. WINQ_CTX_FORCE0 marca esclusivamente le
++ * richieste che passano per quella funzione; ogni altro chiamante di
++ * vrend_hw_switch_context() (il percorso di decodifica, i trasferimenti, il
++ * ripristino dopo la distruzione di un contesto) e' WINQ_CTX_ALTRO -- vedi
++ * il commento sopra vrend_hw_switch_context() in vrend_renderer.c per
++ * l'elenco esatto dei chiamanti e la loro classificazione. */
++enum {
++    WINQ_CTX_FORCE0 = 0,
++    WINQ_CTX_ALTRO,
++    WINQ_CTX_N
++};
++
+ struct winq_glspia {
+     uint64_t ns[WINQ_THREAD_N][WINQ_SPIA_N];
+     uint64_t chiamate[WINQ_THREAD_N][WINQ_SPIA_N];
+@@ -153,6 +168,28 @@ struct winq_glspia {
+     uint64_t thread_altri_n;         /* quanti "altri" thread distinti in thread_altri_id[] */
+     uint64_t thread_altri_id[WINQ_THREAD_TABELLA]; /* i loro id; 0 = casella non usata */
+     uint64_t thread_altri_fuori_tabella; /* chiamate da un "altro" thread non riconosciuto a tabella piena */
++    /* QUINTA CORREZIONE DELL'11/08/2026: il primo consumatore del ciclo
++     * principale non era SUBMIT_3D ma 0x202 CTX_ATTACH_RESOURCE (923 us/
++     * chiamata), con un'asimmetria netta rispetto al detach (231 us) pur
++     * facendo lo stesso lavoro O(1) in tabella hash. Il sospetto, dedotto dal
++     * codice non misurato: virgl_renderer_force_ctx_0() (chiamata da QEMU
++     * incondizionatamente prima di OGNI comando, virtio-gpu-virgl.c:1471)
++     * azzera current_ctx/current_hw_ctx PRIMA di richiedere lo switch a ctx0
++     * -- quindi vrend_hw_switch_context() non puo' mai prendere la sua
++     * scorciatoia "e' gia' il contesto giusto", e vrend_finish_context_switch()
++     * chiama sempre wglMakeCurrent(), anche quando il contesto GL a livello
++     * di sistema operativo era gia' quello giusto (nel qual caso l'OS/driver
++     * puo' comunque farla franca in fretta -- questi contatori misurano il
++     * lato virglrenderer della storia, non il costo vero di wglMakeCurrent()).
++     * ctx_richiesti conta ogni chiamata a vrend_hw_switch_context();
++     * ctx_veri conta quante di quelle arrivano davvero a
++     * vrend_clicbs->make_current() (non scorciatoiate); ctx_ns e' il tempo
++     * cumulativo dentro quella chiamata. Tutti e tre per origine
++     * (WINQ_CTX_FORCE0/WINQ_CTX_ALTRO): il discriminante che decide se la
++     * cura sta in force_ctx_0() o altrove. */
++    uint64_t ctx_richiesti[WINQ_CTX_N];
++    uint64_t ctx_veri[WINQ_CTX_N];
++    uint64_t ctx_ns[WINQ_CTX_N];
+ };
+ 
+ /* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
+@@ -249,6 +286,18 @@ int winq_glspia_sonda_richiesta(void);
+ void winq_glspia_sonda_registra_inizio(uint64_t errore);
+ void winq_glspia_sonda_registra_fine(uint64_t errore);
+ 
++/* Diagnostica dello switch di contesto GL, aggiunta l'11/08/2026 -- vedi il
++ * commento sopra l'enum WINQ_CTX_* e sulla struct. Chiamate da
++ * vrend_hw_switch_context() (vrend_renderer.c), gia' dietro
++ * winq_glspia_accesa() nel chiamante: qui dentro non c'e' un'altra guardia
++ * sulla diagnostica, solo sui bordi dell'array, come per aggiungi(). Un
++ * origine fuori bounds e' un errore di chi chiama (indice invalido) e si
++ * conta come assurda, non come richiesta o switch vero. */
++void winq_glspia_ctx_richiesto(int origine);
++/* ns e' il tempo dentro vrend_clicbs->make_current(), gia' convertito --
++ * stessa forma di somma_gpu()/somma_finestra(), non passa da aggiungi(). */
++void winq_glspia_ctx_vero(int origine, uint64_t ns);
++
+ void winq_glspia_azzera(void);
+ uint64_t winq_glspia_taratura_ns(void);
+ 
+-- 
+2.53.0.vfs.0.7
+

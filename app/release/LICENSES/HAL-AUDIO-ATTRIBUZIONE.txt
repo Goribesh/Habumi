@@ -1,0 +1,36 @@
+Attribution: audio HAL derived from Waydroid
+=============================================
+
+This package redistributes a binary file of 19,664 bytes:
+
+    guest/overlay-vendor/audio.primary.waydroid.so
+
+which the initramfs copies into the guest, at /vendor/lib64/hw/, laying it
+over the stock audio HAL contained in vendor.img (the file does not modify
+vendor.img: it lives alongside it, in the initramfs, and vendor.img stays a
+pristine image downloadable from Waydroid's official sources).
+
+Origin
+------
+The file is derived from the audio HAL implementation of the Waydroid project
+(itself based on the Android Open Source Project), with one change: the size
+of the PCM ring buffer was raised from 1024 to 4096 frames to remove an
+audible stutter under load. The change is applied by the script
+guest/scripts/installa-hal-4096.sh in this repository.
+
+License
+-------
+An AOSP audio HAL is released under the Apache License 2.0, whose full text
+is in this same archive at LICENSES/APACHE-2.0.txt. Apache-2.0 permits
+redistributing a modified binary provided its origin is attributed: this file
+is that attribution.
+
+Declared limitation
+-------------------
+The .so cannot be rebuilt from the sources tracked in this repository alone:
+it was extracted from an already-modified vendor image and committed as it is.
+Anyone wanting to rebuild it from scratch has to redo that extraction by hand.
+The file is also tied to the vendor build it was
+derived from (MAINLINE 20260403): the product checks that tie on the first run
+by comparing the build date of the downloaded vendor with the one the HAL was
+built for, and says so rather than laying it over blindly if they do not match.

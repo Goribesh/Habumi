@@ -1,0 +1,205 @@
+# Habumi configuration.
+#
+# Missing keys take the default. A value that cannot be read, or that falls
+# outside its range, does NOT stop the program: it is ignored and the reason
+# goes into the log, because a configuration file that prevents startup is a
+# file nobody edits.
+#
+# To see the resolved configuration and where each value came from, without
+# starting anything:   Habumi.exe --config
+
+vcpu=6
+memory=6144
+
+# The guest resolution, which becomes xres/yres on virtio-gpu.
+#
+# It can be raised, and since both windows declare their DPI the pixels gained
+# in the guest are no longer thrown away when drawing: QEMU on a 2880x1920
+# screen used to see 1440x960, so raising the resolution past that point did
+# not pay. The cost of raising it is MEASURED, not unknown any more: see the
+# table below (guest_scale), which covers 1280x800 and 2560x1600 on the same
+# machine. hostmem -- the memory window for blob resources -- stays fixed at
+# 256 MB.
+width=1280
+height=800
+
+# Multiply the guest resolution by the screen scale.
+#
+# With "no" the guest renders the resolution above and the window receives the
+# screen's real pixels: two scaling steps in a row become one, and sharpness is
+# gained at no cost. With "yes" (the shipped default) the resolution asked of
+# the guest is multiplied by the scale, and on this machine (200%) the guest
+# becomes 2560x1600 -- FOUR times the pixels of 1280x800.
+#
+# THE COST IS MEASURED, not unknown any more (launcher focused, 10 scrolls):
+#
+#   column                  1280x800 @60   2560x1600 @60
+#   GPU median                    4 ms            7 ms
+#   total frame median            13 ms           24 ms
+#   janky                         1.14%           8.47%
+#   janky (legacy)                14.86%          52.54%
+#   SurfaceFlinger CPU            570 ms          980 ms
+#   frames dropped by the GPU     89              458
+#
+# ANDROID DERIVES DENSITY FROM THE EDID, which QEMU builds from the geometry:
+# at a raised resolution with the density of a 1280x800 the interface becomes
+# tiny -- MEASURED, the feed column took up a third of the screen. The density
+# key below fixes this by applying "wm density" in the guest as soon as Android
+# is ready: it is no longer "a job of its own, and not done".
+#
+# An increase that would take one side past 8192 is refused WHOLE, and the
+# reason goes into the log: capping a single side would change the guest's
+# aspect ratio.
+#
+# This raises the resolution exactly as raising width/height by hand would: the
+# same warning about hostmem written up there applies, fixed at 256 MB.
+guest_scale=yes
+
+# The refresh rate to announce to the guest. 0 (default) = automatic: winq
+# reads the panel with GetDeviceCaps(VREFRESH), which is what happens today
+# without this key. Otherwise 24..240.
+#
+# 120 is the shipped default, decided WITH THE NUMBERS IN VIEW. At 2560x1600,
+# 120 Hz takes janky frames from
+# 8.47% to 34.40% (legacy: from 52.54% to 94.80%), because the per-frame budget
+# drops from 16.7 to 8.3 ms while the GPU median alone is already 9 ms -- the
+# budget does not fit, no matter what else the GPU has to do.
+#
+# 60 would be defensible for a precise reason: it divides both 60 and 120
+# exactly, so it stays free of stutter in BOTH states of this panel's variable
+# refresh (at 120 each guest frame lasts two scans, at 60 one). 120 is the
+# choice that was made anyway, knowing these numbers: it is not the reader's
+# job to argue it, only to make it work.
+hz=120
+
+# The logical density to impose on the guest with "wm density", once, as soon
+# as Android is ready. 0 (default) = do not touch, which is what happens today
+# without this key. Otherwise 120..640.
+#
+# It is needed because density comes from the EDID, which QEMU builds from the
+# geometry: at 2560x1600 with the density of a 1280x800 (213) Android believes
+# it has a huge low-density tablet and the interface becomes tiny -- MEASURED,
+# the feed column took up a third of the screen. 426 is 213 doubled like the
+# resolution, and it compensates on this machine.
+#
+# "wm density" writes into /data and therefore PERSISTS until data.img is
+# replaced -- verified by restarting the VM. This key exists because on a fresh
+# data.img that value is not there yet.
+density=426
+
+# wgl or angle.
+#
+# wgl is the desktop OpenGL context, and it is the default because of a
+# measurement: the guest gets ES 3.1 instead of ES 2.0, the per-frame median
+# goes from 34 to 5 ms, and glmark2 from 318 to 535 points. angle stays as a
+# fallback, and is chosen by itself if the desktop context cannot be obtained.
+gl=wgl
+
+# Whether to keep the GPU wait when leaving a shared GL context (wgl only).
+#
+# Mesa's WGL frontend keeps ST_FLUSH_WAIT on every context change: a flush PLUS
+# waiting for the GPU to finish. With virglrenderer switching context thousands
+# of times per second, that wait WAS the main loop -- and dropping it is the
+# largest single win measured in this project so far. Numbers, glmark2 at
+# 2560x1600, same binary, only this variable changed (three runs against two):
+#
+#   gl_flush_wait=yes   803-856 points   257 us per context switch   685 ms/s main loop
+#   gl_flush_wait=no   1322-1463 points   26-29 us per switch        364-382 ms/s
+#
+# The visual gate -- flicker in motion, which is exactly why upstream added the
+# wait in 2017 -- was given on the real host window and showed nothing. It is
+# still a qualitative judgement: if you ever see torn or stale frames, this is
+# the first key to flip back.
+#
+# HOW IT IS ASKED FOR, since : not by changing GL behaviour behind
+# everyone's back with an environment variable, but with the attribute the spec
+# provides. Our opengl32.dll exposes WGL_ARB_context_flush_control, and winq
+# asks wglCreateContextAttribsARB for CONTEXT_RELEASE_BEHAVIOR_NONE when this
+# key says no -- so the choice belongs to whoever creates the context, and it
+# applies only to the contexts that ask. winq checks the extension is there
+# before asking: an unknown attribute makes context creation FAIL, which on a
+# stock opengl32.dll would mean no picture at all.
+#
+# On the angle path nothing reads this: it is our own opengl32.dll that
+# implements the extension. MESA_WGL_NO_FLUSH_WAIT still exists inside Mesa as a
+# GLOBAL override and wins over the attribute -- it is how
+# guest/scripts/ab-no-flush-wait.sh measures the two arms without rebuilding
+# anything, and the shell logs a line when it sees it.
+gl_flush_wait=no
+
+# How many attempts against the kernel hanging at boot.
+#
+# This is not caution: the guest kernel sometimes hangs in a race while
+# bringing up the secondary vCPUs under WHPX, and it is not deterministic --
+# the same command sometimes boots in twenty seconds. The shell recognises it
+# by counting serial lines at sixteen seconds, and retries by itself.
+retries=3
+
+# The adb port on the host.
+#
+# Do NOT use 5554-5585: adb scans that range in pairs to discover emulators, it
+# would take our port for one of them, and it would leave everything OFFLINE --
+# with adbd running perfectly well inside the guest. The fault is intermittent
+# because it depends on timing: it worked for hours and then stopped. The
+# configuration refuses that range and writes why in the log.
+adb_port=15555
+
+# The port of the shared clipboard channel, on the host.
+#
+# The shell listens on 127.0.0.1 at this port, and the system app inside
+# Android calls 10.0.2.2 -- that is, the host as seen by the guest through the
+# emulator's network. The guest calls and the host listens, so the shell does
+# not have to know when the VM exists, and a guest restart repairs itself.
+#
+# The two prohibitions of adb_port above apply, plus a third:
+#   - never 5554-5585, the range adb scans to discover emulators;
+#   - never the same port as adb_port, because two servers cannot listen on
+#     one port.
+# A refused value does NOT stop startup: it stays at 15556 and the reason goes
+# into the log. The comparison with adb_port is made once the file has been
+# read, so the order of the two lines does not change the outcome.
+#
+# EXPOSURE, declared: the listener sits on 127.0.0.1, so the guest can reach it
+# but so can any other process on this machine, and clipboards sometimes hold
+# passwords. On a single-user machine this is modest but real. It would be
+# closed with a shared token, which would have to be handed to the guest, and
+# with adb off that is not trivial: it is not done by default, it is written
+# down here.
+clipboard_port=15556
+
+# Audio, on since.
+#
+# What changed: the guest kernel now has CONFIG_SOUND, CONFIG_SND,
+# CONFIG_SND_PCM and CONFIG_SND_VIRTIO compiled IN (before, the first three
+# were modules and the last was not there at all, so /dev/snd did not exist and
+# nobody opened the virtio-sound device). The rest of the chain was already
+# there: audio.primary.waydroid.so speaks ALSA directly, so no PulseAudio
+# server is needed on the host, and Android picks that HAL by itself because
+# ro.hardware=waydroid.
+#
+# With audio=on the command line gains "-audiodev dsound" and
+# "-device virtio-sound-pci". The microphone comes along without asking: QEMU
+# creates two streams and the second one is an input.
+#
+# Turning it off removes both pieces, and the guest goes mute without errors.
+audio=on
+
+# Which Android image to boot: vanilla (without Google Apps) or gapps.
+#
+# The two differ ONLY in the system and data images -- vanilla uses system.img
+# and data.img, gapps uses system-gapps.img and data-gapps.img, chosen from a
+# table in app/guscio/varianti.c (var_percorsi). NO FILE IS EVER MOVED to
+# change variant: only this line changes, and at the next start the shell reads
+# the right pair.
+#
+# vendor.img stays the same for both variants, because every customization this
+# project makes -- the GodziDroid name, the boot animation, the clipboard,
+# asound.conf, the device node permissions -- travels in the initramfs, not in
+# the two system images.
+#
+# An unknown word does NOT stop startup: vanilla is used and the reason goes
+# into the log, like every other key in here. At startup the log writes which
+# variant and which two files it is using anyway: the names are asymmetric --
+# vanilla is system.img with no suffix -- and that is the only way to tell at a
+# glance.
+variant=vanilla

@@ -1,0 +1,148 @@
+Da: sessione DPI/venus del 01/08/2026
+Oggetto: [PATCH 0007] venus: sintetizzare VK_EXT_queue_family_foreign per Android
+
+Il driver venus del guest accende VK_ANDROID_external_memory_android_hardware_buffer
+solo se il renderer offre tre cose insieme (Mesa 26.0,
+src/virtio/vulkan/vn_physical_device.c:1182-1185):
+
+    external_memory.renderer_handle_type
+ && renderer_exts->EXT_image_drm_format_modifier
+ && renderer_exts->EXT_queue_family_foreign
+
+Lo shim dma-buf del fork forniva le prime due -- e' stato scritto per i compositori
+Wayland, dove la terza non serve. Dozen non ha queue_family_foreign, quindi nessuno
+la forniva, e il ramo Android restava chiuso.
+
+MISURATO dentro il guest con qemu/probe/sonda-vulkan-guest.c, prima e dopo:
+
+    prima:  48 estensioni, nessuna VK_ANDROID_*
+    dopo:   50 estensioni, VK_EXT_queue_family_foreign E
+            VK_ANDROID_external_memory_android_hardware_buffer
+
+Dietro WINQ_QFF_SHIM=1 e non accesa di default, perche' dichiararla e' meta' del
+lavoro: quando Android la usera' mandera' barriere con VK_QUEUE_FAMILY_FOREIGN_EXT,
+che l'ICD dell'host non conosce e che vkr non traduce ancora (zero occorrenze di
+QUEUE_FAMILY_EXTERNAL in questo albero). Va resa incondizionata insieme a quella
+traduzione.
+
+NON sblocca HWUI. VK_ANDROID_native_buffer, da cui il loader di Android deriva
+VK_KHR_swapchain, ha DUE condizioni in piu' dentro lo stesso if (righe 1198-1200):
+renderer_sync_fd.semaphore_importable && renderer_sync_fd.fence_exportable.
+La seconda non e' soddisfacibile su questa macchina: vkr mappa l'export di fence
+su VK_KHR_external_fence_win32, e Dozen non ce l'ha (misurato con
+qemu/probe/sonda-vulkan.exe: memory_win32 SI, semaphore_win32 SI, fence_win32 no).
+
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index e5d603d..bd03a14 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -51,6 +51,13 @@ vkr_device_map_guest_ext_to_host(const struct vkr_physical_device *physical_dev,
+    if (!strcmp(name, "VK_EXT_image_drm_format_modifier") &&
+        physical_dev->EXT_image_drm_format_modifier_synthesized)
+       return NULL;
++   /* Idem per queue_family_foreign (WINQ_QFF_SHIM): l'host non la conosce, e
++    * passargliela farebbe fallire CreateDevice con
++    * VK_ERROR_EXTENSION_NOT_PRESENT -- cioe' nessun dispositivo affatto invece
++    * del dispositivo senza swapchain che abbiamo oggi. */
++   if (!strcmp(name, "VK_EXT_queue_family_foreign") &&
++       physical_dev->EXT_queue_family_foreign_synthesized)
++      return NULL;
+ #endif
+ 
+    return name;
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index ac4477b..b1b0190 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -309,8 +359,15 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+    if (result != VK_SUCCESS)
+       return;
+ 
+-   /* 4 slots for existing Win32 external fd shims, +2 for dma-buf + modifier */
+-   const uint32_t extra_guest_exts = 6;
++   /* 4 slots for existing Win32 external fd shims, +2 for dma-buf + modifier,
++    * +1 for queue_family_foreign (WINQ_QFF_SHIM).
++    *
++    * Questo numero NON e' decorativo: vkr_physical_device_append_extension
++    * rifiuta di sforare e il chiamante, sul rifiuto, fa free(exts) e RITORNA --
++    * cioe' il guest resterebbe senza NESSUNA estensione, che e' molto peggio di
++    * quella che si voleva aggiungere. Chi aggiunge una sintetizzata deve alzare
++    * anche questo. */
++   const uint32_t extra_guest_exts = 7;
+    exts = calloc(count + extra_guest_exts, sizeof(*exts));
+    if (!exts)
+       return;
+@@ -454,6 +511,38 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+       physical_dev->EXT_image_drm_format_modifier_synthesized = !had_modifier_from_host;
+ 
+       physical_dev->dma_buf_shim_active = true;
++
++      /* VK_EXT_queue_family_foreign, l'anello che mancava per Android.
++       *
++       * Lo shim qui sopra e' stato scritto per i compositori Wayland, dove
++       * queue_family_foreign non serve. Il percorso Android di venus invece la
++       * PRETENDE: Mesa accende VK_ANDROID_native_buffer solo se il renderer
++       * offre renderer_handle_type, EXT_image_drm_format_modifier ED
++       * EXT_queue_family_foreign insieme (src/virtio/vulkan/vn_physical_device.c).
++       * Senza la terza, il loader di Android non deriva VK_KHR_swapchain e HWUI
++       * aborta su "Assertion failed: !hasKHRSwapchainExtension" prima di
++       * disegnare un pixel. MISURATO dentro il guest con una sonda Vulkan.
++       *
++       * DICHIARARLA E' META' DEL LAVORO, e per questo sta dietro WINQ_QFF_SHIM=1
++       * invece di essere accesa: quando Android la usera' mandera' barriere con
++       * VK_QUEUE_FAMILY_FOREIGN_EXT, che Dozen non conosce e che vkr non traduce
++       * ancora (nessuna occorrenza di QUEUE_FAMILY_EXTERNAL in questo albero).
++       * Accenderla di default oggi scambierebbe un fallimento pulito, che dice
++       * quale estensione manca, con uno sporco. Serve a misurare se basti
++       * dichiararla; va resa incondizionata insieme alla traduzione. */
++      if (getenv("WINQ_QFF_SHIM")) {
++         const bool had_qff_from_host = vkr_physical_device_has_extension(
++            exts, advertised_count, "VK_EXT_queue_family_foreign");
++         if (!had_qff_from_host) {
++            if (!vkr_physical_device_append_extension(exts, count + extra_guest_exts,
++                                                      &advertised_count,
++                                                      "VK_EXT_queue_family_foreign")) {
++               free(exts);
++               return;
++            }
++         }
++         physical_dev->EXT_queue_family_foreign_synthesized = !had_qff_from_host;
++      }
+    }
+ #endif
+ 
+diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
+index 5cefd3f..c695dfa 100644
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -48,6 +48,30 @@ struct vkr_physical_device {
+     */
+    bool EXT_external_memory_dma_buf_synthesized;
+    bool EXT_image_drm_format_modifier_synthesized;
++   /* VK_EXT_queue_family_foreign, sintetizzata solo con WINQ_QFF_SHIM=1.
++    *
++    * PERCHE' ESISTE. Il driver venus del guest accende VK_ANDROID_native_buffer
++    * -- da cui il loader di Android deriva VK_KHR_swapchain, senza la quale HWUI
++    * aborta -- solo se il renderer offre TRE cose insieme (Mesa,
++    * src/virtio/vulkan/vn_physical_device.c):
++    *      external_memory.renderer_handle_type
++    *   && renderer_exts->EXT_image_drm_format_modifier
++    *   && renderer_exts->EXT_queue_family_foreign
++    * Lo shim dma-buf qui sopra fornisce le prime due. La terza non la forniva
++    * nessuno, e Dozen non ce l'ha: e' l'unico anello mancante di tutta la catena
++    * venus su questa macchina. MISURATO dentro il guest: il modifier arriva
++    * (prova che lo shim gira), dma_buf e queue_family_foreign no.
++    *
++    * PERCHE' DIETRO UNA VARIABILE, e non accesa e basta. Dichiararla e' solo meta'
++    * del lavoro: quando Android la usera' davvero, mandera' barriere con
++    * VK_QUEUE_FAMILY_FOREIGN_EXT, che l'ICD dell'host non conosce e che vkr non
++    * traduce ancora. Finche' quella traduzione non c'e', accenderla di default
++    * scambierebbe un fallimento pulito e diagnosticato (HWUI aborta dicendo quale
++    * estensione manca) con uno sporco (barriere non valide inoltrate a Dozen).
++    * La variabile serve a rispondere alla domanda "basta dichiararla?" senza
++    * pagare prima la traduzione, e va tolta quando la traduzione ci sara'.
++    */
++   bool EXT_queue_family_foreign_synthesized;
+ 
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    VkPhysicalDeviceIDProperties id_properties;

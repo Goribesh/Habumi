@@ -1,0 +1,65 @@
+Insegna a virtio-gpu i formati che Android usa per lo scanout.
+
+Il driver dichiara un solo formato per il piano primario, DRM_FORMAT_HOST_XRGB8888,
+e rifiuta tutto il resto dentro virtio_gpu_user_framebuffer_create con **ENOENT**:
+
+    if (mode_cmd->pixel_format != DRM_FORMAT_HOST_XRGB8888 &&
+        mode_cmd->pixel_format != DRM_FORMAT_HOST_ARGB8888)
+            return ERR_PTR(-ENOENT);
+
+Quell'errno e' fuorviante: sembra un oggetto mancante, e infatti ha portato a
+sospettare handle GEM non validi, cache del compositore e permessi di DRM master —
+tutte ipotesi cadute con misure (dettagli in guest/ANDROID-BOOT.md). E' invece un
+rifiuto di formato.
+
+Android compone in RGBX_8888 / RGBA_8888, che in termini DRM sono XBGR8888 e
+ABGR8888: l'ordine dei canali e' l'opposto di quello che il driver accetta. Il
+risultato e' che SurfaceFlinger chiama present una trentina di volte al secondo,
+drm_hwcomposer prova drmModeAddFB2 e il kernel dice no, quindi non esiste alcun
+framebuffer da mettere in scanout e sullo schermo resta la console del kernel.
+
+Il protocollo virtio-gpu contiene gia' i formati giusti — R8G8B8X8_UNORM = 134 e
+R8G8B8A8_UNORM = 67 — quindi manca solo il collegamento nel driver. Da qui questa
+patch, che aggiunge i due formati all'elenco del piano, alla traduzione verso
+l'host e al controllo in fb_create.
+
+Perche' nel kernel e non in Android: cambiare il formato di composizione lato
+Android vorrebbe dire o forzare BGRA a SurfaceFlinger, che non ha una proprieta'
+pubblica per farlo, o scambiare i canali nel compositore, che darebbe rosso e blu
+invertiti. Insegnare al driver un formato che il protocollo conosce e' corretto per
+i colori e non tocca nulla dello spazio utente.
+
+--- a/drivers/gpu/drm/virtio/virtgpu_plane.c
++++ b/drivers/gpu/drm/virtio/virtgpu_plane.c
+@@
+ static const uint32_t virtio_gpu_formats[] = {
+ 	DRM_FORMAT_HOST_XRGB8888,
++	/* winq: l'ordine dei canali di Android (RGBX_8888 / RGBA_8888). */
++	DRM_FORMAT_XBGR8888,
++	DRM_FORMAT_ABGR8888,
+ };
+@@ uint32_t virtio_gpu_translate_format(uint32_t drm_fourcc)
+ 	case DRM_FORMAT_BGRA8888:
+ 		format = VIRTIO_GPU_FORMAT_A8R8G8B8_UNORM;
+ 		break;
++	case DRM_FORMAT_XBGR8888:
++		format = VIRTIO_GPU_FORMAT_R8G8B8X8_UNORM;
++		break;
++	case DRM_FORMAT_ABGR8888:
++		format = VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM;
++		break;
+
+--- a/drivers/gpu/drm/virtio/virtgpu_display.c
++++ b/drivers/gpu/drm/virtio/virtgpu_display.c
+@@ virtio_gpu_user_framebuffer_create
+-	if (mode_cmd->pixel_format != DRM_FORMAT_HOST_XRGB8888 &&
+-	    mode_cmd->pixel_format != DRM_FORMAT_HOST_ARGB8888)
+-		return ERR_PTR(-ENOENT);
++	if (mode_cmd->pixel_format != DRM_FORMAT_HOST_XRGB8888 &&
++	    mode_cmd->pixel_format != DRM_FORMAT_HOST_ARGB8888 &&
++	    mode_cmd->pixel_format != DRM_FORMAT_XBGR8888 &&
++	    mode_cmd->pixel_format != DRM_FORMAT_ABGR8888) {
++		drm_dbg_kms(dev, "winq: formato rifiutato %p4cc\n",
++			    &mode_cmd->pixel_format);
++		return ERR_PTR(-ENOENT);
++	}

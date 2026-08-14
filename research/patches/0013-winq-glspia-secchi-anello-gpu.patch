@@ -1,0 +1,350 @@
+From 5df20a4da63390b252eaaf2947e376c835f18b7c Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 15:00:02 +0200
+[PATCH] winq: tre secchi e dimensionamento dell'anello GPU
+ tasso reale
+
+La raccolta con la finestra corretta ha detto che "fuori" e' il 62% del
+secondo (623,9 ms/s contro 19,0 ms/s dentro, ~1.400 chiamate, 445 us/
+chiamata contro 2,7 us dentro): un secchio unico diceva quanto ma non
+cosa. fuori_ns/fuori_chiamate diventano array paralleli a ns[]/
+chiamate[], stessa indicizzazione (WINQ_SPIA_GL/SHADER/ATTESA;
+WINQ_SPIA_GPU resta sempre zero, le query stanno solo dentro la
+finestra). winq_glspia_aggiungi_fuori() prende un secchio come
+aggiungi(), e un indice fuori bounds si conta come assurda (scriverebbe
+fuori dall'array senza quella guardia) mentre orologio-indietro e
+frequenza-non-tarata restano guardie silenziose, come prima.
+
+La stessa raccolta ha detto anche 609 submit/s contro un anello GPU da
+8 caselle: intervallo di riuso 13,1 ms, quasi sempre insufficiente
+(saltate=487/s, assurde=96/s, 9-13 campioni su 609 raccolti). Portato a
+256 caselle (intervallo ~420 ms, ~32x il valore che falliva), col conto
+nel commento sopra WINQ_ANELLO: preferito al campionamento perche' il
+costo e' solo memoria (4 KB/contesto), non rappresentativita'.
+---
+ src/test-winq-glspia-conta.c | 72 ++++++++++++++++++++++++++----------
+ src/winq-glspia-conta.c      | 27 +++++++++-----
+ src/winq-glspia-conta.h      | 35 +++++++++++++-----
+ src/winq-glspia-gpu.c        | 26 ++++++++++++-
+ src/winq-glspia.h            | 10 +++--
+ 5 files changed, 126 insertions(+), 44 deletions(-)
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index 6c7bb6e..9d3c07b 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -220,10 +220,16 @@ static void prova_finestra_flag(void)
+     esigi(!winq_glspia_in_finestra(), "richiusa: la lettura torna a dire chiusa");
+ }
+ 
+-/* Il lavoro GL visto a finestra chiusa non e' un secchio come gli altri (non
+- * WINQ_SPIA_GL, non WINQ_SPIA_ATTESA, ...): va in fuori_ns/fuori_chiamate,
+- * senza distinzione di secchio -- vedi il commento sopra le macro in
+- * winq-glspia.h. Non e' nemmeno un campione scartato: assurde resta a zero. */
++/* CORREZIONE DEL 11/08/2026: sul campo la raccolta reale ha detto che "fuori"
++ * e' il 62% del secondo (623,9 ms/s contro 19,0 ms/s dentro), ma essendo un
++ * unico contenitore diceva solo quanto, non cosa. Ora e' parallelo ai secchi
++ * dentro-finestra (WINQ_SPIA_GL/SHADER/ATTESA): winq_glspia_aggiungi_fuori()
++ * prende un secchio come aggiungi(), e scrive in fuori_ns[secchio]/
++ * fuori_chiamate[secchio]. WINQ_SPIA_GPU non ha mai un campione fuori: le
++ * query GL_TIME_ELAPSED si aprono solo dentro la finestra (winq-glspia-gpu.c),
++ * quindi quella riga dell'array resta sempre zero, e non e' un caso da
++ * testare qui perche' nessun chiamante puo' produrlo. Non e' nemmeno un
++ * campione scartato: assurde resta a zero. */
+ static void prova_aggiungi_fuori(void)
+ {
+     struct winq_glspia s;
+@@ -232,13 +238,17 @@ static void prova_aggiungi_fuori(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(100, 150);   /* 50 tick = 50 us */
+-    winq_glspia_aggiungi_fuori(0, 3000);    /* 3000 tick = 3 ms */
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 0, 3000);     /* 3000 tick = 3 ms */
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_SHADER, 0, 500);  /* 500 tick = 0,5 ms */
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns == 3050000, "fuori: 3,05 ms in nanosecondi");
+-    esigi(s.fuori_chiamate == 2, "fuori: due chiamate contate");
+-    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL: intatto, il fuori non e' un secchio");
++    esigi(s.fuori_ns[WINQ_SPIA_GL] == 3050000, "GL fuori: 3,05 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 2, "GL fuori: due chiamate contate");
++    esigi(s.fuori_ns[WINQ_SPIA_SHADER] == 500000, "SHADER fuori: 0,5 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_SPIA_SHADER] == 1, "SHADER fuori: una chiamata contata");
++    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 0, "ATTESA fuori: intatto, nessuna chiamata");
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL dentro-finestra: intatto, fuori e' parallelo");
+     esigi(s.assurde == 0, "fuori non e' un errore: nessuna assurda");
+ }
+ 
+@@ -253,11 +263,11 @@ static void prova_aggiungi_fuori_orologio_indietro(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(500, 400);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 500, 400);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns == 0, "nessun tempo accumulato");
+-    esigi(s.fuori_chiamate == 0, "nessuna chiamata contata");
++    esigi(s.fuori_ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
+ }
+ 
+@@ -271,14 +281,35 @@ static void prova_aggiungi_fuori_frequenza_non_impostata(void)
+     winq_glspia_freq_forza(0);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(100, 200);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_GL, 100, 200);
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns == 0, "nessun tempo accumulato senza frequenza");
+-    esigi(s.fuori_chiamate == 0, "nessuna chiamata contata");
++    esigi(s.fuori_ns[WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.fuori_chiamate[WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
+     esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
+ }
+ 
++/* Il secchio fuori intervallo non deve scrivere fuori dall'array
++ * fuori_ns[]/fuori_chiamate[]: stesso rischio di prova_secchio_invalido(),
++ * ora raddoppiato perche' i campi sono array e non piu' scalari. Qui un
++ * secchio invalido E' un errore di chi chiama (indice fuori bounds), non
++ * lavoro fuori perimetro: si conta come assurda, come in aggiungi(). */
++static void prova_aggiungi_fuori_secchio_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, secchio invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(-1, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_N + 99, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
+ /* Il tempo CPU della finestra di decodifica, esportato nella struttura
+  * perche' QEMU lo usi al posto del proprio (piu' largo) nella sottrazione
+  * della riga di riepilogo -- vedi il commento nell'aggancio di
+@@ -310,16 +341,16 @@ static void prova_lettura_azzera_campi_nuovi(void)
+     winq_glspia_freq_forza(1000000);
+     winq_glspia_azzera();
+ 
+-    winq_glspia_aggiungi_fuori(0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_SPIA_ATTESA, 0, 1000);
+     winq_glspia_somma_finestra(500000);
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns == 1000000, "prima lettura: fuori 1 ms");
+-    esigi(s.fuori_chiamate == 1, "prima lettura: una chiamata fuori");
++    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 1000000, "prima lettura: fuori(ATTESA) 1 ms");
++    esigi(s.fuori_chiamate[WINQ_SPIA_ATTESA] == 1, "prima lettura: una chiamata fuori(ATTESA)");
+     esigi(s.finestra_ns == 500000, "prima lettura: finestra 0,5 ms");
+ 
+     winq_glspia_leggi(&s);
+-    esigi(s.fuori_ns == 0, "seconda lettura: fuori azzerato");
+-    esigi(s.fuori_chiamate == 0, "seconda lettura: zero chiamate fuori");
++    esigi(s.fuori_ns[WINQ_SPIA_ATTESA] == 0, "seconda lettura: fuori(ATTESA) azzerato");
++    esigi(s.fuori_chiamate[WINQ_SPIA_ATTESA] == 0, "seconda lettura: zero chiamate fuori(ATTESA)");
+     esigi(s.finestra_ns == 0, "seconda lettura: finestra azzerata");
+ }
+ 
+@@ -338,6 +369,7 @@ int main(void)
+     prova_aggiungi_fuori();
+     prova_aggiungi_fuori_orologio_indietro();
+     prova_aggiungi_fuori_frequenza_non_impostata();
++    prova_aggiungi_fuori_secchio_invalido();
+     prova_somma_finestra();
+     prova_lettura_azzera_campi_nuovi();
+ 
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index 35123fd..7e9cd3f 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -142,16 +142,23 @@ int winq_glspia_in_finestra(void)
+     return in_finestra;
+ }
+ 
+-/* Come aggiungi(), ma per il secchio "fuori dal perimetro": stesse guardie
+- * sull'orologio che torna indietro e sulla frequenza non tarata, ma un
+- * campione scartato qui non e' un errore di misura -- e' lavoro che virgl-
+- * renderer fa fuori dalla finestra cronometrata, non un campione assurdo.
+- * Percio' non tocca spia.assurde: si ignora in silenzio, esattamente come
++/* Come aggiungi(), ma scrive in fuori_ns[secchio]/fuori_chiamate[secchio]
++ * invece di ns[secchio]/chiamate[secchio]: e' lavoro che virglrenderer fa
++ * fuori dalla finestra cronometrata, non dentro. Il secchio fuori bounds e'
++ * un errore di chi chiama (scriverebbe fuori dall'array senza questa
++ * guardia) e si conta come assurda, come in aggiungi(); l'orologio che torna
++ * indietro e la frequenza non tarata restano invece guardie silenziose: un
++ * campione scartato per quelle non e' un errore di misura, e' solo lavoro
++ * fuori perimetro che si perde senza toccare spia.assurde -- esattamente come
+  * dice il commento sopra la dichiarazione in winq-glspia-conta.h. */
+-void winq_glspia_aggiungi_fuori(uint64_t t0, uint64_t t1)
++void winq_glspia_aggiungi_fuori(int secchio, uint64_t t0, uint64_t t1)
+ {
+     uint64_t tick;
+ 
++    if (secchio < 0 || secchio >= WINQ_SPIA_N) {
++        spia.assurde++;
++        return;
++    }
+     if (t1 < t0) {
+         return;
+     }
+@@ -160,8 +167,8 @@ void winq_glspia_aggiungi_fuori(uint64_t t0, uint64_t t1)
+     }
+     tick = t1 - t0;
+ 
+-    spia.fuori_ns += winq_tick_a_ns(tick);
+-    spia.fuori_chiamate++;
++    spia.fuori_ns[secchio] += winq_tick_a_ns(tick);
++    spia.fuori_chiamate[secchio]++;
+ }
+ 
+ void winq_glspia_conta_saltata(void)
+@@ -196,11 +203,11 @@ void winq_glspia_azzera(void)
+     for (i = 0; i < WINQ_SPIA_N; i++) {
+         spia.ns[i] = 0;
+         spia.chiamate[i] = 0;
++        spia.fuori_ns[i] = 0;
++        spia.fuori_chiamate[i] = 0;
+     }
+     spia.saltate = 0;
+     spia.assurde = 0;
+-    spia.fuori_ns = 0;
+-    spia.fuori_chiamate = 0;
+     spia.finestra_ns = 0;
+ }
+ 
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index e3baa9b..49702fd 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -62,9 +62,22 @@ struct winq_glspia {
+      * passa da "assurde"), finestra_ns e' il tempo CPU dello stesso tratto
+      * che i secchi sopra misurano, cosi' che QEMU possa sottrarre da un
+      * denominatore che copre lo stesso perimetro del numeratore. Vedi
+-     * winq_glspia_finestra_apri()/chiudi() e l'aggancio in vrend_decode.c. */
+-    uint64_t fuori_ns;       /* lavoro GL visto a finestra chiusa, ns */
+-    uint64_t fuori_chiamate; /* numero di quelle chiamate */
++     * winq_glspia_finestra_apri()/chiudi() e l'aggancio in vrend_decode.c.
++     *
++     * SECONDA CORREZIONE, STESSO GIORNO: la prima raccolta vera con la
++     * finestra corretta ha detto che "fuori" e' il 62% del secondo
++     * (623,9 ms/s contro 19,0 ms/s dentro, ~1.400 chiamate, 445 us/chiamata
++     * contro 2,7 us dentro) -- ma essendo fuori_ns/fuori_chiamate scalari,
++     * quel numero diceva solo QUANTO, non COSA. Ora sono array, PARALLELI a
++     * ns[]/chiamate[] con la stessa indicizzazione: fuori_ns[WINQ_SPIA_GL] e'
++     * il lavoro di disegno/buffer/texture visto a finestra chiusa,
++     * fuori_ns[WINQ_SPIA_SHADER] la compilazione shader fuori finestra, ecc.
++     * fuori_ns[WINQ_SPIA_GPU] resta sempre zero: le query GL_TIME_ELAPSED si
++     * aprono solo dentro la finestra (winq-glspia-gpu.c), quindi per quel
++     * secchio "fuori" non esiste come concetto -- non un buco, una riga
++     * dell'array semplicemente mai scritta. */
++    uint64_t fuori_ns[WINQ_SPIA_N];       /* lavoro GL per secchio, a finestra chiusa */
++    uint64_t fuori_chiamate[WINQ_SPIA_N]; /* numero di quelle chiamate, per secchio */
+     uint64_t finestra_ns;    /* tempo CPU del tratto cronometrato (decodifica) */
+ };
+ 
+@@ -100,12 +113,16 @@ int winq_glspia_in_finestra(void);
+ 
+ void winq_glspia_conta_saltata(void);
+ void winq_glspia_conta_assurda(void);
+-/* Come aggiungi(), ma per il lavoro GL visto a finestra chiusa: non ha un
+- * secchio (i wrapper non distinguono GL/SHADER/ATTESA fuori dal perimetro
+- * cronometrato, vedi il commento sulla struct), e un campione scartato dalle
+- * stesse guardie di aggiungi() (orologio indietro, frequenza non tarata) non
+- * e' un errore -- non tocca spia.assurde, si ignora in silenzio. */
+-void winq_glspia_aggiungi_fuori(uint64_t t0, uint64_t t1);
++/* Come aggiungi(), stesso secchio, ma per il lavoro GL visto a finestra
++ * chiusa: scrive in fuori_ns[secchio]/fuori_chiamate[secchio] invece di
++ * ns[secchio]/chiamate[secchio]. Un secchio fuori bounds (indice invalido,
++ * un errore di chi chiama) si conta come assurda, esattamente come in
++ * aggiungi() -- la struttura e' un array, e un indice sbagliato scriverebbe
++ * fuori dai bordi senza quella guardia. Le altre due guardie di aggiungi()
++ * (orologio indietro, frequenza non tarata) restano invece guardie silenziose
++ * qui: un campione scartato per quelle non e' un errore, e' lavoro fuori
++ * perimetro, e non tocca spia.assurde. */
++void winq_glspia_aggiungi_fuori(int secchio, uint64_t t0, uint64_t t1);
+ /* I nanosecondi arrivano gia' convertiti dalla query GL, quindi non passano
+  * per aggiungi(), che converte da tick. */
+ void winq_glspia_somma_gpu(uint64_t ns);
+diff --git a/src/winq-glspia-gpu.c b/src/winq-glspia-gpu.c
+index c2bc2db..eecac8e 100644
+--- a/src/winq-glspia-gpu.c
++++ b/src/winq-glspia-gpu.c
+@@ -36,7 +36,31 @@
+  * quindi non va incluso a parte. */
+ #include <epoxy/wgl.h>
+ 
+-#define WINQ_ANELLO 8
++/* WINQ_ANELLO: quante caselle nell'anello per contesto, cioe' ogni quante
++ * submit una casella viene riusata (raccogli() sulla casella piu' vecchia,
++ * poi glBeginQuery ci riapre sopra -- vedi gpu_apri() sotto).
++ *
++ * DIMENSIONATO L'11/08/2026 sulla misura di produzione, dopo la correzione
++ * della finestra: submit=609/s. Con il valore precedente (8 caselle)
++ * l'intervallo di riuso era 8/609 s ~= 13,1 ms -- troppo poco perche' la
++ * query GL_TIME_ELAPSED fosse quasi mai pronta: saltate=487/s, assurde=96/s,
++ * 9-13 campioni raccolti su 609 (1,5-2%). t_gpu non era utilizzabile come
++ * aggregato.
++ *
++ * 256 caselle portano l'intervallo di riuso a 256/609 s ~= 420 ms, ~32 volte
++ * quello che falliva: margine ampio anche per code GPU sotto carico. Preferito
++ * ad allungare l'intervallo campionando una submit ogni N (che avrebbe
++ * scartato lavoro a monte, non solo risultati in ritardo) perche' qui il
++ * costo e' solo memoria, non rappresentativita': ogni submit apre ancora la
++ * sua query, nessuna viene saltata all'apertura per campionamento. Il costo:
++ * sizeof(GLuint) + sizeof(uint64_t) + sizeof(int) = 4 + 8 + 4 = 16 byte per
++ * casella (vedi i tre array in struct winq_ctx sotto), quindi 256 * 16 = 4 KB
++ * per contesto, 32 KB su WINQ_CONTESTI (8) contesti, e nel caso peggiore
++ * 256 * 8 = 2048 query object GL in tutto -- trascurabile per un driver che
++ * ne supporta tipicamente migliaia. Se una futura misura mostrasse ancora
++ * "saltati" > 0 a un tasso di submit piu' alto di questo, va rifatto lo
++ * stesso conto con il nuovo tasso, non alzato a occhio. */
++#define WINQ_ANELLO 256
+ #define WINQ_BANDA  10   /* t_gpu oltre 10 x t_cpu non e' un numero, e' un errore */
+ 
+ /* WINQ_CONTESTI: quanti contesti GL distinti questo shim puo' cronometrare
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+index 994f443..a45ef8e 100644
+--- a/src/winq-glspia.h
++++ b/src/winq-glspia.h
+@@ -82,8 +82,10 @@
+  * creazione di oggetti -- e quel tempo cadeva silenziosamente nel "cpu" che la
+  * riga di riepilogo sottrae, senza mai essere stato incluso: la causa della
+  * maggioranza dei campioni con virgl=0. winq_glspia_aggiungi_fuori() lo conta
+- * a parte, senza secchio: non e' un errore da scartare, e' lavoro fuori
+- * perimetro. */
++ * a parte, nello stesso secchio del gruppo ma nell'array "fuori" (vedi la
++ * struct in winq-glspia-conta.h): non e' un errore da scartare, e' lavoro
++ * fuori perimetro, e la seconda correzione dell'11/08/2026 l'ha reso
++ * distinto per GL/SHADER/ATTESA invece di un unico contenitore cieco. */
+ #define WINQ_SPIA_VAL(secchio, espr) __extension__({                        \
+     uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
+     __typeof__(espr) winq_r_ = (espr);                                      \
+@@ -92,7 +94,7 @@
+         if (winq_glspia_in_finestra()) {                                    \
+             winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
+         } else {                                                            \
+-            winq_glspia_aggiungi_fuori(winq_t0_, winq_t1_);                 \
++            winq_glspia_aggiungi_fuori((secchio), winq_t0_, winq_t1_);      \
+         }                                                                    \
+     }                                                                       \
+     winq_r_;                                                                \
+@@ -106,7 +108,7 @@
+         if (winq_glspia_in_finestra()) {                                    \
+             winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
+         } else {                                                            \
+-            winq_glspia_aggiungi_fuori(winq_t0_, winq_t1_);                 \
++            winq_glspia_aggiungi_fuori((secchio), winq_t0_, winq_t1_);      \
+         }                                                                    \
+     }                                                                       \
+ } while (0)
+-- 
+2.53.0.vfs.0.7
+

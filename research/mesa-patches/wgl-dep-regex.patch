@@ -1,0 +1,11 @@
+--- a/src/gallium/targets/wgl/meson.build
++++ b/src/gallium/targets/wgl/meson.build
+@@ -22,7 +22,7 @@
+     libgallium, libglsl, libmesa, libwsgdi, libglapi_bridge, libglapi, libgalliumvl_stub,
+   ],
+   dependencies : [
+-    dep_ws2_32, idep_nir, idep_mesautil, driver_swrast,
++    dep_ws2_32, dep_regex, idep_nir, idep_mesautil, driver_swrast,
+     driver_d3d12, driver_zink, winsys_d3d12_wgl
+   ],
+   link_args : gallium_wgl_link_args,

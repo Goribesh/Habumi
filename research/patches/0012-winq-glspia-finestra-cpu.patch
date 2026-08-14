@@ -1,0 +1,430 @@
+From af62db4d562268b1ec333cb42942d331412ba4c7 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 13:44:32 +0200
+[PATCH] winq: finestra della sottrazione del tempo cpu
+ misurata
+
+virgl = cpu - gl - shader - attesa dava virgl=0 su 9 campioni su 10:
+virglrenderer chiama GL anche fuori da vrend_decode_ctx_submit_cmd
+(fence, trasferimenti, creazione di oggetti), e quel lavoro finiva nei
+secchi sottratti da un "cpu" che non copriva quel tratto. Un
+interruttore di finestra (winq_glspia_finestra_apri/chiudi/in_finestra)
+alzato e abbassato sugli stessi confini di gpu_apri()/gpu_chiudi() fa
+si' che i wrapper contino nel secchio solo a finestra aperta; fuori,
+finiscono in fuori_ns/fuori_chiamate, non in "assurde" (non e' un
+errore, e' lavoro fuori perimetro). Esportato anche finestra_ns, il
+tempo CPU dello stesso tratto dei secchi, perche' QEMU lo usi come
+minuendo al posto del proprio cpu (piu' largo).
+---
+ src/test-winq-glspia-conta.c | 129 +++++++++++++++++++++++++++++++++++
+ src/vrend/vrend_decode.c     |  38 +++++++++--
+ src/winq-glspia-conta.c      |  54 +++++++++++++++
+ src/winq-glspia-conta.h      |  40 +++++++++++
+ src/winq-glspia.h            |  28 +++++++-
+ 5 files changed, 282 insertions(+), 7 deletions(-)
+
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+index 7ef9917..6c7bb6e 100644
+--- a/src/test-winq-glspia-conta.c
++++ b/src/test-winq-glspia-conta.c
+@@ -200,6 +200,129 @@ static void prova_somma_gpu(void)
+     esigi(s.chiamate[WINQ_SPIA_GPU] == 2, "due campioni contati");
+ }
+ 
++/* L'interruttore di finestra: acceso da winq_glspia_finestra_apri(), spento
++ * da winq_glspia_finestra_chiudi(). Non e' parte della fotografia che
++ * winq_glspia_leggi() restituisce e winq_glspia_azzera() ripulisce: e' lo
++ * stato del tratto cronometrato in corso, non un accumulo al secondo -- per
++ * questo qui non si passa da azzera()/leggi(), si legge solo
++ * winq_glspia_in_finestra(). */
++static void prova_finestra_flag(void)
++{
++    printf("interruttore di finestra:\n");
++
++    winq_glspia_finestra_chiudi();
++    esigi(!winq_glspia_in_finestra(), "chiusa: la lettura dice chiusa");
++
++    winq_glspia_finestra_apri();
++    esigi(winq_glspia_in_finestra(), "aperta: la lettura dice aperta");
++
++    winq_glspia_finestra_chiudi();
++    esigi(!winq_glspia_in_finestra(), "richiusa: la lettura torna a dire chiusa");
++}
++
++/* Il lavoro GL visto a finestra chiusa non e' un secchio come gli altri (non
++ * WINQ_SPIA_GL, non WINQ_SPIA_ATTESA, ...): va in fuori_ns/fuori_chiamate,
++ * senza distinzione di secchio -- vedi il commento sopra le macro in
++ * winq-glspia.h. Non e' nemmeno un campione scartato: assurde resta a zero. */
++static void prova_aggiungi_fuori(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(100, 150);   /* 50 tick = 50 us */
++    winq_glspia_aggiungi_fuori(0, 3000);    /* 3000 tick = 3 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns == 3050000, "fuori: 3,05 ms in nanosecondi");
++    esigi(s.fuori_chiamate == 2, "fuori: due chiamate contate");
++    esigi(s.ns[WINQ_SPIA_GL] == 0, "GL: intatto, il fuori non e' un secchio");
++    esigi(s.assurde == 0, "fuori non e' un errore: nessuna assurda");
++}
++
++/* Stessa guardia di aggiungi() sull'orologio che torna indietro, ma qui un
++ * campione scartato non e' un errore da contare in assurde: e' lavoro fuori
++ * dalla finestra, e si ignora in silenzio senza toccare nessun contatore. */
++static void prova_aggiungi_fuori_orologio_indietro(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, orologio indietro:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(500, 400);
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns == 0, "nessun tempo accumulato");
++    esigi(s.fuori_chiamate == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
++}
++
++/* Stesso buco di prova_frequenza_non_impostata(), sull'altra funzione che
++ * divide per freq_hz. */
++static void prova_aggiungi_fuori_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(100, 200);
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.fuori_chiamate == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
++}
++
++/* Il tempo CPU della finestra di decodifica, esportato nella struttura
++ * perche' QEMU lo usi al posto del proprio (piu' largo) nella sottrazione
++ * della riga di riepilogo -- vedi il commento nell'aggancio di
++ * vrend_decode.c. I nanosecondi arrivano gia' convertiti da
++ * winq_glspia_intervallo_ns(), quindi si sommano direttamente, come
++ * winq_glspia_somma_gpu(). */
++static void prova_somma_finestra(void)
++{
++    struct winq_glspia s;
++
++    printf("somma finestra:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_somma_finestra(1000000);
++    winq_glspia_somma_finestra(2000000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.finestra_ns == 3000000, "3 ms sommati come nanosecondi");
++}
++
++/* La lettura azzera anche i campi nuovi: la riga al secondo non deve vedere
++ * lavoro fuori-finestra o tempo di finestra di un secondo precedente. */
++static void prova_lettura_azzera_campi_nuovi(void)
++{
++    struct winq_glspia s;
++
++    printf("la lettura azzera anche i campi nuovi:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(0, 1000);
++    winq_glspia_somma_finestra(500000);
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns == 1000000, "prima lettura: fuori 1 ms");
++    esigi(s.fuori_chiamate == 1, "prima lettura: una chiamata fuori");
++    esigi(s.finestra_ns == 500000, "prima lettura: finestra 0,5 ms");
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns == 0, "seconda lettura: fuori azzerato");
++    esigi(s.fuori_chiamate == 0, "seconda lettura: zero chiamate fuori");
++    esigi(s.finestra_ns == 0, "seconda lettura: finestra azzerata");
++}
++
+ int main(void)
+ {
+     prova_accumulo();
+@@ -211,6 +334,12 @@ int main(void)
+     prova_taratura_frequenza_non_impostata();
+     prova_intervallo_ns();
+     prova_somma_gpu();
++    prova_finestra_flag();
++    prova_aggiungi_fuori();
++    prova_aggiungi_fuori_orologio_indietro();
++    prova_aggiungi_fuori_frequenza_non_impostata();
++    prova_somma_finestra();
++    prova_lettura_azzera_campi_nuovi();
+ 
+     if (falliti) {
+         printf("\n%d PROVE FALLITE\n", falliti);
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index d662e87..7ae80e2 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -2089,7 +2089,20 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+     * numero, e deve coprire esattamente il tratto che la query GL
+     * cronometra, non un intervallo piu' largo che includerebbe anche la
+     * validazione fatta da virgl_renderer_submit_cmd prima di arrivare al
+-    * vero submit_cmd del contesto. */
++    * vero submit_cmd del contesto.
++    *
++    * CORREZIONE DELL'11/08/2026: winq_glspia_finestra_apri() alza qui lo
++    * stesso interruttore che le macro di winq-glspia.h leggono a ogni
++    * chiamata GL avvolta (winq_glspia_in_finestra()), sugli stessi confini
++    * di winq_glspia_gpu_apri()/gpu_chiudi() qui sotto -- non a caso: e' la
++    * stessa garanzia sul contesto GL corrente che ha spostato quell'aggancio
++    * qui (vedi il commento sopra). Senza questo interruttore i wrapper
++    * contavano ogni chiamata GL avvolta come se fosse dentro "cpu", ma
++    * virglrenderer ne chiama molte fuori da questo ciclo (attesa sulle
++    * fence, trasferimenti, creazione di oggetti): quel tempo finiva
++    * comunque nei secchi, sottratto da un "cpu" che non lo includeva mai --
++    * la causa della maggioranza dei campioni con virgl=0. */
++   winq_glspia_finestra_apri();
+    winq_glspia_gpu_apri();
+    t0 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
+ 
+@@ -2141,9 +2154,26 @@ out:
+     * completamento normale): un chiudi dimenticato su uno di questi rami
+     * lascerebbe la query GL_TIME_ELAPSED aperta per sempre, e ogni
+     * glBeginQuery successivo su questo contesto fallirebbe in silenzio
+-    * (vedi il commento in cima a winq-glspia-gpu.c). */
+-   t1 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
+-   winq_glspia_gpu_chiudi(winq_glspia_intervallo_ns(t0, t1));
++    * (vedi il commento in cima a winq-glspia-gpu.c). Per lo stesso motivo
++    * winq_glspia_finestra_chiudi() sta qui e non in un secondo punto: un
++    * interruttore lasciato acceso farebbe contare come "dentro" anche il
++    * lavoro GL della submit successiva, prima che la sua finestra si apra. */
++   {
++      uint64_t finestra_ns;
++
++      t1 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
++      finestra_ns = winq_glspia_intervallo_ns(t0, t1);
++
++      /* finestra_ns e' lo stesso numero passato alla banda di plausibilita'
++       * di gpu_chiudi() qui sotto: e' il tempo CPU dello stesso tratto che i
++       * secchi GL/SHADER/ATTESA misurano. Esportato nella struttura perche'
++       * QEMU lo usi come denominatore della sottrazione (§4 del brief),
++       * invece del proprio "cpu" misurato attorno a virgl_renderer_submit_cmd,
++       * che e' piu' largo di questo ciclo. */
++      winq_glspia_somma_finestra(finestra_ns);
++      winq_glspia_gpu_chiudi(finestra_ns);
++   }
++   winq_glspia_finestra_chiudi();
+    return ret;
+ }
+ 
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+index 340cec4..35123fd 100644
+--- a/src/winq-glspia-conta.c
++++ b/src/winq-glspia-conta.c
+@@ -19,6 +19,11 @@ static struct winq_glspia spia;
+ static uint64_t freq_hz;
+ static int acceso = -1;
+ 
++/* Non e' parte di 'spia': non e' un accumulo al secondo che winq_glspia_leggi()
++ * fotografa e winq_glspia_azzera() ripulisce, e' lo stato del tratto
++ * cronometrato in corso -- vive quanto una submit, non quanto un secondo. */
++static int in_finestra;
++
+ int winq_glspia_accesa(void)
+ {
+     if (acceso < 0) {
+@@ -122,6 +127,43 @@ uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1)
+     return winq_tick_a_ns(t1 - t0);
+ }
+ 
++void winq_glspia_finestra_apri(void)
++{
++    in_finestra = 1;
++}
++
++void winq_glspia_finestra_chiudi(void)
++{
++    in_finestra = 0;
++}
++
++int winq_glspia_in_finestra(void)
++{
++    return in_finestra;
++}
++
++/* Come aggiungi(), ma per il secchio "fuori dal perimetro": stesse guardie
++ * sull'orologio che torna indietro e sulla frequenza non tarata, ma un
++ * campione scartato qui non e' un errore di misura -- e' lavoro che virgl-
++ * renderer fa fuori dalla finestra cronometrata, non un campione assurdo.
++ * Percio' non tocca spia.assurde: si ignora in silenzio, esattamente come
++ * dice il commento sopra la dichiarazione in winq-glspia-conta.h. */
++void winq_glspia_aggiungi_fuori(uint64_t t0, uint64_t t1)
++{
++    uint64_t tick;
++
++    if (t1 < t0) {
++        return;
++    }
++    if (freq_hz == 0) {
++        return;
++    }
++    tick = t1 - t0;
++
++    spia.fuori_ns += winq_tick_a_ns(tick);
++    spia.fuori_chiamate++;
++}
++
+ void winq_glspia_conta_saltata(void)
+ {
+     spia.saltate++;
+@@ -138,6 +180,15 @@ void winq_glspia_somma_gpu(uint64_t ns)
+     spia.chiamate[WINQ_SPIA_GPU]++;
+ }
+ 
++/* ns e' gia' il tempo CPU della finestra, convertito da winq_glspia_intervallo_ns()
++ * sugli stessi t0/t1 che l'aggancio passa a winq_glspia_gpu_chiudi(): si
++ * somma senza passare da aggiungi(), che si aspetta tick grezzi e non ns
++ * gia' convertiti -- stessa ragione per cui somma_gpu() non usa aggiungi(). */
++void winq_glspia_somma_finestra(uint64_t ns)
++{
++    spia.finestra_ns += ns;
++}
++
+ void winq_glspia_azzera(void)
+ {
+     int i;
+@@ -148,6 +199,9 @@ void winq_glspia_azzera(void)
+     }
+     spia.saltate = 0;
+     spia.assurde = 0;
++    spia.fuori_ns = 0;
++    spia.fuori_chiamate = 0;
++    spia.finestra_ns = 0;
+ }
+ 
+ void winq_glspia_leggi(struct winq_glspia *fuori)
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index bf14fb5..e3baa9b 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -51,6 +51,21 @@ struct winq_glspia {
+     uint64_t chiamate[WINQ_SPIA_N];
+     uint64_t saltate;   /* query GPU non pronte quando la casella serviva */
+     uint64_t assurde;   /* campioni fuori banda o intervalli negativi */
++    /* CORREZIONE DELL'11/08/2026: la sottrazione virgl = cpu - gl - shader -
++     * attesa presupponeva che ogni chiamata GL avvolta cadesse dentro la
++     * finestra che "cpu" misura. Falso: virglrenderer chiama GL anche fuori
++     * da vrend_decode_ctx_submit_cmd (attesa sulle fence, trasferimenti,
++     * creazione di oggetti), e quel tempo veniva sottratto da un "cpu" che
++     * non lo includeva mai -- la causa dei 9 campioni su 10 con virgl=0. I
++     * tre campi sotto chiudono il buco: fuori_ns/fuori_chiamate contano cio'
++     * che i wrapper vedono a finestra chiusa (non e' un errore, quindi non
++     * passa da "assurde"), finestra_ns e' il tempo CPU dello stesso tratto
++     * che i secchi sopra misurano, cosi' che QEMU possa sottrarre da un
++     * denominatore che copre lo stesso perimetro del numeratore. Vedi
++     * winq_glspia_finestra_apri()/chiudi() e l'aggancio in vrend_decode.c. */
++    uint64_t fuori_ns;       /* lavoro GL visto a finestra chiusa, ns */
++    uint64_t fuori_chiamate; /* numero di quelle chiamate */
++    uint64_t finestra_ns;    /* tempo CPU del tratto cronometrato (decodifica) */
+ };
+ 
+ /* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
+@@ -71,11 +86,36 @@ void winq_glspia_aggiungi(int secchio, uint64_t t0, uint64_t t1);
+  * motivo). Stessa guardia di aggiungi() sull'orologio che torna indietro:
+  * intervallo negativo -> 0, non un numero enorme. */
+ uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1);
++
++/* L'interruttore di finestra. winq_glspia_finestra_apri()/chiudi() li alza e
++ * li abbassa l'aggancio in vrend_decode.c, sugli stessi confini di
++ * winq_glspia_gpu_apri()/gpu_chiudi(): e' lo stesso tratto, la stessa
++ * garanzia sul contesto GL corrente (vedi il commento in cima a
++ * vrend_decode_ctx_submit_cmd). winq_glspia_in_finestra() e' letta dalle
++ * macro di winq-glspia.h a ogni chiamata GL avvolta -- una lettura di
++ * variabile, niente di piu', per restare sul percorso caldo. */
++void winq_glspia_finestra_apri(void);
++void winq_glspia_finestra_chiudi(void);
++int winq_glspia_in_finestra(void);
++
+ void winq_glspia_conta_saltata(void);
+ void winq_glspia_conta_assurda(void);
++/* Come aggiungi(), ma per il lavoro GL visto a finestra chiusa: non ha un
++ * secchio (i wrapper non distinguono GL/SHADER/ATTESA fuori dal perimetro
++ * cronometrato, vedi il commento sulla struct), e un campione scartato dalle
++ * stesse guardie di aggiungi() (orologio indietro, frequenza non tarata) non
++ * e' un errore -- non tocca spia.assurde, si ignora in silenzio. */
++void winq_glspia_aggiungi_fuori(uint64_t t0, uint64_t t1);
+ /* I nanosecondi arrivano gia' convertiti dalla query GL, quindi non passano
+  * per aggiungi(), che converte da tick. */
+ void winq_glspia_somma_gpu(uint64_t ns);
++/* Il tempo CPU della finestra di decodifica: stesso ns che l'aggancio passa a
++ * winq_glspia_gpu_chiudi() per la banda di plausibilita', sommato qui perche'
++ * QEMU lo legga e sottragga da un denominatore che copre lo stesso perimetro
++ * dei secchi sopra -- invece del proprio "cpu" misurato attorno a
++ * virgl_renderer_submit_cmd, che e' piu' largo della finestra (vedi la nota
++ * sulla struct winq_glspia). */
++void winq_glspia_somma_finestra(uint64_t ns);
+ void winq_glspia_azzera(void);
+ uint64_t winq_glspia_taratura_ns(void);
+ 
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+index 3968002..994f443 100644
+--- a/src/winq-glspia.h
++++ b/src/winq-glspia.h
+@@ -71,12 +71,29 @@
+  * reale non e' mai zero, quindi una lettura vera con la diagnostica accesa non
+  * puo' mai essere scambiata per "spenta". Se in futuro winq_glspia_ora() venisse
+  * ricollegata a un orologio che *puo'* restituire zero, questa sentinella
+- * andrebbe rivista insieme a lei. */
++ * andrebbe rivista insieme a lei.
++ *
++ * CORREZIONE DELL'11/08/2026: la chiamata avvolta si cronometra sempre (se la
++ * diagnostica e' accesa), ma il risultato va nel secchio del suo gruppo solo
++ * se winq_glspia_in_finestra() dice che siamo dentro il tratto che
++ * vrend_decode_ctx_submit_cmd cronometra (vrend_decode.c, fra
++ * winq_glspia_finestra_apri() e finestra_chiudi()). Fuori da li' virglrenderer
++ * chiama GL comunque -- attesa sulle fence, trasferimenti di risorse,
++ * creazione di oggetti -- e quel tempo cadeva silenziosamente nel "cpu" che la
++ * riga di riepilogo sottrae, senza mai essere stato incluso: la causa della
++ * maggioranza dei campioni con virgl=0. winq_glspia_aggiungi_fuori() lo conta
++ * a parte, senza secchio: non e' un errore da scartare, e' lavoro fuori
++ * perimetro. */
+ #define WINQ_SPIA_VAL(secchio, espr) __extension__({                        \
+     uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
+     __typeof__(espr) winq_r_ = (espr);                                      \
+     if (winq_t0_) {                                                         \
+-        winq_glspia_aggiungi((secchio), winq_t0_, winq_glspia_ora());       \
++        uint64_t winq_t1_ = winq_glspia_ora();                              \
++        if (winq_glspia_in_finestra()) {                                    \
++            winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
++        } else {                                                            \
++            winq_glspia_aggiungi_fuori(winq_t0_, winq_t1_);                 \
++        }                                                                    \
+     }                                                                       \
+     winq_r_;                                                                \
+ })
+@@ -85,7 +102,12 @@
+     uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
+     (espr);                                                                 \
+     if (winq_t0_) {                                                         \
+-        winq_glspia_aggiungi((secchio), winq_t0_, winq_glspia_ora());       \
++        uint64_t winq_t1_ = winq_glspia_ora();                              \
++        if (winq_glspia_in_finestra()) {                                    \
++            winq_glspia_aggiungi((secchio), winq_t0_, winq_t1_);            \
++        } else {                                                            \
++            winq_glspia_aggiungi_fuori(winq_t0_, winq_t1_);                 \
++        }                                                                    \
+     }                                                                       \
+ } while (0)
+ 
+-- 
+2.53.0.vfs.0.7
+

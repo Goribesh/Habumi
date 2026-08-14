@@ -1,0 +1,127 @@
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -524,6 +524,10 @@
+     virgl_renderer_resource_create(&args, NULL, 0);
+ }
+ 
++/* winq: definita piu' sotto, accanto alla mappa di bit -- il prototipo sta
++ * qui perche' i primi due usi (create_3d e unref) vengono prima. */
++static void winq_res_conta(uint32_t id, int quale);
++
+ static void virgl_cmd_create_resource_3d(VirtIOGPU *g,
+                                          struct virtio_gpu_ctrl_command *cmd)
+ {
+@@ -534,6 +538,7 @@
+     VIRTIO_GPU_FILL_CMD(c3d);
+     trace_virtio_gpu_cmd_res_create_3d(c3d.resource_id, c3d.format,
+                                        c3d.width, c3d.height, c3d.depth);
++    winq_res_conta(c3d.resource_id, 1);
+ 
+     if (c3d.resource_id == 0) {
+         qemu_log_mask(LOG_GUEST_ERROR, "%s: resource id 0 is not allowed\n",
+@@ -615,6 +620,7 @@
+ 
+     VIRTIO_GPU_FILL_CMD(unref);
+     trace_virtio_gpu_cmd_res_unref(unref.resource_id);
++    winq_res_conta(unref.resource_id, 2);
+ 
+     res = virtio_gpu_virgl_find_resource(g, unref.resource_id);
+     if (!res) {
+@@ -1253,6 +1259,89 @@
+ }
+ 
+ 
++/* winq: IL RICAMBIO DELLE RISORSE, dietro WINQ_GPU_DIAG.
++ *
++ * PERCHE'. La traccia ETW del kernel grafico dice 25 Unlock e 3 paginazioni
++ * per fotogramma, e l'A/B con WINQ_CTX0_SEMPRE ha SMENTITO che siano i cambi
++ * di contesto (quattro volte meno switch, unlock giu' solo di 1,5). Il
++ * candidato rimasto e' che le risorse nascano e muoiano invece di restare
++ * residenti: una risorsa creata e distrutta viene mappata, smappata, resa
++ * residente e sfrattata, il che spiegherebbe entrambi i numeri con un
++ * meccanismo solo. Numeri e ragionamento in qemu/PRESTAZIONI.md.
++ *
++ * LA DOMANDA DISCRIMINANTE, e questa diagnostica esiste per rispondere solo a
++ * quella: gli identificatori di risorsa sono ogni volta NUOVI, oppure sono
++ * sempre gli stessi riattaccati e ricreati?
++ *
++ *   - "nuovi" resta alto secondo dopo secondo  -> ricambio vero, il guest
++ *     brucia identificatori e non riusa niente;
++ *   - "nuovi" crolla a zero mentre "attach" resta alto -> sono sempre gli
++ *     stessi, e il costo e' traffico ridondante su un insieme stabile.
++ *
++ * Le due diagnosi vogliono cure opposte, e senza questo numero si sceglierebbe
++ * a caso.
++ *
++ * Il conteggio e' una mappa di bit su 65536 identificatori, 8 KB: gli id di
++ * virtio-gpu sono assegnati dal guest e in pratica piccoli. Un id oltre quel
++ * limite viene contato a parte invece di essere ignorato, cosi' il fatto si
++ * vede invece di falsare il totale. */
++#define WINQ_RES_MAX 65536
++
++static uint8_t winq_res_mai[WINQ_RES_MAX / 8];   /* visto da inizio sessione */
++static uint8_t winq_res_sec[WINQ_RES_MAX / 8];   /* visto in questo secondo */
++static unsigned long winq_res_attach, winq_res_create, winq_res_unref;
++static unsigned long winq_res_distinti, winq_res_nuovi, winq_res_cumulativi;
++static unsigned long winq_res_fuori_scala, winq_res_id_max;
++static int64_t winq_res_inizio;
++
++static void winq_res_conta(uint32_t id, int quale)
++{
++    int64_t ora;
++
++    if (!getenv("WINQ_GPU_DIAG")) {
++        return;
++    }
++
++    switch (quale) {
++    case 0: winq_res_attach++; break;
++    case 1: winq_res_create++; break;
++    default: winq_res_unref++; break;
++    }
++
++    if (id >= WINQ_RES_MAX) {
++        winq_res_fuori_scala++;
++    } else {
++        if (id > winq_res_id_max) {
++            winq_res_id_max = id;
++        }
++        if (!(winq_res_sec[id / 8] & (1u << (id % 8)))) {
++            winq_res_sec[id / 8] |= 1u << (id % 8);
++            winq_res_distinti++;
++        }
++        if (!(winq_res_mai[id / 8] & (1u << (id % 8)))) {
++            winq_res_mai[id / 8] |= 1u << (id % 8);
++            winq_res_nuovi++;
++            winq_res_cumulativi++;
++        }
++    }
++
++    ora = g_get_monotonic_time();
++    if (!winq_res_inizio) {
++        winq_res_inizio = ora;
++    } else if (ora - winq_res_inizio >= 1000000) {
++        error_report("winq-res/s: attach=%lu create=%lu unref=%lu "
++                     "distinti=%lu nuovi=%lu cumulativi=%lu id_max=%lu "
++                     "fuori_scala=%lu",
++                     winq_res_attach, winq_res_create, winq_res_unref,
++                     winq_res_distinti, winq_res_nuovi, winq_res_cumulativi,
++                     winq_res_id_max, winq_res_fuori_scala);
++        winq_res_attach = winq_res_create = winq_res_unref = 0;
++        winq_res_distinti = winq_res_nuovi = 0;
++        memset(winq_res_sec, 0, sizeof(winq_res_sec));
++        winq_res_inizio = ora;
++    }
++}
++
+ static void virgl_cmd_ctx_attach_resource(VirtIOGPU *g,
+                                           struct virtio_gpu_ctrl_command *cmd)
+ {
+@@ -1262,6 +1351,7 @@
+     trace_virtio_gpu_cmd_ctx_res_attach(att_res.hdr.ctx_id,
+                                         att_res.resource_id);
+ 
++    winq_res_conta(att_res.resource_id, 0);
+     virgl_renderer_ctx_attach_resource(att_res.hdr.ctx_id, att_res.resource_id);
+ }
+ 

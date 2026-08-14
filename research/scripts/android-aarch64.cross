@@ -1,0 +1,42 @@
+# File di cross-compilazione meson: da Windows ARM64 verso Android aarch64.
+#
+# PERCHE' ESISTE. Serve il solo driver Vulkan venus di Mesa >= 26.2 per il guest:
+# la 26.0.1 che l'immagine spedisce richiede renderer_sync_fd.fence_exportable per
+# accendere VK_ANDROID_native_buffer, e su questo host quella condizione non e'
+# soddisfacibile (Dozen non ha VK_KHR_external_fence_win32). Dalla 26.2 il
+# requisito non c'e' piu'.
+#
+# PERCHE' L'NDK E NON AOSP. Costruire dentro un albero AOSP vorrebbe dire scaricare
+# decine di GB per un solo .so. L'NDK basta, a patto di accettare gli stub di Mesa
+# per le librerie interne di Android (libcutils, libhardware) che l'NDK non
+# spedisce: -Dandroid-stub=true. Gli stub servono solo a far passare il link; a
+# runtime nel guest ci sono le librerie vere.
+#
+# L'NDK e' windows-x86_64 anche su una macchina ARM64: gira sotto emulazione, e
+# funziona. Verificato compilando qemu/probe/sonda-vulkan-guest.c con lo stesso
+# clang.
+#
+# API 31: la stessa a cui e' compilata la sonda che gira nel guest.
+
+# I QUATTRO PERCORSI QUI SOTTO VANNO SOSTITUITI con quello del proprio NDK.
+# meson non espande variabili d'ambiente dentro un file di cross: devono
+# essere letterali. Su Windows con Android Studio l'NDK sta di solito in
+#   %LOCALAPPDATA%\Android\Sdk\ndk\<versione>
+# e la versione usata qui e' la 28.2.13676358.
+
+[binaries]
+c = '<PERCORSO-DEL-TUO-NDK>/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android31-clang.cmd'
+cpp = '<PERCORSO-DEL-TUO-NDK>/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android31-clang++.cmd'
+ar = '<PERCORSO-DEL-TUO-NDK>/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe'
+strip = '<PERCORSO-DEL-TUO-NDK>/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe'
+c_ld = 'lld'
+cpp_ld = 'lld'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true

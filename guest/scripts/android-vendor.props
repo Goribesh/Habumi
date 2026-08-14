@@ -1,0 +1,78 @@
+
+# --- aggiunte da winq sopra il vendor originale (overlayfs) ------------------
+# hw_get_module("hwcomposer") prova le varianti in quest'ordine:
+#   ro.hardware.hwcomposer, ro.hardware, ro.product.board, ro.board.platform,
+#   ro.arch, poi hwcomposer.default.so
+# Nell'immagine vince la quarta (ro.board.platform=waydroid) e viene caricato
+# hwcomposer.waydroid.so, che consegna i frame a un server Wayland. Impostando
+# la prima il nostro modulo passa davanti, senza rimuovere nulla.
+ro.hardware.hwcomposer=drm
+
+# Queste le impostava waydroid.prop, che era un file dell'host iniettato nel
+# container. Senza container nessuno le imposta piu', e senza di esse Android
+# non trova ne' il gralloc GBM ne' l'EGL di Mesa.
+ro.hardware.gralloc=gbm
+ro.hardware.egl=mesa
+ro.opengles.version=196610
+# ro.vndk.lite NON va impostata. Era in waydroid.prop e l'avevo copiata di
+# conseguenza, ma su una GSI e' fatale:
+#   linkerconfig: Linkerconfig no longer supports VNDK-Lite configuration
+#   linkerconfig: linkerconfig terminated by exit(1)
+# Senza linkerconfig non esiste /linkerconfig/ld.config.txt, e senza quella mappa
+# il linker non trova le librerie dentro gli APEX: cadono zygote, netd, keystore2,
+# audioserver, statsd e gpuservice, ognuno lamentando una libreria diversa.
+# ro.vndk.lite=true    <- vedi WINQ_VNDK_LITE nel costruttore dell'initramfs
+sys.use_memfd=true
+# debug.stagefright.ccodec=0 NON va impostata, ED E' STATA NOSTRA PER GIORNI.
+# Arrivava da waydroid.prop insieme alle altre, e a differenza di tutte le altre
+# righe di questo file non aveva una motivazione scritta: era copiata, non
+# scelta. A 0 spegne CCodec, cioe' Codec2 -- e su Android 13 Codec2 e' l'UNICO
+# percorso rimasto, perche' OMX e' stato rimosso. Il risultato e' che la lista
+# dei codec resta VUOTA, audio e video insieme:
+#     $ dumpsys media.player
+#     Decoder infos by media types:
+#     =============================
+#                                     <- niente
+# e ogni riproduzione muore con "Failed to create audio/vorbis decoder" oppure
+# "SoundPool::Sound: doLoad: unable to load sound".
+#
+# MISURATO, e il sintomo INGANNA: il guest e' muto, il PCM ALSA
+# resta "closed" e quindi sembra un guasto dell'audio. Non lo e'. Il PCM non si
+# apre perche' non arriva mai un campione: la catena si rompe molto prima
+# dell'hardware, e chi va a guardare asound.conf o l'HAL cerca dove non c'e'
+# niente. L'audio dei giochi funzionava lo stesso perche' i giochi decodificano
+# per conto loro e consegnano PCM, e i suoni di sistema erano spenti: per questo
+# il difetto e' rimasto invisibile.
+#
+# Non si rimette a 4 o a un altro numero: si LASCIA FUORI, cosi' vale il valore
+# di piattaforma.
+
+# Stato della cifratura di /data. Normalmente la imposta vold dopo aver esaminato
+# le opzioni del fstab; il nostro fstab non dichiara alcuna cifratura e nessuno la
+# imposta, quindi resta vuota. L'effetto e' che l'avvio si ferma in silenzio:
+# l'init.rc di Android attiva il trigger `nonencrypted` — che e' quello che avvia
+# zygote — solo in risposta a questa proprieta'. Senza di essa post-fs-data
+# termina, e zygote non parte mai: nel log si vede solo che il suo .rc e' stato
+# letto.
+ro.crypto.state=unencrypted
+
+# --- adb su TCP -------------------------------------------------------------
+# adbd gira gia' dentro il guest (arriva da /apex/com.android.adbd), ma senza
+# questa proprieta' ascolta solo su USB, che in una VM non esiste. Con la porta
+# impostata ascolta su TCP, e QEMU la inoltra sul localhost dell'host.
+#
+# E' il canale di diagnostica che vale tutti gli altri: `adb logcat` mostra cio'
+# che init non riporta, ed e' come si usa un emulatore vero. Le sonde scritte a
+# mano servivano solo perche' questo canale non era ancora aperto.
+service.adb.tcp.port=5555
+
+# Senza autorizzazione: in una VM usa e getta, con la porta inoltrata solo su
+# 127.0.0.1, il prompt di autorizzazione sarebbe un ostacolo senza scopo — e non
+# c'e' modo di premerlo prima che l'interfaccia sia in piedi.
+ro.adb.secure=0
+ro.secure=0
+
+# Waydroid usa un HAL dei sensori fittizio, e lo attiva questa proprieta'. Senza,
+# init cerca android.hardware.sensors@1.0::ISensors/default in continuazione e non
+# lo trova mai.
+waydroid.stub_sensors_hal=1

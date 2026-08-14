@@ -1,0 +1,146 @@
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index ac4477b..059b61e 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -141,6 +141,56 @@ vkr_instance_enumerate_physical_devices(struct vkr_instance *instance)
+       return result;
+    }
+ 
++   /* Selezione dei device host da esporre al guest.
++    *
++    * WINQ_DEVICE_KEEP=<testo>     espone solo i device il cui nome contiene <testo>
++    * WINQ_DEVICE_EXCLUDE=<testo>  nasconde i device il cui nome contiene <testo>
++    *
++    * Serve per due ragioni distinte. La prima e' di progetto: con piu' GPU
++    * visibili si deve poter decidere su quale far girare il guest, e non
++    * lasciarlo scegliere al caso. La seconda e' concreta e misurata su questa
++    * macchina: dei tre device host, i due dzn bloccano indefinitamente in
++    * vkDeviceWaitIdle quando il guest distrugge il device, e un guest che
++    * enumera tutti i device — vulkaninfo lo fa — si appende per sempre. Il
++    * device con driver Qualcomm nativo completa invece l'intero ciclo di vita.
++    *
++    * Senza le variabili il comportamento e' quello di prima: nessun filtro. */
++   const char *keep = getenv("WINQ_DEVICE_KEEP");
++   const char *exclude = getenv("WINQ_DEVICE_EXCLUDE");
++   if ((keep && *keep) || (exclude && *exclude)) {
++      PFN_vkGetPhysicalDeviceProperties get_props =
++         (PFN_vkGetPhysicalDeviceProperties)instance->get_proc_addr(
++            instance->base.handle.instance, "vkGetPhysicalDeviceProperties");
++
++      if (!get_props) {
++         vkr_log("filtro dei device richiesto ma vkGetPhysicalDeviceProperties "
++                 "non risolvibile: filtro ignorato");
++      } else {
++         uint32_t kept = 0;
++         for (uint32_t i = 0; i < count; i++) {
++            VkPhysicalDeviceProperties props;
++            get_props(handles[i], &props);
++
++            const bool wanted =
++               (!keep || !*keep || strstr(props.deviceName, keep)) &&
++               !(exclude && *exclude && strstr(props.deviceName, exclude));
++
++            vkr_log("device host \"%s\": %s", props.deviceName,
++                    wanted ? "esposto al guest" : "nascosto dal filtro");
++
++            if (wanted)
++               handles[kept++] = handles[i];
++         }
++
++         if (!kept) {
++            vkr_log("il filtro ha escluso tutti i %u device host: si ignora, "
++                    "meglio un device sbagliato che nessuno", count);
++         } else {
++            count = kept;
++         }
++      }
++   }
++
+    instance->physical_device_count = count;
+    instance->physical_device_handles = handles;
+    instance->physical_devices = physical_devs;
+@@ -545,7 +595,21 @@ vkr_dispatch_vkEnumeratePhysicalDevices(struct vn_dispatch_context *dispatch,
+       return;
+    }
+ 
++   /* Enumerare i device dell'host non e' gratuito: su questa macchina sono
++    * tre, e due sono dzn, che inizializzano D3D12. Un blocco qui e' uno dei
++    * pochi modi in cui il guest resta appeso dopo aver creato l'istanza,
++    * quindi l'ingresso e l'uscita vanno segnati per poterli distinguere. */
++   const bool diag = virgl_winq_diag_enabled();
++   if (diag)
++      vkr_log("EnumeratePhysicalDevices: inizio (query=%s)",
++              args->pPhysicalDevices ? "handle" : "conteggio");
++
+    args->ret = vkr_instance_enumerate_physical_devices(instance);
++
++   if (diag)
++      vkr_log("EnumeratePhysicalDevices: fine, ret %d, %u device", (int)args->ret,
++              instance->physical_device_count);
++
+    if (args->ret != VK_SUCCESS)
+       return;
+ 
+@@ -664,29 +728,53 @@ vkr_dispatch_vkEnumeratePhysicalDeviceGroups(
+ 
+    /* TODO avoid requiring venus driver to call vkEnumeratePhysicalDevices first */
+    /* replace VkPhysicalDevice handles by object ids */
++   /* I gruppi arrivano dall'ICD e riferiscono tutti i suoi device, anche
++    * quelli che il filtro non espone al guest. Un gruppo che nomina un device
++    * nascosto non e' un errore di protocollo: e' una conseguenza del filtro, e
++    * va scartato. Senza questo, il guest riceve INITIALIZATION_FAILED e non
++    * trova alcuna GPU — che e' esattamente cio' che accadeva quando il filtro
++    * era applicato ai soli device e non ai gruppi. */
++   const bool filtering = (getenv("WINQ_DEVICE_KEEP") && *getenv("WINQ_DEVICE_KEEP")) ||
++                          (getenv("WINQ_DEVICE_EXCLUDE") && *getenv("WINQ_DEVICE_EXCLUDE"));
++   uint32_t out_count = 0;
++
+    for (uint32_t i = 0; i < *args->pPhysicalDeviceGroupCount; i++) {
+       const VkPhysicalDeviceGroupProperties *props =
+          &args->pPhysicalDeviceGroupProperties[i];
+-      VkPhysicalDeviceGroupProperties *out = &orig_props[i];
+ 
++      bool complete = true;
++      for (uint32_t j = 0; j < props->physicalDeviceCount; j++) {
++         if (!vkr_instance_lookup_physical_device(instance, props->physicalDevices[j])) {
++            complete = false;
++            break;
++         }
++      }
++
++      if (!complete) {
++         if (filtering)
++            continue;
++
++         /* Nessun filtro attivo: il guest ha davvero saltato
++          * vkEnumeratePhysicalDevices, e resta un errore. */
++         vkr_log("venus driver is required to call vkEnumeratePhysicalDevices first");
++         args->ret = VK_ERROR_INITIALIZATION_FAILED;
++         free(args->pPhysicalDeviceGroupProperties);
++         return;
++      }
++
++      VkPhysicalDeviceGroupProperties *out = &orig_props[out_count++];
+       out->physicalDeviceCount = props->physicalDeviceCount;
+       out->subsetAllocation = props->subsetAllocation;
+       for (uint32_t j = 0; j < props->physicalDeviceCount; j++) {
+          const struct vkr_physical_device *physical_dev =
+             vkr_instance_lookup_physical_device(instance, props->physicalDevices[j]);
+-         if (!physical_dev) {
+-            vkr_log("venus driver is required to call vkEnumeratePhysicalDevices first");
+-            args->ret = VK_ERROR_INITIALIZATION_FAILED;
+-            if (orig_props)
+-               free(args->pPhysicalDeviceGroupProperties);
+-            return;
+-         }
+-
+          vkr_cs_handle_store_id((void **)&out->physicalDevices[j], physical_dev->base.id,
+                                 VK_OBJECT_TYPE_PHYSICAL_DEVICE);
+       }
+    }
+ 
++   *args->pPhysicalDeviceGroupCount = out_count;
++
+    free(args->pPhysicalDeviceGroupProperties);
+    args->pPhysicalDeviceGroupProperties = orig_props;
+ }

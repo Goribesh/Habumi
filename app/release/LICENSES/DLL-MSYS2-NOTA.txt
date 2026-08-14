@@ -1,0 +1,34 @@
+Note on the third-party DLLs in runtime\bin
+============================================
+
+This package redistributes 107 DLL files in runtime\bin, all of them coming
+from the MSYS2 project (CLANGARM64 build, the toolchain QEMU and the shell
+are compiled with for Windows 11 ARM64). All of them are needed: a census
+made by reading from the process which modules were actually loaded while
+the VM was running found 105 of the 107 in direct use by QEMU; the two
+remaining ones (AdbWinApi.dll, AdbWinUsbApi.dll) are used by adb.exe, a
+separate but necessary process.
+
+What has been verified
+----------------------
+The MSYS2 package manager (pacman) can tell, for each DLL, which source
+package it belongs to. Three verified examples, to give the idea:
+
+    runtime/bin/SDL2.dll             -> mingw-w64-clang-aarch64-SDL2
+    runtime/bin/libcurl-4.dll        -> mingw-w64-clang-aarch64-curl
+    runtime/bin/libssl-3-arm64.dll   -> mingw-w64-clang-aarch64-openssl
+
+Each of these packages has its own license (mostly permissive: MIT, BSD in
+its several clause counts, LGPL, zlib, depending on the library), findable
+with the same command (pacman -Qo on each DLL, followed by pacman -Qi on the
+package it names) or from each project's upstream sources.
+
+Declared limitation, not hidden
+--------------------------------
+The item-by-item census of the 107 DLLs -- which package provides each one,
+which exact license applies to it, and the collection of the corresponding
+verbatim text into this folder -- HAS NOT BEEN DONE. This note names the
+origin (MSYS2, CLANGARM64 build) and the method to complete it (pacman -Qo
+and -Qi for each file), but it does not stand in for the work itself. It
+must be completed before a release aimed at a wider audience than one
+internal test.

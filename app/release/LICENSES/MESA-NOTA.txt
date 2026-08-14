@@ -1,0 +1,76 @@
+Mesa 3D Graphics Library -- and ours is modified
+================================================
+
+runtime/bin/opengl32.dll is Mesa, built by this project. It is NOT the
+opengl32.dll that ships with Windows, and it is not an unmodified Mesa
+build either. Both facts matter to anyone redistributing it.
+
+What exactly is in it
+---------------------
+
+    upstream      Mesa 26.2.0, git tag mesa-26.2.0
+                  commit 9f0a761020bca92f2b07156a0621e5360cb8eca5
+    driver        gallium d3d12 (OpenGL on Direct3D 12), Windows ARM64
+    toolchain     MSYS2 CLANGARM64, meson + ninja
+    reports       "Mesa 26.2.0" with an empty git hash, because
+                  MESA_GIT_SHA1 is empty in this build
+
+Five patches applied on top of that tag. They live in the repository, in
+research/mesa-patches/, one file each:
+
+    dxil-hash.patch                 compute the DXIL container hash in
+                                    process instead of loading DXIL.dll.
+                                    Without it QEMU exits with code 87.
+    gallium-static-build.patch      link gallium statically into the WGL
+                                    target
+    wgl-dep-regex.patch             add the regex dependency to
+                                    libgallium_wgl, which otherwise fails
+                                    to link with undefined regcomp/regexec
+    wgl-context-flush-control.patch implement WGL_ARB_context_flush_control
+                                    so a context switch need not wait for
+                                    the GPU
+    gallium-use-tex-cache.patch     reuse the texture cache
+
+The build tree is research/mesa-src/builddir-win, and the artifact there
+is byte-identical to the one shipped:
+md5 33730aec0127... for both, verified.
+
+Licensing
+---------
+
+The core Mesa library is under the MIT license, reproduced below. Mesa is
+not uniformly MIT: individual files carry their own SPDX identifiers, and
+upstream collects the full set in the licenses/ directory of its source
+tree -- Apache-2.0, BSL-1.0, GPL-1.0-or-later, GPL-2.0-only, MIT and
+SGI-B-2.0. Consult the source for the terms that apply to a given file.
+
+Upstream project: https://www.mesa3d.org/
+Source of this build, with our patches: see research/ in this project's
+repository.
+
+Trademark note from upstream: Mesa implements OpenGL and other Khronos
+APIs. Implementing them is not the same as being formally conformant --
+Khronos maintains the conformance lists and the trademark terms.
+
+MIT License
+-----------
+
+Copyright (c) The Mesa 3D Graphics Library contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.

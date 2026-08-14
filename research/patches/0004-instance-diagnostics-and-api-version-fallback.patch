@@ -1,0 +1,129 @@
+diff --git a/src/venus/vkr_instance.c b/src/venus/vkr_instance.c
+index a5002a3..afb4040 100644
+--- a/src/venus/vkr_instance.c
++++ b/src/venus/vkr_instance.c
+@@ -101,23 +101,40 @@ vkr_dispatch_vkCreateInstance(struct vn_dispatch_context *dispatch,
+       return;
+    }
+ 
++   /* Ogni uscita anticipata qui sotto tornava al guest come solo codice di
++    * errore, senza lasciare traccia sull'host: il guest riporta un
++    * vkCreateInstance fallito e sul lato host non si sa quale delle sei
++    * condizioni sia scattata. Le righe di log sono l'unica differenza fra
++    * un'indagine di minuti e una di ore. */
+    if (args->pCreateInfo->enabledLayerCount) {
++      vkr_log("vkCreateInstance: il guest chiede %u layer, non supportati",
++              args->pCreateInfo->enabledLayerCount);
+       args->ret = VK_ERROR_LAYER_NOT_PRESENT;
+       return;
+    }
+ 
+    if (args->pCreateInfo->enabledExtensionCount) {
++      vkr_log("vkCreateInstance: il guest chiede %u estensioni di istanza, "
++              "non supportate",
++              args->pCreateInfo->enabledExtensionCount);
+       args->ret = VK_ERROR_EXTENSION_NOT_PRESENT;
+       return;
+    }
+ 
+    uint32_t instance_version;
+    args->ret = vk->EnumerateInstanceVersion(&instance_version);
+-   if (args->ret != VK_SUCCESS)
++   if (args->ret != VK_SUCCESS) {
++      vkr_log("vkCreateInstance: EnumerateInstanceVersion dell'host ha "
++              "fallito con %d", (int)args->ret);
+       return;
++   }
+ 
+    /* require Vulkan 1.1 */
+    if (instance_version < VK_API_VERSION_1_1) {
++      vkr_log("vkCreateInstance: l'host espone Vulkan %u.%u.%u, serve almeno 1.1",
++              VK_API_VERSION_MAJOR(instance_version),
++              VK_API_VERSION_MINOR(instance_version),
++              VK_API_VERSION_PATCH(instance_version));
+       args->ret = VK_ERROR_INITIALIZATION_FAILED;
+       return;
+    }
+@@ -200,6 +217,12 @@ vkr_dispatch_vkCreateInstance(struct vn_dispatch_context *dispatch,
+    struct vkr_instance *instance = vkr_context_alloc_object(
+       ctx, sizeof(*instance), VK_OBJECT_TYPE_INSTANCE, args->pInstance);
+    if (!instance) {
++      /* Non e' memoria esaurita: vkr_context_alloc_object torna NULL anche
++       * quando l'id oggetto inviato dal guest e' zero o gia' in uso. Il
++       * codice restituito resta OUT_OF_HOST_MEMORY per non cambiare il
++       * protocollo, ma il log deve dire che la causa e' un'altra. */
++      vkr_log("vkCreateInstance: allocazione dell'oggetto istanza fallita "
++              "(id inviato dal guest non valido, oppure memoria esaurita)");
+       args->ret = VK_ERROR_OUT_OF_HOST_MEMORY;
+       return;
+    }
+@@ -207,12 +230,69 @@ vkr_dispatch_vkCreateInstance(struct vn_dispatch_context *dispatch,
+    instance->api_version = app_info.apiVersion;
+ 
+    vn_replace_vkCreateInstance_args_handle(args);
++
++   /* Ripiego sulla versione di API, e perche' serve.
++    *
++    * Il guest chiede la apiVersion della propria applicazione: vulkaninfo
++    * chiede 1.4.347. La chiede legittimamente, perche' il renderer gli ha
++    * riferito 1.4 — ma quel numero viene da vkEnumerateInstanceVersion, che
++    * risponde per il *loader* dell'host, non per l'ICD che c'e' dietro. Su
++    * questa macchina l'unico ICD e' dzn, che arriva a Vulkan 1.2.
++    *
++    * Per la specifica un ICD Vulkan 1.1+ non deve rifiutare vkCreateInstance
++    * per una apiVersion piu' alta di quella che implementa: l'applicazione
++    * riceve un'istanza e semplicemente non deve usare le funzionalita' piu'
++    * recenti. dzn invece fallisce, e con VK_ERROR_OUT_OF_HOST_MEMORY, che
++    * arriva al guest come esaurimento di memoria e manda l'indagine fuori
++    * strada.
++    *
++    * Compensare qui e' il mestiere di un ponte di compatibilita': si riprova
++    * con versioni decrescenti fino alla 1.1, che e' il minimo che Venus
++    * pretende. La versione dei device resta quella vera — la riporta
++    * vkr_physical_device dalle proprieta' del device — quindi il guest non
++    * viene indotto a credere in funzionalita' assenti.
++    */
++   static const uint32_t fallback_versions[] = {
++      VK_API_VERSION_1_3,
++      VK_API_VERSION_1_2,
++      VK_API_VERSION_1_1,
++   };
++   const uint32_t requested = app_info.apiVersion;
++
+    args->ret = vk->CreateInstance(create_info, NULL, &instance->base.handle.instance);
++
++   for (uint32_t i = 0; args->ret != VK_SUCCESS && i < ARRAY_SIZE(fallback_versions);
++        i++) {
++      if (fallback_versions[i] >= app_info.apiVersion)
++         continue; /* non si sale, e non si riprova la stessa versione */
++
++      app_info.apiVersion = fallback_versions[i];
++      args->ret =
++         vk->CreateInstance(create_info, NULL, &instance->base.handle.instance);
++   }
++
+    if (args->ret != VK_SUCCESS) {
++      vkr_log("vkCreateInstance: l'ICD dell'host ha fallito con %d, anche "
++              "ripiegando fino a 1.1 (richiesta %u.%u.%u)",
++              (int)args->ret, VK_API_VERSION_MAJOR(requested),
++              VK_API_VERSION_MINOR(requested), VK_API_VERSION_PATCH(requested));
+       free(instance);
+       return;
+    }
+ 
++   if (app_info.apiVersion != requested) {
++      vkr_log("vkCreateInstance: istanza host creata a %u.%u, l'ICD ha "
++              "rifiutato la %u.%u richiesta dal guest",
++              VK_API_VERSION_MAJOR(app_info.apiVersion),
++              VK_API_VERSION_MINOR(app_info.apiVersion),
++              VK_API_VERSION_MAJOR(requested), VK_API_VERSION_MINOR(requested));
++   }
++
++   /* api_version era stato impostato prima del tentativo: se si e' ripiegato,
++    * va riallineato a quello con cui l'istanza esiste davvero, altrimenti il
++    * resto del renderer decide in base a una versione mai creata. */
++   instance->api_version = app_info.apiVersion;
++
+    vkr_instance_init_proc_table(instance, ctx);
+ 
+    if (ctx->validate_level != VKR_CONTEXT_VALIDATE_NONE) {

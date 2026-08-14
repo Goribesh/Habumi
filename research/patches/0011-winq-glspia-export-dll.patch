@@ -1,0 +1,56 @@
+From db0e464c26cfa4215ef21f520e10a934be1dae39 Mon Sep 17 00:00:00 2001
+From: goribildo <43958978+Goribesh@users.noreply.github.com>
+Date: Tue, 11 Aug 2026 12:42:47 +0200
+[PATCH] winq: export automatico della DLL
+
+---
+ src/winq-glspia-conta.h | 33 +++++++++++++++++++++++++--------
+ 1 file changed, 25 insertions(+), 8 deletions(-)
+
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+index dfe159a..bf14fb5 100644
+--- a/src/winq-glspia-conta.h
++++ b/src/winq-glspia-conta.h
+@@ -12,14 +12,31 @@
+ 
+ #include <stdint.h>
+ 
+-#ifdef _WIN32
+-/* Senza dllexport il simbolo non esce dalla DLL e QEMU non lo trova con
+- * GetProcAddress: la diagnostica si spegnerebbe da se' dicendo "shim assente"
+- * pur essendo compilata dentro. */
+-#define WINQ_SPIA_ESPORTA __declspec(dllexport)
+-#else
+-#define WINQ_SPIA_ESPORTA
+-#endif
++/* WINQ_SPIA_ESPORTA -- NON rimetterci __declspec(dllexport) su _WIN32, e non
++ * lasciarla vuota: la causa vera e' piu' a fondo di "dllexport spegne
++ * l'auto-export", ed entrambi gli errori la mancano.
++ *
++ * Questo albero compila con -fvisibility=hidden (research/winq-virgl/meson.build:74),
++ * globale, tutte le piattaforme. Sotto -fvisibility=hidden ogni simbolo e'
++ * nascosto per default: su MinGW/Clang questo si traduce, per ciascun
++ * simbolo senza visibilita' esplicita, in una direttiva
++ * "-exclude-symbols:<nome>" scritta nella sezione .drectve dell'oggetto --
++ * verificato con objdump -s -j .drectve sull'oggetto compilato. Quella
++ * direttiva dice al linker "non esportare questo, MAI", indipendentemente
++ * da dllexport o dall'auto-export di ld/lld: e' per questo che togliere
++ * dllexport da solo NON basta, e winq_glspia_leggi resta escluso comunque
++ * (verificato: la DLL ricompilata senza dllexport aveva ancora zero
++ * occorrenze di winq_glspia_leggi nella sua Export Table).
++ *
++ * Le 49 virgl_renderer_* arrivano a QEMU non per l'auto-export di ld/lld ma
++ * perche' sono marcate VIRGL_EXPORT (virglrenderer.h), che e'
++ * __attribute__((visibility("default"))) su ogni piattaforma: quell'oggetto
++ * (virglrenderer.c.obj) non ha nessuna sezione .drectve, perche' Clang non
++ * genera "-exclude-symbols" per un simbolo che ha visibilita' esplicita.
++ * WINQ_SPIA_ESPORTA deve fare la STESSA cosa, con lo stesso meccanismo, non
++ * un secondo meccanismo (dllexport) che in piu' spegneva l'auto-export per
++ * tutti gli altri quando c'era. */
++#define WINQ_SPIA_ESPORTA __attribute__((visibility("default")))
+ 
+ enum {
+     WINQ_SPIA_GL = 0,      /* disegno, buffer, texture: lavoro del driver */
+-- 
+2.53.0.vfs.0.7
+

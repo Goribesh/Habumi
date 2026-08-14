@@ -1,0 +1,49 @@
+diff --git a/src/proxy/proxy_server.c b/src/proxy/proxy_server.c
+index c97d8cb..d877c7a 100644
+--- a/src/proxy/proxy_server.c
++++ b/src/proxy/proxy_server.c
+@@ -215,16 +215,16 @@ server_retire_fence_cb(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id)
+    mtx_unlock(&state->workers_mutex);
+ }
+ 
+-static void
+-server_cb_debug_logger(UNUSED enum virgl_log_level_flags log_level,
+-                       const char *message,
+-                       UNUSED void *user_data)
+-{
+-   (void)message;
+-}
+-
++/* debug_logger deliberatamente assente. Il render server in-process non ha
++ * un sink proprio: quello che serve e' lasciare in piedi quello di chi ci
++ * ospita. Prima qui c'era una funzione che ignorava il messaggio, e siccome
++ * vkr_renderer_init la installava come handler globale, tutta la diagnostica
++ * del renderer Venus veniva prodotta e scartata — inclusi gli errori che
++ * spiegano un vkCreateInstance fallito. Con NULL, vkr_renderer_init non
++ * tocca l'handler e i messaggi arrivano dove il chiamante li manda: su
++ * stderr con QEMU, nel file di WINQ_DIAG col logger di default. */
+ static const struct vkr_renderer_callbacks server_vkr_cbs = {
+-   .debug_logger = server_cb_debug_logger,
++   .debug_logger = NULL,
+    .retire_fence = server_retire_fence_cb,
+ };
+ 
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index c43a96e..ae49467 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -69,7 +69,13 @@ vkr_renderer_init(uint32_t flags, const struct vkr_renderer_callbacks *cbs)
+       return false;
+ 
+    vkr_debug_init();
+-   virgl_log_set_handler(cbs->debug_logger, NULL, NULL);
++   /* Non si sostituisce il log handler del chiamante se questo non ne
++    * fornisce uno proprio. Sovrascriverlo sempre significa buttare via la
++    * diagnostica dell'embedder: QEMU installa un handler che stampa su
++    * stderr, e da qui in poi ogni messaggio di vkr — compresi gli errori
++    * che spiegano un vkCreateInstance fallito — finiva nel nulla. */
++   if (cbs->debug_logger)
++      virgl_log_set_handler(cbs->debug_logger, NULL, NULL);
+ 
+    vkr_state.cbs = cbs;
+    list_inithead(&vkr_state.contexts);

@@ -1,0 +1,184 @@
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index e5d603d..2844aa9 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -324,6 +324,14 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+       vkr_physical_device_from_handle(args->physicalDevice);
+    struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
+ 
++   /* Su quale device dell'host il guest sta creando: con tre device
++    * disponibili — uno con driver nativo Qualcomm e due dzn — sapere quale
++    * cambia completamente l'interpretazione di un blocco successivo. */
++   if (virgl_winq_diag_enabled())
++      vkr_log("CreateDevice: device host \"%s\", %u code richieste",
++              physical_dev->properties.deviceName,
++              args->pCreateInfo->queueCreateInfoCount);
++
+    /* there can be at most two members sharing a queueFamilyIndex (one
+     * protected-capable, one not), in which case their summed queueCount must
+     * be <= the family's VkQueueFamilyProperties::queueCount.
+@@ -639,6 +647,16 @@ vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy
+    struct vn_device_proc_table *vk = &dev->proc_table;
+    VkDevice device = dev->base.handle.device;
+ 
++   /* Lo smontaggio del device ha cinque punti che possono bloccare
++    * indefinitamente: DeviceWaitIdle, il flush delle distruzioni differite, il
++    * join dei thread di sync delle code, e la DestroyDevice dell'ICD. Dal
++    * fuori sono indistinguibili — il renderer smette semplicemente di
++    * rispondere. Questi log dicono quale. */
++   const bool diag = virgl_winq_diag_enabled();
++   if (diag)
++      vkr_log("device_destroy: inizio (on_worker_thread=%d, destroy_vk=%d)",
++              (int)ctx->on_worker_thread, (int)destroy_vk);
++
+ #ifdef _WIN32
+    vkr_win32_device_remove_shim(dev);
+ #endif
+@@ -648,7 +666,11 @@ vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy
+ 
+    /* only wait if on workder thread to prepare for vk obj cleanup */
+    if (ctx->on_worker_thread) {
++      if (diag)
++         vkr_log("device_destroy: DeviceWaitIdle...");
+       VkResult result = vk->DeviceWaitIdle(device);
++      if (diag)
++         vkr_log("device_destroy: DeviceWaitIdle concluso (%d)", (int)result);
+       if (result != VK_SUCCESS)
+          vkr_log("vkDeviceWaitIdle(%p) failed(%d)", dev, (int32_t)result);
+    }
+@@ -667,14 +689,23 @@ vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy
+     * Only flush if on the worker thread (matching vkr_device_object_destroy
+     * behavior).  Otherwise DestroyDevice will implicitly clean them up.
+     */
+-   if (ctx->on_worker_thread)
++   if (ctx->on_worker_thread) {
++      if (diag)
++         vkr_log("device_destroy: flush delle distruzioni differite...");
+       vkr_win32_flush_deferred_destroys(dev);
++      if (diag)
++         vkr_log("device_destroy: flush concluso");
++   }
+ #endif
+ 
+    mtx_destroy(&dev->object_mutex);
+ 
++   if (diag)
++      vkr_log("device_destroy: distruzione delle code...");
+    list_for_each_entry_safe (struct vkr_queue, queue, &dev->queues, base.track_head)
+       vkr_queue_destroy(ctx, queue);
++   if (diag)
++      vkr_log("device_destroy: code distrutte");
+ 
+    list_for_each_entry_safe (struct vkr_queue_sync, sync, &dev->free_syncs, head) {
+       vk->DestroyFence(dev->base.handle.device, sync->fence, NULL);
+@@ -684,8 +715,13 @@ vkr_device_destroy(struct vkr_context *ctx, struct vkr_device *dev, bool destroy
+    mtx_destroy(&dev->free_sync_mutex);
+    mtx_destroy(&dev->vk_api_mutex);
+ 
+-   if (destroy_vk || ctx->on_worker_thread)
++   if (destroy_vk || ctx->on_worker_thread) {
++      if (diag)
++         vkr_log("device_destroy: DestroyDevice dell'ICD...");
+       vk->DestroyDevice(device, NULL);
++      if (diag)
++         vkr_log("device_destroy: DestroyDevice concluso");
++   }
+ 
+    list_del(&dev->base.track_head);
+ 
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index e03e51b..337c464 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -268,8 +268,27 @@ vkr_ring_submit_cmd(struct vkr_ring *ring,
+ 
+    vkr_cs_decoder_set_buffer_stream(dec, buffer, size);
+ 
++   /* Con la diagnostica attiva si nomina ogni comando prima di eseguirlo e si
++    * conferma dopo. Un comando che compare senza la sua conferma e' il punto
++    * esatto in cui il renderer si blocca — informazione che altrimenti non
++    * esiste, perche' dall'esterno un blocco dentro una dispatch e' identico a
++    * un guest che ha smesso di inviare. Il nome viene dalla tabella generata
++    * dal protocollo, quindi non c'e' nulla da mantenere a mano. */
++   const bool diag = virgl_winq_diag_enabled();
++
+    while (vkr_cs_decoder_has_command(dec)) {
++      uint32_t cmd_type = 0;
++      if (diag) {
++         memcpy(&cmd_type, dec->cur, sizeof(cmd_type));
++         vkr_log("  cmd %s", vn_dispatch_command_name((VkCommandTypeEXT)cmd_type));
++      }
++
+       vn_dispatch_command(&ring->dispatch);
++
++      if (diag)
++         vkr_log("  cmd %s concluso",
++                 vn_dispatch_command_name((VkCommandTypeEXT)cmd_type));
++
+       if (vkr_cs_decoder_get_fatal(dec)) {
+          vkr_log("ring_submit_cmd: vn_dispatch_command failed");
+ 
+@@ -336,6 +355,18 @@ vkr_ring_thread(void *arg)
+ #endif
+    }
+ 
++   /* Diagnostica del ciclo del ring, gated su WINQ_DIAG.
++    *
++    * Serve perche' un guest che si blocca dopo i primi comandi Venus lascia
++    * host e guest senza alcun messaggio: il thread dorme su cnd_wait e
++    * l'attesa e' indistinguibile dal lavoro. Con queste righe si vede se il
++    * thread parte, se entra in idle e se la notifica arriva. */
++   const bool diag = virgl_winq_diag_enabled();
++   uint32_t batches = 0;
++   if (diag)
++      vkr_log("ring %u: thread avviato, idle_timeout %" PRIu64, ring->id,
++              (uint64_t)ring->idle_timeout);
++
+    uint64_t last_submit = vkr_ring_now();
+    uint32_t relax_iter = 0;
+    int ret = 0;
+@@ -352,6 +383,10 @@ vkr_ring_thread(void *arg)
+       if (wait) {
+          TRACE_SCOPE("ring idle");
+ 
++         if (diag)
++            vkr_log("ring %u: idle dopo %u batch, attendo notifica", ring->id,
++                    batches);
++
+          mtx_lock(&ring->mutex);
+          while (ring->started && !ring->pending_notify) {
+             ret = cnd_wait(&ring->cond, &ring->mutex);
+@@ -364,6 +399,10 @@ vkr_ring_thread(void *arg)
+          vkr_ring_unset_status_bits(ring, VK_RING_STATUS_IDLE_BIT_MESA);
+          mtx_unlock(&ring->mutex);
+ 
++         if (diag)
++            vkr_log("ring %u: risvegliato (started=%d)", ring->id,
++                    (int)ring->started);
++
+          if (!ring->started)
+             break;
+ 
+@@ -383,7 +422,21 @@ vkr_ring_thread(void *arg)
+          const uint32_t ring_head = ring->buffer.cur;
+          vkr_ring_read_buffer(ring, ring->cmd, cmd_size);
+ 
+-         if (!vkr_ring_submit_cmd(ring, ring->cmd, cmd_size, ring_head)) {
++         /* Si registra prima e dopo l'esecuzione del batch. La coppia
++          * mancante e' cio' che identifica un batch entrato e mai concluso:
++          * senza il secondo messaggio, un blocco dentro una dispatch e'
++          * indistinguibile da un guest che ha smesso di inviare. */
++         if (diag)
++            vkr_log("ring %u: batch %u, %u byte", ring->id, batches, cmd_size);
++
++         const bool ok = vkr_ring_submit_cmd(ring, ring->cmd, cmd_size, ring_head);
++
++         if (diag)
++            vkr_log("ring %u: batch %u concluso (ok=%d)", ring->id, batches,
++                    (int)ok);
++         batches++;
++
++         if (!ok) {
+             ret = -EINVAL;
+             break;
+          }
