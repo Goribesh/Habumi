@@ -8,11 +8,45 @@ Severity is about what it costs *you*, not how hard it is to fix.
 
 ## Blocking for most people
 
-**It has only ever run on one machine.** A Snapdragon X Elite laptop, Windows 11
-on ARM. Every claim in this repository about "it works" means "it works there".
+**It has only ever run on one machine.** A Surface Pro 11: Snapdragon X Plus
+X1P64100, 10 cores, Adreno X1-85, Windows 11 Home on ARM. Every claim in this
+repository about "it works" means "it works there".
 A system DLL that happens to be present here and absent elsewhere would not have
 been caught by any test that exists. Treat the first run on new hardware as an
 experiment, and please report what happens.
+
+**The second machine it was tried on did not boot.** A Surface Pro 12" with a
+Snapdragon X Plus and an Adreno X1-45. The graphics half came up correctly —
+WGL context, Mesa 26.2.0 on D3D12, a frame presented — but the guest kernel
+produced no serial output at all on the first run, and on the second -- with
+vcpu=1 -- it produced 97 and then 119 lines and was still going when the shell
+killed it. That turned out to be our bug, not the machine's: see the next
+entry. One success and one failure is the honest score.
+
+**"boot hung" often meant "your machine is slower than mine".** *Fixed after
+0.2.1; if you are running 0.2.1 or earlier, this is probably what you are
+hitting.*
+
+The shell used to give the kernel sixteen seconds to produce two hundred lines
+of serial output and, failing that, declare the boot hung and blame a race in
+bringing up the secondary vCPUs under WHPX. On the Surface Pro 12" above the
+kernel was producing 119 lines in those sixteen seconds **and still climbing** —
+each retry got further than the last. Nothing was hung; the watchdog was killing
+a healthy boot and then naming the wrong cause, which sent everyone looking for
+a non-deterministic fault that was not there.
+
+The watchdog now judges **progress**: as long as serial lines keep arriving the
+boot is alive and it waits, up to two minutes. A hang is silence — no new line
+for eight seconds. The message says which of the two happened, because they send
+you to different places.
+
+The WHPX race is real and separate: QEMU stays alive and the serial produces
+**nothing at all**, not a slow trickle. If you see zero lines across every
+attempt, `vcpu=1` in `runtime\bin\config.txt` is worth trying — with a single
+vCPU there are no secondary vCPUs to race.
+
+The shipped default is `vcpu=6`, tuned for the machine this was developed on.
+There is no evidence yet that it is a good default anywhere else.
 
 **The binaries are not signed.** Windows SmartScreen will warn, and on some
 policies will refuse. There is no certificate and no plan to buy one yet.
@@ -86,3 +120,8 @@ Open an issue with: what you ran, what you expected, what happened, the contents
 of `guest/logs/` if the product got far enough to write them, and the machine —
 SoC, Windows build, GPU driver version. A report that names the hardware is worth
 several that do not.
+
+If it did not boot, add the `vcpu` value you used and whether `vcpu=1` changed
+anything. And say so even when the answer is "still nothing": a workaround that
+does not work is as informative as one that does, and right now the sample size
+for every one of these questions is one.

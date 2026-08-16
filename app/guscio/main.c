@@ -426,17 +426,17 @@ static void mappa_menu_mostra(HWND bottone)
          * dove metterei i file. Un menu vuoto non spiega niente a chi lo
          * apre la prima volta. */
         AppendMenuA(menu, MF_STRING | MF_GRAYED, 0,
-                    "metti i profili in runtime\\keymaps\\*.txt");
+                    "put profiles in runtime\\keymaps\\*.txt");
     }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, ID_MENU_SPEGNI, "spegni");
+    AppendMenuA(menu, MF_STRING, ID_MENU_SPEGNI, "shut down");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    /* "impara" senza un profilo scelto manderebbe un percorso vuoto: le due
+    /* "learn" senza un profilo scelto manderebbe un percorso vuoto: le due
      * voci restano disabilitate finche' l'utente non ne ha scelto uno. */
     AppendMenuA(menu, MF_STRING | (mappa_profilo[0] ? MF_ENABLED : MF_GRAYED),
-                ID_MENU_IMPARA_TOCCO, "impara un tasto");
+                ID_MENU_IMPARA_TOCCO, "learn a key");
     AppendMenuA(menu, MF_STRING | (mappa_profilo[0] ? MF_ENABLED : MF_GRAYED),
-                ID_MENU_IMPARA_JOYSTICK, "impara il joystick");
+                ID_MENU_IMPARA_JOYSTICK, "learn the joystick");
 
     GetWindowRect(bottone, &r);
     SetForegroundWindow(finestra_handle());
@@ -1259,7 +1259,7 @@ static void variante_richiedi(VarNome v)
     case CHIUSURA_SPEGNI:
         registro_riga(REG_GUSCIO, "variant: stopping the VM to switch to %s",
                       var_testo(v));
-        finestra_fase("variante", "arresto in corso");
+        finestra_fase("variant", "stopping");
         finestra_bottoni(false);
         vm_avvia_spegnimento();
         break;
@@ -1613,12 +1613,12 @@ static void variante_menu_mostra(HWND bottone)
     }
 
     if (scaricamento_in_corso) {
-        snprintf(etichetta, sizeof(etichetta), "scaricamento di %s in corso",
+        snprintf(etichetta, sizeof(etichetta), "downloading %s",
                  var_testo(variante_v_in_corso));
         AppendMenuA(menu, MF_STRING | MF_GRAYED, 0, etichetta);
         AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
         AppendMenuA(menu, MF_STRING, ID_MENU_VARIANTE_ANNULLA,
-                    "annulla lo scaricamento");
+                    "cancel download");
     } else {
         snprintf(etichetta, sizeof(etichetta), "%s (attiva)",
                 VARIANTE_NOME_MENU[attiva]);
@@ -1630,7 +1630,7 @@ static void variante_menu_mostra(HWND bottone)
              * circa due minuti -- ma dirlo costa una riga e l'alternativa
              * sarebbe una voce che mente. */
             AppendMenuA(menu, MF_STRING | MF_GRAYED, 0,
-                        "verifica delle immagini ancora in corso");
+                        "still verifying the images");
         } else {
             if (m_altra == VAR_PRONTA || m_altra == VAR_MANCA_DATI) {
                 snprintf(etichetta, sizeof(etichetta), "%s -- pronta",
@@ -1856,7 +1856,7 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
         InterlockedExchange(&variante_annulla, 1);
         switch (vm_azione_chiusura(vm_stato())) {
         case CHIUSURA_SPEGNI:
-            finestra_fase("spegnimento", "in corso");
+            finestra_fase("shutdown", "in progress");
             finestra_bottoni(false);
             vm_avvia_spegnimento();
             break;
@@ -2989,10 +2989,10 @@ int main(int argc, char **argv)
             if (s != precedente) {
                 switch (s) {
                 case VM_ATTESA_ANDROID:
-                    finestra_fase("kernel", "partito");
+                    finestra_fase("kernel", "started");
                     break;
                 case VM_PRONTO:
-                    finestra_fase("Android", "pronto");
+                    finestra_fase("Android", "ready");
                     finestra_bottoni(true);
                     /* densita=0 (default) non tocca nulla: e' il comportamento
                      * di oggi. Applicata UNA volta qui, non ripetuta a ogni
@@ -3027,14 +3027,18 @@ int main(int argc, char **argv)
                     }
                     break;
                 case VM_FALLITA:
-                    finestra_fase("avvio", "FALLITO");
+                    finestra_fase("boot", "FAILED");
                     finestra_bottoni(false);
+                    /* Tranne la variante: e proprio adesso che serve, e non
+                     * passa da adb. Vedi finestra_bottone_variante. */
+                    finestra_bottone_variante(true);
                     break;
                 case VM_MORTA:
                     /* NON si chiude: il registro e' l'unico posto dove sta la
                      * ragione, e chiuderlo la porterebbe via. */
-                    finestra_fase("QEMU", "uscito da se'");
+                    finestra_fase("QEMU", "exited on its own");
                     finestra_bottoni(false);
+                    finestra_bottone_variante(true);
                     break;
                 case VM_USCITO:
                     /* DUE ragioni possono aver portato qui: l'utente ha

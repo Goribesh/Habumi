@@ -344,6 +344,7 @@ void finestra_passo(void);
 HWND finestra_handle(void);
 void finestra_fase(const char *nome, const char *esito);
 void finestra_bottoni(bool attivi);
+void finestra_bottone_variante(bool attivo);
 
 /* Aggiorna SOLO l'etichetta del bottone "tasti" (tasti / tasti ON). Lo
  * stato acceso/spento vive in main.c e in nessun altro posto (vedi il

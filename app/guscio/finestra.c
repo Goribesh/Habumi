@@ -162,6 +162,28 @@ void finestra_bottoni(bool attivi)
     }
 }
 
+/* Il bottone della VARIANTE da solo, e separato dagli altri otto per una
+ * ragione trovata sul campo: gli altri passano tutti da adb e senza Android
+ * vivo non farebbero nulla, ma cambiare variante NON ha bisogno di adb --
+ * ferma la VM, scambia le immagini e riavvia. Tenerlo spento insieme agli
+ * altri lo rendeva grigio proprio nell'unico caso in cui serve davvero, cioe'
+ * quando l'avvio e' fallito e l'utente vuole provare l'altra immagine. Chi ci
+ * e' finito dentro non aveva altra strada che aprire config.txt.
+ *
+ * Resta spento DURANTE un cambio di variante, e quello e' voluto: la seconda
+ * pressione mentre la prima e' in corso e' proprio cio' che va impedito. */
+void finestra_bottone_variante(bool attivo)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
+        if (fin_elenco[i].id == ID_VARIANTE && fin_bottoni[i]) {
+            EnableWindow(fin_bottoni[i], attivo ? TRUE : FALSE);
+            return;
+        }
+    }
+}
+
 /* Scrive SOLO l'etichetta: lo stato acceso/spento e' una decisione di
  * main.c (vedi il commento su ID_HOTKEY_TASTI la'), questa funzione si
  * limita a renderla visibile, come finestra_fase fa per le fasi di avvio. */
@@ -172,7 +194,7 @@ void finestra_bottone_tasti(bool accesa)
     for (i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
         if (fin_elenco[i].id == ID_TASTI) {
             if (fin_bottoni[i]) {
-                SetWindowTextA(fin_bottoni[i], accesa ? "tasti ON" : "tasti");
+                SetWindowTextA(fin_bottoni[i], accesa ? "keys ON" : "keys");
             }
             return;
         }
@@ -589,7 +611,7 @@ bool finestra_apri(const Config *c)
      * una seconda copia delle costanti di posizione -- che e' proprio la
      * duplicazione che ha gia' fatto divergere la larghezza del pannello
      * (FIN_LARGHEZZA - 40 alla creazione, w - 20 in WM_SIZE). */
-    fin_fasi = CreateWindowA("STATIC", "avvio in corso...",
+    fin_fasi = CreateWindowA("STATIC", "starting...",
                              WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                              fin_hwnd, NULL, wc.hInstance, NULL);
 

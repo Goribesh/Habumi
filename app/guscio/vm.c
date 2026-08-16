@@ -28,6 +28,30 @@
  * cioe' non configura la seriale e ignora tutti gli androidboot.*. Il sintomo e'
  * un guest che sembra inchiodato e una finestra su "Display output is not
  * active" -- nessuna delle due righe nomina il quoting. */
+/* I vCPU DI QUESTO TENTATIVO, che non sono per forza quelli configurati.
+ *
+ * PERCHE'. I tre tentativi esistevano per rigiocare una corsa non
+ * deterministica, e rigiocavano la stessa identica configurazione. Se il guasto
+ * e' invece DETERMINISTICO, tre tentativi identici sono tre volte lo stesso
+ * fallimento -- e sono cinquanta secondi buttati prima di dire all'utente una
+ * cosa che non lo aiuta.
+ *
+ * DUE MACCHINE lo hanno mostrato: su Surface Pro 12" (Snapdragon X Plus a 8
+ * core) con vcpu=6 la seriale produce ZERO righe a ogni tentativo, mentre con
+ * vcpu=1 il kernel parte. Zero righe vuol dire che il guest non esegue
+ * nemmeno la prima istruzione: non e' la bring-up SMP del kernel, e' WHPX che
+ * non riesce a creare le vCPU in piu'.
+ *
+ * QUINDI IL RITENTATIVO DEGRADA: se un tentativo non ha prodotto UNA SOLA
+ * riga, il successivo dimezza i vCPU. Con il default di 6 la sequenza e'
+ * 6 -> 3 -> 1, e su quelle due macchine il terzo tentativo sarebbe partito
+ * senza che nessuno leggesse un registro.
+ *
+ * Si dimezza SOLO a zero righe, non a "poche": poche righe vuol dire che il
+ * guest esegue, e allora il numero di vCPU non e' il sospetto -- lo tratta il
+ * guardiano del progresso qui sopra. */
+static int vm_vcpu_ora;
+
 /* PERCHE' IL KERNEL STA IN guest/images/ E LE IMMAGINI IN
  * guest/images/android/: sono artefatti di due catene di costruzione
  * diverse. Il kernel lo scrive build-guest-kernel.sh direttamente in
@@ -100,6 +124,9 @@ int vm_argomenti(const Config *c, char *buf, int max)
     }
 
     n = snprintf(buf, (size_t)max,
+        /* -smp NON viene da c->vcpu ma da vm_vcpu_ora: i tentativi successivi
+         * lo dimezzano quando il precedente non ha prodotto una sola riga.
+         * Vedi il commento su vm_vcpu_ora. */
         "-M virt -accel whpx -cpu host -m %d -smp %d "
         "-kernel guest/images/kernel-guest-arm64 "
         "-initrd guest/images/android/initramfs.img "
@@ -125,7 +152,8 @@ int vm_argomenti(const Config *c, char *buf, int max)
         "-display winq,gl=on "
         "-serial file:guest/logs/sessione-viva.log "
         "-monitor none%s",
-        c->memoria, c->vcpu, immagine, dati, c->larghezza, c->altezza,
+        c->memoria, vm_vcpu_ora > 0 ? vm_vcpu_ora : c->vcpu,
+        immagine, dati, c->larghezza, c->altezza,
         c->porta_adb,
         /* LE TRE OPZIONI DELL'AUDIO SONO TUTTE MISURATE, e la ragione di
          * fondo e' una sola: IL GUEST APRE IL PCM CON UN BUFFER DI 21 ms
@@ -276,8 +304,33 @@ static FILE *vm_seriale;
 static long vm_seriale_pos;
 static DWORD vm_ora_spegni;
 static DWORD vm_ora_ultima_adb;  /* ultima chiamata ad adb_pronto: vedi il freno in VM_ATTESA_ANDROID */
-
-#define VM_ATTESA_KERNEL_MS   16000
+/* Quando e' arrivata l'ultima riga di seriale. E' cio' che distingue un kernel
+ * lento da uno fermo: vedi il commento sulle soglie qui sotto. */
+static DWORD vm_ora_ultima_riga;
+/* SEDICI SECONDI SONO IL MINIMO DI GRAZIA, non piu' il verdetto.
+ *
+ * Prima il guardiano guardava un CONTEGGIO a scadenza fissa: a 16 secondi, meno
+ * di 200 righe voleva dire "inchiodato". Il commento accanto lo giustificava
+ * cosi': un avvio sano supera le trecento righe entro dieci secondi, uno
+ * inchiodato resta sotto le cinquanta. Fra i due c'era un caso che nessuno
+ * aveva previsto, ed e' arrivato dal primo rapporto su hardware non nostro:
+ * una macchina semplicemente PIU' LENTA. Un Surface Pro 12" con Snapdragon
+ * X Plus faceva 119 righe in 16 secondi -- e continuava a salire, arrivando
+ * ogni tentativo piu' avanti del precedente. Il kernel stava benissimo:
+ * eravamo noi a ucciderlo, e a dichiarare per giunta una corsa sui vCPU che
+ * non c'entrava niente.
+ *
+ * IL CRITERIO GIUSTO E' IL PROGRESSO, NON IL CONTEGGIO. Finche' le righe
+ * arrivano il kernel e' vivo, e quanto vada piano non e' affar nostro; e'
+ * inchiodato quando la seriale TACE. Da qui le tre soglie: un minimo di
+ * grazia prima di giudicare, un silenzio che definisce il guasto, e un tetto
+ * perche' un avvio vivo ma inconcludente non aspetti per sempre.
+ *
+ * Il tetto e' generoso di proposito: chi ha una macchina lenta preferisce
+ * aspettare due minuti che vedersi dire una bugia in sedici secondi. */
+#define VM_ATTESA_KERNEL_MS      16000    /* minimo prima di poter giudicare */
+#define VM_KERNEL_SILENZIO_MS     8000    /* seriale muta per tanto = inchiodato */
+#define VM_KERNEL_TETTO_MS      120000    /* vivo ma senza arrivare: si rinuncia */
 #define VM_RIGHE_SANE         200
 #define VM_ATTESA_ANDROID_MS  120000
 /* VENTIMILA, non trenta: winq (qemu/ui-winq/winq-window.c,
@@ -309,6 +362,10 @@ static void vm_vai(VmStato nuovo)
 {
     vm_s = nuovo;
     vm_ora_stato = vm_adesso();
+    /* L'orologio del silenzio riparte insieme allo stato. Senza, il tentativo
+     * numero due erediterebbe l'istante dell'ultima riga del numero uno e
+     * verrebbe dichiarato muto prima di aver avuto modo di dire qualcosa. */
+    vm_ora_ultima_riga = vm_ora_stato;
 }
 
 /* Il thread che svuota lo stderr di QEMU.
@@ -846,14 +903,32 @@ VmStato vm_passo(void)
                 vm_vai(VM_FALLITA);
                 break;
             }
-            registro_riga(REG_GUSCIO, "%d attempts failed: the kernel hung "
-                          "every time. It is a known and NON "
-                          "deterministic fault -- a race in bringing up the "
-                          "secondary vCPUs under WHPX -- and the same command "
-                          "sometimes boots in forty seconds.", vm_c->riprove);
+            registro_riga(REG_GUSCIO, "%d attempts failed, down to %d vCPU. "
+                          "If every attempt produced ZERO serial lines the "
+                          "guest never ran at all, which on some machines is "
+                          "WHPX failing to create the vCPUs; if it produced "
+                          "some and then stopped, look at the [guest] lines "
+                          "for where it stopped.", vm_c->riprove, vm_vcpu_ora);
             vm_vai(VM_FALLITA);
             break;
         }
+        /* Quanti vCPU per QUESTO tentativo. vm_righe_totali qui contiene
+         * ancora il conto del tentativo precedente: vm_lancia lo azzera dopo. */
+        if (vm_tentativo == 1) {
+            vm_vcpu_ora = vm_c->vcpu;
+        } else if (vm_righe_totali == 0 && vm_vcpu_ora > 1) {
+            int prima = vm_vcpu_ora;
+
+            vm_vcpu_ora /= 2;
+            if (vm_vcpu_ora < 1) {
+                vm_vcpu_ora = 1;
+            }
+            registro_riga(REG_GUSCIO, "the last attempt produced no serial "
+                          "output at all, so the guest never ran a single "
+                          "instruction: retrying with %d vCPU instead of %d",
+                          vm_vcpu_ora, prima);
+        }
+
         if (!vm_lancia()) {
             vm_vai(VM_FALLITA);
             break;
@@ -861,8 +936,14 @@ VmStato vm_passo(void)
         vm_vai(VM_ATTESA_KERNEL);
         break;
 
-    case VM_ATTESA_KERNEL:
-        vm_righe_totali += vm_segui_seriale();
+    case VM_ATTESA_KERNEL: {
+        int nuove = vm_segui_seriale();
+        DWORD da_avvio, da_riga;
+
+        vm_righe_totali += nuove;
+        if (nuove > 0) {
+            vm_ora_ultima_riga = vm_adesso();
+        }
         if (!vm_viva()) {
             registro_riga(REG_GUSCIO, "QEMU exited immediately: the reason is "
                                       "in the [qemu] lines above");
@@ -871,25 +952,57 @@ VmStato vm_passo(void)
             vm_vai(VM_AVVIA);
             break;
         }
-        if (vm_adesso() - vm_ora_stato < VM_ATTESA_KERNEL_MS) {
-            break;
-        }
-        /* SEDICI SECONDI E DUECENTO RIGHE, e sono misurati: un avvio sano supera
-         * le trecento righe di seriale entro dieci secondi, uno inchiodato resta
-         * sotto le cinquanta. Non si usa adb per questo: a sedici secondi adbd
-         * non esiste ancora. */
+
+        /* Duecento righe bastano APPENA ARRIVANO, non a una scadenza: su una
+         * macchina veloce succede prima dei sedici secondi, e non c'e' ragione
+         * di farla aspettare. */
         if (vm_righe_totali < VM_RIGHE_SANE) {
-            registro_riga(REG_GUSCIO, "boot hung (%d serial lines "
-                          "against at least %d): closing and retrying",
-                          vm_righe_totali, VM_RIGHE_SANE);
+            da_avvio = vm_adesso() - vm_ora_stato;
+            da_riga  = vm_adesso() - vm_ora_ultima_riga;
+
+            /* Prima del minimo di grazia non si giudica: le prime righe di un
+             * kernel possono tardare qualche secondo anche dove tutto va bene. */
+            if (da_avvio < VM_ATTESA_KERNEL_MS) {
+                break;
+            }
+            /* Le righe arrivano ancora: e' lento, non inchiodato. Si aspetta,
+             * fino al tetto. */
+            if (da_riga < VM_KERNEL_SILENZIO_MS && da_avvio < VM_KERNEL_TETTO_MS) {
+                break;
+            }
+            /* Il messaggio dice QUALE dei due e' successo, perche' mandano a
+             * cercare in posti diversi: una seriale muta e' un guest fermo, un
+             * tetto raggiunto e' un guest vivo e troppo lento per noi. */
+            if (da_riga >= VM_KERNEL_SILENZIO_MS) {
+                registro_riga(REG_GUSCIO, "boot hung: %d serial lines, then "
+                              "nothing for %lu s (needs %d lines): closing "
+                              "and retrying",
+                              vm_righe_totali, (unsigned long)(da_riga / 1000),
+                              VM_RIGHE_SANE);
+            } else {
+                registro_riga(REG_GUSCIO, "boot still going after %lu s but "
+                              "only %d of %d lines -- too slow to wait for: "
+                              "closing and retrying",
+                              (unsigned long)(da_avvio / 1000),
+                              vm_righe_totali, VM_RIGHE_SANE);
+            }
             vm_uccidi();
             vm_vai(VM_AVVIA);
             break;
         }
         registro_riga(REG_GUSCIO, "the kernel started (%d serial lines)",
                       vm_righe_totali);
+        /* Se e stato il degrado a farlo partire l utente deve saperlo, o alla
+         * prossima esecuzione ripaghera i tentativi falliti daccapo. */
+        if (vm_vcpu_ora != vm_c->vcpu) {
+            registro_riga(REG_GUSCIO, "it started with %d vCPU, not the %d in "
+                          "config.txt. Put vcpu=%d in runtime/bin/config.txt to "
+                          "skip the failed attempts next time.",
+                          vm_vcpu_ora, vm_c->vcpu, vm_vcpu_ora);
+        }
         vm_vai(VM_ATTESA_ANDROID);
         break;
+    }
 
     case VM_ATTESA_ANDROID:
         vm_righe_totali += vm_segui_seriale();

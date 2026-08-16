@@ -44,7 +44,28 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 #     contesto aspettava la GPU non c'e' piu';
 #   - escono dal pacchetto le quattro copie di sviluppo di qemu-nostro.exe che
 #     0.1.0 spediva per sbaglio, 464 MB.
-VERSIONE="0.2.0"
+#
+# 0.2.1: l'interfaccia del guscio e' passata all'inglese. Sedici stringhe, tutte
+# quelle visibili -- README.md lo dichiarava gia' e non era vero. Cambia solo
+# Habumi.exe, ma cambia cio' che l'utente legge, quindi merita un numero.
+# NON e' mai stata pubblicata: superata nel giro di due ore dalla 0.2.2.
+#
+# 0.2.2, e questa nasce dai primi rapporti su hardware non nostro. Due Surface
+# Pro 12" non avviavano, e in un caso la colpa era interamente qui:
+#   - il guardiano dell'avvio contava le righe seriali a una scadenza FISSA di
+#     sedici secondi. Su una macchina piu' lenta il kernel ne produceva 119 e
+#     stava ancora salendo: sano, e lo uccidevamo noi dichiarando per giunta
+#     una corsa sui vCPU che non c'entrava. Ora giudica il PROGRESSO, e
+#     inchiodato vuol dire otto secondi di silenzio;
+#   - i tre tentativi rigiocavano la stessa identica configurazione. Ora
+#     DEGRADANO: a zero righe il successivo dimezza i vCPU (6, 3, 1), che e'
+#     esattamente cio' che serviva a quelle due macchine;
+#   - il bottone della variante era grigio finche' Android non era pronto, cioe'
+#     proprio quando serve per provare l'altra immagine. Ora si accende quando
+#     l'avvio fallisce.
+# In piu': README.md e KNOWN-ISSUES.md dicevano che la macchina di sviluppo e'
+# un Snapdragon X Elite. E' un X Plus X1P64100 a 10 core, ed era pubblico.
+VERSIONE="0.2.2"
 # Il nome del PRODOTTO, non della cartella del progetto: finisce nel nome
 # dell'archivio e in quello della cartella di uscita qui sotto.
 NOME="Habumi"

@@ -2,9 +2,9 @@
 
 **Run Android apps natively on Windows on ARM.**
 
-Habumi runs Android 13 on Windows 11 ARM64 machines — Snapdragon X Elite and
-similar — with **no instruction translation at all**. Your CPU executes the same
-ARM64 instructions a phone would. That is the whole point: an emulator that
+Habumi runs Android 13 on Windows 11 ARM64 machines — Snapdragon X Plus,
+X Elite and similar — with **no instruction translation at all**. Your CPU
+executes the same ARM64 instructions a phone would. That is the whole point: an emulator that
 translates x86 Android to ARM, or ARM to x86, pays for it in every frame. This
 one does not.
 
@@ -62,7 +62,8 @@ all of this.
 
 ## What works
 
-Measured on Snapdragon X Elite with Adreno X1-85:
+Measured on a Surface Pro 11 — Snapdragon X Plus X1P64100, 10 cores, Adreno
+X1-85 — which is the only machine any of this has been measured on:
 
 - **Touch, multi-touch and rotation**, with the guest resolution following the window
 - **Audio**, host and guest, through a rebuilt audio HAL with a 4096-frame ring

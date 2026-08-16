@@ -127,12 +127,20 @@ gl=wgl
 # anything, and the shell logs a line when it sees it.
 gl_flush_wait=no
 
-# How many attempts against the kernel hanging at boot.
+# How many attempts against a boot that does not come up.
 #
-# This is not caution: the guest kernel sometimes hangs in a race while
-# bringing up the secondary vCPUs under WHPX, and it is not deterministic --
-# the same command sometimes boots in twenty seconds. The shell recognises it
-# by counting serial lines at sixteen seconds, and retries by itself.
+# The attempts are not just repetition: they DEGRADE. If an attempt produces no
+# serial output at all -- meaning the guest never ran a single instruction --
+# the next one halves the vCPU count, so the default sequence is 6, 3, 1. Two
+# machines have been seen where vcpu=6 produced nothing every time and vcpu=1
+# booted, and on those the third attempt gets there on its own.
+#
+# It only halves on ZERO lines. A slow trickle means the guest is running, and
+# then the vCPU count is not the suspect: the shell waits as long as new lines
+# keep arriving, and calls it hung only after eight seconds of silence.
+#
+# With retries=1 there is no degradation and the value below is used as is,
+# which is what you want when measuring one configuration at a time.
 retries=3
 
 # The adb port on the host.
