@@ -89,6 +89,19 @@ redistributing a modified binary with attribution.
 License in `app/release/LICENSES/APACHE-2.0.txt`; what was changed and why in
 `app/release/LICENSES/HAL-AUDIO-ATTRIBUZIONE.txt`.
 
+## The boot animation
+
+`guest/bootanimation/bootanimation.zip`, also carried inside our initramfs, is
+built by `guest/bootanimation/genera.py` from the MP4 sitting next to it. **That
+video was produced with a Google generative-video tool** — the container records
+`encoder=Google`, and the exact product name is not recorded anywhere in the
+file — so what may be done with it is governed by the terms of that service and
+not by this repository's GPLv2.
+
+The MP4 is tracked here on purpose: it is the source the zip is rebuilt from,
+and without it the zip would be a binary nobody could reproduce. Neither file
+contains third-party code.
+
 ## The Android images
 
 `system.img` and `vendor.img` are **not redistributed**. They download

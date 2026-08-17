@@ -18,5 +18,12 @@
 *.dll binary
 *.exe binary
 *.fd binary
+# Lo zip dell'animazione d'avvio e il video da cui si genera. L'euristica di
+# "text=auto" li avrebbe risparmiati comunque, ma qui i binari si dichiarano uno
+# per uno, e uno zip STORED e' fatto in gran parte di dati non compressi: la
+# prima volta che l'euristica sbagliasse, il sintomo sarebbe un'animazione
+# d'avvio corrotta e nessun errore da nessuna parte.
+*.zip binary
+*.mp4 binary
 Image binary
 kernel-* binary
