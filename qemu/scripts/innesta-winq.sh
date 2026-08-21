@@ -244,7 +244,14 @@ innesta qemu-fasi-submit3d.patch WINQ_FASE_CODA hw/display/virtio-gpu-virgl.c \
 innesta qemu-submit-senza-ctx0.patch WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gpu-virgl.c \
         "interruttore WINQ_SUBMIT_SENZA_CTX0"
 
-# CANCELLO PRIMA DI COMPILARE: tutti e sei i marcatori, o non si compila.
+# Diagnostica del ciclo WHPX, nata dall'issue #1: ogni 10 s una riga per vCPU
+# con uscite, tempo dentro/fuori dall'hypervisor e pagine MMIO piu' battute.
+# Tocca un file suo (target/arm/whpx/whpx-all.c), quindi non calpesta il
+# contesto di nessuna delle patch qui sopra. Si spegne con WINQ_WHPX_STAT=0.
+innesta qemu-diagnostica-whpx.patch winq_whpx_stat target/arm/whpx/whpx-all.c \
+        "diagnostica del ciclo WHPX"
+
+# CANCELLO PRIMA DI COMPILARE: tutti e sette i marcatori, o non si compila.
 #
 # Serve perche' il guasto che questo script ha avuto per due giorni era SILENZIOSO
 # nell'altra direzione: una patch dimenticata nell'elenco (e' successo due volte
@@ -269,6 +276,7 @@ verifica_marcatore winq_ctx0_serve     hw/display/virtio-gpu-virgl.c      "force
 verifica_marcatore WINQ_RES_MAX        hw/display/virtio-gpu-virgl.c      "diagnostica delle risorse"
 verifica_marcatore WINQ_FASE_CODA      hw/display/virtio-gpu-virgl.c      "fasi di SUBMIT_3D"
 verifica_marcatore WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gpu-virgl.c   "interruttore WINQ_SUBMIT_SENZA_CTX0"
+verifica_marcatore winq_whpx_stat      target/arm/whpx/whpx-all.c         "diagnostica del ciclo WHPX"
 if [ -n "$MANCANTI" ]; then
     echo "FERMO: l'albero non ha tutte le nostre modifiche. Manca:$MANCANTI"
     echo "    Non si compila: uscirebbe un binario che gira e misura un'altra cosa."
