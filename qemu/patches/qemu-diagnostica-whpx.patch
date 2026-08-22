@@ -1,6 +1,6 @@
 --- a/target/arm/whpx/whpx-all.c
 +++ b/target/arm/whpx/whpx-all.c
-@@ -392,6 +392,148 @@
+@@ -392,6 +392,179 @@
      assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
  }
  
@@ -38,6 +38,17 @@
 +    bool attiva;
 +    uint64_t uscite, mmio, cancel, reset, altre;
 +    int64_t dentro_us, fuori_us, ultima_uscita_us;
++    /* La CPU davvero ADDEBITATA al thread della vCPU, dal kernel di Windows:
++     * il tempo del guest sotto WHPX viene messo in conto al thread chiamante,
++     * quindi il confronto col tempo di parete "dentro" separa i due casi che
++     * da dentro non si distinguono -- un thread carico quanto la parete e' un
++     * hypervisor che BRUCIA il tempo, un thread quasi scarico e' una vCPU
++     * AFFAMATA che non viene schedulata. I contatori per-partizione di
++     * Hyper-V non esistono su un host con la sola Virtual Machine Platform
++     * (provato: solo Root Virtual Processor ha istanze), quindi questa e'
++     * l'unica vista host disponibile senza privilegi. */
++    HANDLE filo;
++    uint64_t ker_100ns, usr_100ns;
 +    struct { uint64_t pagina; uint64_t n; } pag[WINQ_WHPX_PAGINE];
 +    uint64_t pag_oltre;
 +};
@@ -98,6 +109,26 @@
 +                    (unsigned long long)dc, (unsigned long long)da,
 +                    (long long)(dentro / 1000), (long long)(fuori / 1000),
 +                    (long long)(du ? dentro / (int64_t)du : 0));
++        if (c->filo) {
++            FILETIME wf_c, wf_e, wf_k, wf_u;
++
++            if (GetThreadTimes(c->filo, &wf_c, &wf_e, &wf_k, &wf_u)) {
++                uint64_t ker = ((uint64_t)wf_k.dwHighDateTime << 32)
++                               | wf_k.dwLowDateTime;
++                uint64_t usr = ((uint64_t)wf_u.dwHighDateTime << 32)
++                               | wf_u.dwLowDateTime;
++
++                info_report("winq/whpx: vcpu %d: cpu addebitata al thread "
++                            "nell'intervallo: %llu ms kernel + %llu ms user, "
++                            "contro %lld ms di parete dentro+fuori",
++                            i,
++                            (unsigned long long)((ker - c->ker_100ns) / 10000),
++                            (unsigned long long)((usr - c->usr_100ns) / 10000),
++                            (long long)((dentro + fuori) / 1000));
++                c->ker_100ns = ker;
++                c->usr_100ns = usr;
++            }
++        }
 +        if (dm > 0) {
 +            char riga[192];
 +            size_t len = 0;
@@ -149,7 +180,7 @@
  int whpx_vcpu_run(CPUState *cpu)
  {
      HRESULT hr;
-@@ -399,6 +541,21 @@
+@@ -399,6 +572,29 @@
      ARMCPU *arm_cpu = ARM_CPU(cpu);
      AccelCPUState *vcpu = cpu->accel;
      int ret;
@@ -167,11 +198,19 @@
 +    if (winq_c) {
 +        winq_c->attiva = true;
 +        winq_c->ultima_uscita_us = g_get_monotonic_time();
++        if (!winq_c->filo) {
++            /* Un handle vero e non lo pseudo-handle di GetCurrentThread():
++             * lo legge il thread di un'ALTRA vCPU al momento della stampa,
++             * e lo pseudo-handle li' indicherebbe il lettore, non noi. */
++            DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
++                            GetCurrentProcess(), &winq_c->filo,
++                            0, FALSE, DUPLICATE_SAME_ACCESS);
++        }
 +    }
  
  
      g_assert(bql_locked());
-@@ -416,6 +573,7 @@
+@@ -416,6 +612,7 @@
      cpu_exec_start(cpu);
      do {
          bool advance_pc = false;
@@ -179,7 +218,7 @@
          if (cpu->vcpu_dirty) {
              whpx_set_registers(cpu, WHPX_LEVEL_RUNTIME_STATE);
              cpu->vcpu_dirty = false;
-@@ -425,9 +583,34 @@
+@@ -425,9 +622,34 @@
              whpx_vcpu_kick(cpu);
          }
  
@@ -214,7 +253,7 @@
  
          if (FAILED(hr)) {
              error_report("WHPX: Failed to exec a virtual processor,"
-@@ -496,6 +679,23 @@
+@@ -496,6 +718,23 @@
              pc.Reg64 = vcpu->exit_ctx.MemoryAccess.Header.Pc + 4;
              whpx_set_reg(cpu, WHvArm64RegisterPc, pc);
          }
