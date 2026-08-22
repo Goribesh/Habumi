@@ -1,6 +1,6 @@
 --- a/target/arm/whpx/whpx-all.c
 +++ b/target/arm/whpx/whpx-all.c
-@@ -392,6 +392,179 @@
+@@ -392,6 +392,263 @@
      assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
  }
  
@@ -51,6 +51,20 @@
 +    uint64_t ker_100ns, usr_100ns;
 +    struct { uint64_t pagina; uint64_t n; } pag[WINQ_WHPX_PAGINE];
 +    uint64_t pag_oltre;
++    /* Il program counter del guest, campionato: a ogni uscita MMIO (il PC e'
++     * gia' nel contesto, gratis) e a ogni uscita Canceled (una lettura di
++     * registro, sicura perche' avviene sul thread della vCPU appena uscita).
++     * La stampa periodica FORZA un'uscita per vCPU con
++     * WHvCancelRunVirtualProcessor, cosi' anche una vCPU che non esce mai --
++     * quella che gira a vuoto -- consegna un campione ogni 10 s. E' il
++     * discriminatore fra le due letture rimaste del fattore misurato: campioni
++     * AMMASSATI su pochi indirizzi = il guest gira in un anello di attesa
++     * (interrupt che non arrivano); campioni SPARSI = esecuzione normale ma
++     * lenta (costo per istruzione). Con KASLR gli indirizzi non si traducono
++     * in simboli da fuori, ma per distinguere ammasso da dispersione non
++     * serve: serve solo contare le ripetizioni dentro la stessa corsa. */
++    struct { uint64_t pc; uint64_t n; } pcs[WINQ_WHPX_PAGINE];
++    uint64_t pcs_oltre;
 +};
 +static struct winq_whpx_conta winq_whpx_conta[WINQ_WHPX_VCPU_MAX];
 +static int64_t winq_whpx_stampa_us;
@@ -74,6 +88,24 @@
 +        }
 +    }
 +    c->pag_oltre++;
++}
++
++static void winq_whpx_pc(struct winq_whpx_conta *c, uint64_t pc)
++{
++    int i;
++
++    for (i = 0; i < WINQ_WHPX_PAGINE; i++) {
++        if (c->pcs[i].n && c->pcs[i].pc == pc) {
++            c->pcs[i].n++;
++            return;
++        }
++        if (!c->pcs[i].n) {
++            c->pcs[i].pc = pc;
++            c->pcs[i].n = 1;
++            return;
++        }
++    }
++    c->pcs_oltre++;
 +}
 +
 +static void winq_whpx_stampa(int64_t adesso)
@@ -173,14 +205,66 @@
 +                            (unsigned long long)c->pag_oltre);
 +            }
 +        }
++        {
++            char riga[192];
++            size_t len = 0;
++            uint64_t campioni = 0;
++
++            for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                campioni += c->pcs[j].n;
++            }
++            if (campioni) {
++                for (k = 0; k < 4; k++) {
++                    int migliore = -1;
++
++                    for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                        if (c->pcs[j].n == 0 ||
++                            (c->pcs[j].n & (1ULL << 63))) {
++                            continue;
++                        }
++                        if (migliore < 0 ||
++                            c->pcs[j].n > c->pcs[migliore].n) {
++                            migliore = j;
++                        }
++                    }
++                    if (migliore < 0) {
++                        break;
++                    }
++                    len += snprintf(riga + len, sizeof(riga) - len,
++                                    " 0x%llx x%llu",
++                                    (unsigned long long)c->pcs[migliore].pc,
++                                    (unsigned long long)c->pcs[migliore].n);
++                    c->pcs[migliore].n |= 1ULL << 63;
++                    if (len >= sizeof(riga) - 32) {
++                        break;
++                    }
++                }
++                for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                    c->pcs[j].n &= ~(1ULL << 63);
++                }
++                info_report("winq/whpx: vcpu %d: pc campionati "
++                            "(%llu dall'avvio):%s, %llu oltre tabella",
++                            i, (unsigned long long)(campioni + c->pcs_oltre),
++                            riga, (unsigned long long)c->pcs_oltre);
++            }
++        }
 +        *p = *c;
++    }
++    /* La sonda: un'uscita forzata per vCPU attiva, cosi' anche chi non esce
++     * mai consegna un PC al giro dopo. Una cancellazione ogni dieci secondi
++     * e' il kick che QEMU fa gia' di suo continuamente: innocua. */
++    for (i = 0; i < WINQ_WHPX_VCPU_MAX; i++) {
++        if (winq_whpx_conta[i].attiva) {
++            whp_dispatch.WHvCancelRunVirtualProcessor(
++                whpx_global.partition, i, 0);
++        }
 +    }
 +}
 +
  int whpx_vcpu_run(CPUState *cpu)
  {
      HRESULT hr;
-@@ -399,6 +572,29 @@
+@@ -399,6 +656,29 @@
      ARMCPU *arm_cpu = ARM_CPU(cpu);
      AccelCPUState *vcpu = cpu->accel;
      int ret;
@@ -210,7 +294,7 @@
  
  
      g_assert(bql_locked());
-@@ -416,6 +612,7 @@
+@@ -416,6 +696,7 @@
      cpu_exec_start(cpu);
      do {
          bool advance_pc = false;
@@ -218,7 +302,7 @@
          if (cpu->vcpu_dirty) {
              whpx_set_registers(cpu, WHPX_LEVEL_RUNTIME_STATE);
              cpu->vcpu_dirty = false;
-@@ -425,9 +622,34 @@
+@@ -425,9 +706,44 @@
              whpx_vcpu_kick(cpu);
          }
  
@@ -238,10 +322,20 @@
 +            case WHvRunVpExitReasonUnmappedGpa:
 +                winq_c->mmio++;
 +                winq_whpx_pagina(winq_c, vcpu->exit_ctx.MemoryAccess.Gpa);
++                winq_whpx_pc(winq_c, vcpu->exit_ctx.MemoryAccess.Header.Pc);
 +                break;
-+            case WHvRunVpExitReasonCanceled:
++            case WHvRunVpExitReasonCanceled: {
++                /* Il PC non sta nel contesto di una cancellazione: lo si
++                 * legge, e la lettura e' sicura perche' siamo il thread di
++                 * questa vCPU e la vCPU e' appena uscita. E' il campione che
++                 * la sonda della stampa e' venuta a prendere. */
++                WHV_REGISTER_VALUE winq_pc_val;
++
++                whpx_get_reg(cpu, WHvArm64RegisterPc, &winq_pc_val);
++                winq_whpx_pc(winq_c, winq_pc_val.Reg64);
 +                winq_c->cancel++;
 +                break;
++            }
 +            case WHvRunVpExitReasonArm64Reset:
 +                winq_c->reset++;
 +                break;
@@ -253,7 +347,7 @@
  
          if (FAILED(hr)) {
              error_report("WHPX: Failed to exec a virtual processor,"
-@@ -496,6 +718,23 @@
+@@ -496,6 +812,23 @@
              pc.Reg64 = vcpu->exit_ctx.MemoryAccess.Header.Pc + 4;
              whpx_set_reg(cpu, WHvArm64RegisterPc, pc);
          }
