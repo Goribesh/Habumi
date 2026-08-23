@@ -251,7 +251,14 @@ innesta qemu-submit-senza-ctx0.patch WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gp
 innesta qemu-diagnostica-whpx.patch winq_whpx_stat target/arm/whpx/whpx-all.c \
         "diagnostica del ciclo WHPX"
 
-# CANCELLO PRIMA DI COMPILARE: tutti e sette i marcatori, o non si compila.
+# La riparazione dell'issue #1: le feature sintetiche Hyper-V concesse di
+# default alla partizione. Sul Surface Pro 12 (X1P-42) la sola concessione
+# porta il boot da 81-130 minuti a 2 -- il perche' per esteso sta nel
+# commento della patch. WINQ_HV_SINTETICI=0 la spegne a runtime.
+innesta qemu-hv-sintetici.patch winq_hv_sintetici target/arm/whpx/whpx-all.c \
+        "feature sintetiche Hyper-V di default"
+
+# CANCELLO PRIMA DI COMPILARE: tutti e otto i marcatori, o non si compila.
 #
 # Serve perche' il guasto che questo script ha avuto per due giorni era SILENZIOSO
 # nell'altra direzione: una patch dimenticata nell'elenco (e' successo due volte
@@ -277,6 +284,7 @@ verifica_marcatore WINQ_RES_MAX        hw/display/virtio-gpu-virgl.c      "diagn
 verifica_marcatore WINQ_FASE_CODA      hw/display/virtio-gpu-virgl.c      "fasi di SUBMIT_3D"
 verifica_marcatore WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gpu-virgl.c   "interruttore WINQ_SUBMIT_SENZA_CTX0"
 verifica_marcatore winq_whpx_stat      target/arm/whpx/whpx-all.c         "diagnostica del ciclo WHPX"
+verifica_marcatore winq_hv_sintetici   target/arm/whpx/whpx-all.c         "feature sintetiche Hyper-V"
 if [ -n "$MANCANTI" ]; then
     echo "FERMO: l'albero non ha tutte le nostre modifiche. Manca:$MANCANTI"
     echo "    Non si compila: uscirebbe un binario che gira e misura un'altra cosa."
