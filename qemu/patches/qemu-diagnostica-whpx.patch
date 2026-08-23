@@ -1,6 +1,6 @@
 --- a/target/arm/whpx/whpx-all.c
 +++ b/target/arm/whpx/whpx-all.c
-@@ -392,6 +392,344 @@
+@@ -392,6 +392,367 @@
      assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
  }
  
@@ -79,9 +79,7 @@
 +    uint64_t sonda_oltre;
 +};
 +static struct winq_whpx_conta winq_whpx_conta[WINQ_WHPX_VCPU_MAX];
-+static int64_t winq_whpx_stampa_us;
 +static int winq_whpx_acceso = -1;
-+static GMutex winq_whpx_mutex;
 +
 +static void winq_whpx_pagina(struct winq_whpx_conta *c, uint64_t gpa)
 +{
@@ -153,17 +151,23 @@
 +            continue;
 +        }
 +        du = c->uscite - p->uscite;
-+        if (du == 0) {
-+            info_report("winq/whpx: vcpu %d: nessuna uscita da %lld s",
-+                        i, (long long)((adesso - c->ultima_uscita_us)
-+                                       / 1000000));
-+            continue;
-+        }
 +        dm = c->mmio - p->mmio;
 +        dc = c->cancel - p->cancel;
 +        da = (c->reset - p->reset) + (c->altre - p->altre);
 +        dentro = c->dentro_us - p->dentro_us;
 +        fuori = c->fuori_us - p->fuori_us;
++        if (du == 0) {
++            /* La vCPU non esce piu'. La riga resta, e le righe sotto -- CPU
++             * addebitata e sonda -- ora continuano ANCHE per lei: sono la
++             * sola vista su un blocco dentro l'hypervisor, e una corsa sul
++             * campo ne ha mostrato uno di 31 minuti in cui persino il cancel
++             * della sonda veniva ignorato. Prima questa riga faceva
++             * "continue" e il blocco restava senza numeri proprio quando i
++             * numeri servivano. */
++            info_report("winq/whpx: vcpu %d: nessuna uscita da %lld s",
++                        i, (long long)((adesso - c->ultima_uscita_us)
++                                       / 1000000));
++        } else {
 +        info_report("winq/whpx: vcpu %d: %llu uscite in 10 s "
 +                    "(mmio %llu, cancel %llu, altre %llu), "
 +                    "dentro %lld ms, fuori %lld ms, %lld us/uscita dentro",
@@ -171,6 +175,7 @@
 +                    (unsigned long long)dc, (unsigned long long)da,
 +                    (long long)(dentro / 1000), (long long)(fuori / 1000),
 +                    (long long)(du ? dentro / (int64_t)du : 0));
++        }
 +        if (c->filo) {
 +            FILETIME wf_c, wf_e, wf_k, wf_u;
 +
@@ -342,10 +347,28 @@
 +    }
 +}
 +
++/* Il thread delle statistiche: stampa e sonda OGNI dieci secondi, qualunque
++ * cosa facciano le vCPU. Prima stampava la vCPU che usciva per prima, e con
++ * una vCPU sola che smette di uscire nessuno stampava e nessuno sondava --
++ * ciechi esattamente quando serviva vedere: una corsa sul campo ha avuto 31
++ * minuti di blocco senza una riga. I cancel stanno in coda a
++ * winq_whpx_stampa, quindi ogni giro riprova anche a scuotere le vCPU mute,
++ * e un cancel che continua a essere ignorato resta documentato dal contatore
++ * fermo della riga "nessuna uscita". */
++static gpointer winq_whpx_filo_stat(gpointer dati)
++{
++    (void)dati;
++    for (;;) {
++        g_usleep(10 * G_USEC_PER_SEC);
++        winq_whpx_stampa(g_get_monotonic_time());
++    }
++    return NULL;
++}
++
  int whpx_vcpu_run(CPUState *cpu)
  {
      HRESULT hr;
-@@ -399,6 +737,29 @@
+@@ -399,6 +760,34 @@
      ARMCPU *arm_cpu = ARM_CPU(cpu);
      AccelCPUState *vcpu = cpu->accel;
      int ret;
@@ -359,6 +382,11 @@
 +        const char *winq_v = getenv("WINQ_WHPX_STAT");
 +
 +        winq_whpx_acceso = !(winq_v && winq_v[0] == '0');
++        /* Una volta sola: questo punto gira con la BQL tenuta (l'assert qui
++         * sopra), quindi due vCPU non possono passarci insieme. */
++        if (winq_whpx_acceso > 0) {
++            g_thread_new("winq-whpx-stat", winq_whpx_filo_stat, NULL);
++        }
 +    }
 +    if (winq_c) {
 +        winq_c->attiva = true;
@@ -375,7 +403,7 @@
  
  
      g_assert(bql_locked());
-@@ -416,6 +777,7 @@
+@@ -416,6 +805,7 @@
      cpu_exec_start(cpu);
      do {
          bool advance_pc = false;
@@ -383,7 +411,7 @@
          if (cpu->vcpu_dirty) {
              whpx_set_registers(cpu, WHPX_LEVEL_RUNTIME_STATE);
              cpu->vcpu_dirty = false;
-@@ -425,9 +787,44 @@
+@@ -425,9 +815,44 @@
              whpx_vcpu_kick(cpu);
          }
  
@@ -428,26 +456,12 @@
  
          if (FAILED(hr)) {
              error_report("WHPX: Failed to exec a virtual processor,"
-@@ -496,6 +893,23 @@
+@@ -496,6 +921,9 @@
              pc.Reg64 = vcpu->exit_ctx.MemoryAccess.Header.Pc + 4;
              whpx_set_reg(cpu, WHvArm64RegisterPc, pc);
          }
 +        if (winq_whpx_acceso > 0 && winq_c && winq_t1) {
-+            int64_t winq_t2 = g_get_monotonic_time();
-+
-+            winq_c->fuori_us += winq_t2 - winq_t1;
-+            /* La stampa la fa UNA vCPU per giro, quella che vince il
-+             * trylock: cosi' una vCPU inchiodata dentro l'hypervisor non
-+             * impedisce di raccontare le altre -- ed e' proprio il caso che
-+             * questa diagnostica serve a vedere. */
-+            if (winq_t2 >= winq_whpx_stampa_us &&
-+                g_mutex_trylock(&winq_whpx_mutex)) {
-+                if (winq_t2 >= winq_whpx_stampa_us) {
-+                    winq_whpx_stampa_us = winq_t2 + 10 * 1000000;
-+                    winq_whpx_stampa(winq_t2);
-+                }
-+                g_mutex_unlock(&winq_whpx_mutex);
-+            }
++            winq_c->fuori_us += g_get_monotonic_time() - winq_t1;
 +        }
      } while (!ret);
  
