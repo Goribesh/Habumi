@@ -1,0 +1,468 @@
+--- a/target/arm/whpx/whpx-all.c
++++ b/target/arm/whpx/whpx-all.c
+@@ -392,6 +392,367 @@
+     assert(ret == QEMU_ARM_POWERCTL_RET_SUCCESS);
+ }
+ 
++/* winq_whpx_stat -- il contatore delle uscite dall'hypervisor, e il perche'.
++ *
++ * Tre Surface Pro 12" (issue #1) eseguono il guest 30-200 volte piu' lentamente
++ * della macchina di sviluppo, con l'host MAI saturo e l'orologio del guest 1:1
++ * col tempo vero; e sopra una vCPU l'avvio muore con la firma di un IPI mai
++ * consegnato (stallo RCU, poi "Sending NMI from CPU 1 to CPUs 0"). Il GIC sta
++ * DENTRO Hyper-V (WHvArm64IcEmulationModeGicV3, vedi whpx_accel_init), quindi
++ * gli SGI da qui non si vedono: cio' che si puo' misurare e' il ciclo di
++ * esecuzione, ed e' cio' che serve a distinguere le tre cause possibili del
++ * fattore misurato -- PIU' uscite, uscite PIU' CARE, o cicli mai concessi.
++ *
++ * Ogni 10 s una riga per vCPU su stderr, che il guscio gia' raccoglie nel
++ * registro: uscite dell'intervallo divise per ragione, tempo DENTRO
++ * WHvRunVirtualProcessor e FUORI (la gestione dell'uscita, BQL compresa), il
++ * costo medio di un'uscita, e le pagine MMIO piu' battute dall'avvio. Due
++ * avvertenze scritte perche' i numeri non mentano a chi li legge:
++ *
++ *   - "dentro" comprende anche il tempo in cui l'HOST non schedula il thread
++ *     della vCPU: da qui non si distingue, e va letto insieme alla CPU% che
++ *     Task Manager mostra per il processo.
++ *   - una vCPU che non esce puo' essere inchiodata (l'IPI perso) o solo senza
++ *     lavoro (in WFI dentro l'hypervisor non si esce verso QEMU): la riga
++ *     "nessuna uscita da N s" riporta un fatto, non un verdetto. Il segnale
++ *     e' il CAMBIO: una vCPU che usciva e ammutolisce per sempre.
++ *
++ * Si spegne con WINQ_WHPX_STAT=0. Acceso di default, perche' una decina di
++ * righe ogni dieci secondi non allaga niente e il registro che i segnalanti
++ * mandano gia' oggi diventa cosi' la misura stessa. */
++#define WINQ_WHPX_VCPU_MAX 64
++#define WINQ_WHPX_PAGINE   12
++struct winq_whpx_conta {
++    bool attiva;
++    uint64_t uscite, mmio, cancel, reset, altre;
++    int64_t dentro_us, fuori_us, ultima_uscita_us;
++    /* La CPU davvero ADDEBITATA al thread della vCPU, dal kernel di Windows:
++     * il tempo del guest sotto WHPX viene messo in conto al thread chiamante,
++     * quindi il confronto col tempo di parete "dentro" separa i due casi che
++     * da dentro non si distinguono -- un thread carico quanto la parete e' un
++     * hypervisor che BRUCIA il tempo, un thread quasi scarico e' una vCPU
++     * AFFAMATA che non viene schedulata. I contatori per-partizione di
++     * Hyper-V non esistono su un host con la sola Virtual Machine Platform
++     * (provato: solo Root Virtual Processor ha istanze), quindi questa e'
++     * l'unica vista host disponibile senza privilegi. */
++    HANDLE filo;
++    uint64_t ker_100ns, usr_100ns;
++    struct { uint64_t pagina; uint64_t n; } pag[WINQ_WHPX_PAGINE];
++    uint64_t pag_oltre;
++    /* Il program counter del guest, campionato: a ogni uscita MMIO (il PC e'
++     * gia' nel contesto, gratis) e a ogni uscita Canceled (una lettura di
++     * registro, sicura perche' avviene sul thread della vCPU appena uscita).
++     * La stampa periodica FORZA un'uscita per vCPU con
++     * WHvCancelRunVirtualProcessor, cosi' anche una vCPU che non esce mai --
++     * quella che gira a vuoto -- consegna un campione ogni 10 s. E' il
++     * discriminatore fra le due letture rimaste del fattore misurato: campioni
++     * AMMASSATI su pochi indirizzi = il guest gira in un anello di attesa
++     * (interrupt che non arrivano); campioni SPARSI = esecuzione normale ma
++     * lenta (costo per istruzione). Con KASLR gli indirizzi non si traducono
++     * in simboli da fuori, ma per distinguere ammasso da dispersione non
++     * serve: serve solo contare le ripetizioni dentro la stessa corsa. */
++    struct { uint64_t pc; uint64_t n; } pcs[WINQ_WHPX_PAGINE];
++    uint64_t pcs_oltre;
++    /* La tabella della SONDA, separata e cumulativa. La prima corsa sul campo
++     * ha dimostrato che una tabella sola non basta: il diluvio della seriale
++     * la satura nei primi minuti (175.274 campioni sull'indirizzo della uart)
++     * e da li' in poi ogni campione nuovo finisce nel contatore di overflow,
++     * contato ma non identificato -- 204.225 campioni anonimi, proprio nella
++     * fase che doveva decidere. Da qui la separazione: pcs e pag si AZZERANO
++     * a ogni stampa e fotografano l'intervallo; la sonda -- un campione
++     * forzato ogni 10 s, l'unico non distorto dalle uscite MMIO -- accumula
++     * qui per tutta la corsa, e il suo ammasso o la sua dispersione E' la
++     * risposta che si cerca. */
++    struct { uint64_t pc; uint64_t n; } sonda[WINQ_WHPX_PAGINE];
++    uint64_t sonda_oltre;
++};
++static struct winq_whpx_conta winq_whpx_conta[WINQ_WHPX_VCPU_MAX];
++static int winq_whpx_acceso = -1;
++
++static void winq_whpx_pagina(struct winq_whpx_conta *c, uint64_t gpa)
++{
++    uint64_t pagina = gpa >> 12;
++    int i;
++
++    for (i = 0; i < WINQ_WHPX_PAGINE; i++) {
++        if (c->pag[i].n && c->pag[i].pagina == pagina) {
++            c->pag[i].n++;
++            return;
++        }
++        if (!c->pag[i].n) {
++            c->pag[i].pagina = pagina;
++            c->pag[i].n = 1;
++            return;
++        }
++    }
++    c->pag_oltre++;
++}
++
++static void winq_whpx_pc(struct winq_whpx_conta *c, uint64_t pc)
++{
++    int i;
++
++    for (i = 0; i < WINQ_WHPX_PAGINE; i++) {
++        if (c->pcs[i].n && c->pcs[i].pc == pc) {
++            c->pcs[i].n++;
++            return;
++        }
++        if (!c->pcs[i].n) {
++            c->pcs[i].pc = pc;
++            c->pcs[i].n = 1;
++            return;
++        }
++    }
++    c->pcs_oltre++;
++}
++
++static void winq_whpx_sonda(struct winq_whpx_conta *c, uint64_t pc)
++{
++    int i;
++
++    for (i = 0; i < WINQ_WHPX_PAGINE; i++) {
++        if (c->sonda[i].n && c->sonda[i].pc == pc) {
++            c->sonda[i].n++;
++            return;
++        }
++        if (!c->sonda[i].n) {
++            c->sonda[i].pc = pc;
++            c->sonda[i].n = 1;
++            return;
++        }
++    }
++    c->sonda_oltre++;
++}
++
++static void winq_whpx_stampa(int64_t adesso)
++{
++    static struct winq_whpx_conta prima[WINQ_WHPX_VCPU_MAX];
++    int i, j, k;
++
++    for (i = 0; i < WINQ_WHPX_VCPU_MAX; i++) {
++        struct winq_whpx_conta *c = &winq_whpx_conta[i];
++        struct winq_whpx_conta *p = &prima[i];
++        uint64_t du, dm, dc, da;
++        int64_t dentro, fuori;
++
++        if (!c->attiva) {
++            continue;
++        }
++        du = c->uscite - p->uscite;
++        dm = c->mmio - p->mmio;
++        dc = c->cancel - p->cancel;
++        da = (c->reset - p->reset) + (c->altre - p->altre);
++        dentro = c->dentro_us - p->dentro_us;
++        fuori = c->fuori_us - p->fuori_us;
++        if (du == 0) {
++            /* La vCPU non esce piu'. La riga resta, e le righe sotto -- CPU
++             * addebitata e sonda -- ora continuano ANCHE per lei: sono la
++             * sola vista su un blocco dentro l'hypervisor, e una corsa sul
++             * campo ne ha mostrato uno di 31 minuti in cui persino il cancel
++             * della sonda veniva ignorato. Prima questa riga faceva
++             * "continue" e il blocco restava senza numeri proprio quando i
++             * numeri servivano. */
++            info_report("winq/whpx: vcpu %d: nessuna uscita da %lld s",
++                        i, (long long)((adesso - c->ultima_uscita_us)
++                                       / 1000000));
++        } else {
++        info_report("winq/whpx: vcpu %d: %llu uscite in 10 s "
++                    "(mmio %llu, cancel %llu, altre %llu), "
++                    "dentro %lld ms, fuori %lld ms, %lld us/uscita dentro",
++                    i, (unsigned long long)du, (unsigned long long)dm,
++                    (unsigned long long)dc, (unsigned long long)da,
++                    (long long)(dentro / 1000), (long long)(fuori / 1000),
++                    (long long)(du ? dentro / (int64_t)du : 0));
++        }
++        if (c->filo) {
++            FILETIME wf_c, wf_e, wf_k, wf_u;
++
++            if (GetThreadTimes(c->filo, &wf_c, &wf_e, &wf_k, &wf_u)) {
++                uint64_t ker = ((uint64_t)wf_k.dwHighDateTime << 32)
++                               | wf_k.dwLowDateTime;
++                uint64_t usr = ((uint64_t)wf_u.dwHighDateTime << 32)
++                               | wf_u.dwLowDateTime;
++
++                info_report("winq/whpx: vcpu %d: cpu addebitata al thread "
++                            "nell'intervallo: %llu ms kernel + %llu ms user, "
++                            "contro %lld ms di parete dentro+fuori",
++                            i,
++                            (unsigned long long)((ker - c->ker_100ns) / 10000),
++                            (unsigned long long)((usr - c->usr_100ns) / 10000),
++                            (long long)((dentro + fuori) / 1000));
++                c->ker_100ns = ker;
++                c->usr_100ns = usr;
++            }
++        }
++        if (dm > 0) {
++            char riga[192];
++            size_t len = 0;
++            uint64_t viste = 0;
++
++            /* le 4 pagine piu' battute dall'avvio, per selezione ripetuta:
++             * dodici slot, il costo non conta a una stampa ogni dieci
++             * secondi. */
++            for (k = 0; k < 4; k++) {
++                int migliore = -1;
++
++                for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                    if (c->pag[j].n == 0 || (c->pag[j].n & (1ULL << 63))) {
++                        continue;
++                    }
++                    if (migliore < 0 || c->pag[j].n > c->pag[migliore].n) {
++                        migliore = j;
++                    }
++                }
++                if (migliore < 0) {
++                    break;
++                }
++                len += snprintf(riga + len, sizeof(riga) - len,
++                                " 0x%llx000 x%llu%s",
++                                (unsigned long long)c->pag[migliore].pagina,
++                                (unsigned long long)c->pag[migliore].n,
++                                c->pag[migliore].pagina == 0x9000
++                                ? "(uart)" : "");
++                c->pag[migliore].n |= 1ULL << 63;
++                viste++;
++                if (len >= sizeof(riga) - 32) {
++                    break;
++                }
++            }
++            for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                c->pag[j].n &= ~(1ULL << 63);
++            }
++            if (viste) {
++                info_report("winq/whpx: vcpu %d: pagine mmio nell'intervallo:%s"
++                            "%s%llu oltre tabella", i, riga,
++                            c->pag_oltre ? ", " : ", 0x",
++                            (unsigned long long)c->pag_oltre);
++            }
++        }
++        {
++            char riga[192];
++            size_t len = 0;
++            uint64_t campioni = 0;
++
++            for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                campioni += c->pcs[j].n;
++            }
++            if (campioni) {
++                for (k = 0; k < 4; k++) {
++                    int migliore = -1;
++
++                    for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                        if (c->pcs[j].n == 0 ||
++                            (c->pcs[j].n & (1ULL << 63))) {
++                            continue;
++                        }
++                        if (migliore < 0 ||
++                            c->pcs[j].n > c->pcs[migliore].n) {
++                            migliore = j;
++                        }
++                    }
++                    if (migliore < 0) {
++                        break;
++                    }
++                    len += snprintf(riga + len, sizeof(riga) - len,
++                                    " 0x%llx x%llu",
++                                    (unsigned long long)c->pcs[migliore].pc,
++                                    (unsigned long long)c->pcs[migliore].n);
++                    c->pcs[migliore].n |= 1ULL << 63;
++                    if (len >= sizeof(riga) - 32) {
++                        break;
++                    }
++                }
++                for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                    c->pcs[j].n &= ~(1ULL << 63);
++                }
++                info_report("winq/whpx: vcpu %d: pc mmio "
++                            "nell'intervallo (%llu):%s, %llu oltre tabella",
++                            i, (unsigned long long)(campioni + c->pcs_oltre),
++                            riga, (unsigned long long)c->pcs_oltre);
++            }
++        }
++        {
++            char riga[192];
++            size_t len = 0;
++            uint64_t campioni = 0;
++
++            for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                campioni += c->sonda[j].n;
++            }
++            if (campioni) {
++                for (k = 0; k < 4; k++) {
++                    int migliore = -1;
++
++                    for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                        if (c->sonda[j].n == 0 ||
++                            (c->sonda[j].n & (1ULL << 63))) {
++                            continue;
++                        }
++                        if (migliore < 0 ||
++                            c->sonda[j].n > c->sonda[migliore].n) {
++                            migliore = j;
++                        }
++                    }
++                    if (migliore < 0) {
++                        break;
++                    }
++                    len += snprintf(riga + len, sizeof(riga) - len,
++                                    " 0x%llx x%llu",
++                                    (unsigned long long)c->sonda[migliore].pc,
++                                    (unsigned long long)
++                                    c->sonda[migliore].n);
++                    c->sonda[migliore].n |= 1ULL << 63;
++                    if (len >= sizeof(riga) - 32) {
++                        break;
++                    }
++                }
++                for (j = 0; j < WINQ_WHPX_PAGINE; j++) {
++                    c->sonda[j].n &= ~(1ULL << 63);
++                }
++                info_report("winq/whpx: vcpu %d: pc della sonda "
++                            "(%llu dall'avvio):%s, %llu oltre tabella",
++                            i, (unsigned long long)
++                            (campioni + c->sonda_oltre),
++                            riga, (unsigned long long)c->sonda_oltre);
++            }
++        }
++        /* pcs e pag fotografano l'INTERVALLO: si azzerano qui, dopo la
++         * stampa. La sonda no: e' cumulativa, vedi il commento sul campo. */
++        memset(c->pcs, 0, sizeof(c->pcs));
++        c->pcs_oltre = 0;
++        memset(c->pag, 0, sizeof(c->pag));
++        c->pag_oltre = 0;
++        *p = *c;
++    }
++    /* La sonda: un'uscita forzata per vCPU attiva, cosi' anche chi non esce
++     * mai consegna un PC al giro dopo. Una cancellazione ogni dieci secondi
++     * e' il kick che QEMU fa gia' di suo continuamente: innocua. */
++    for (i = 0; i < WINQ_WHPX_VCPU_MAX; i++) {
++        if (winq_whpx_conta[i].attiva) {
++            whp_dispatch.WHvCancelRunVirtualProcessor(
++                whpx_global.partition, i, 0);
++        }
++    }
++}
++
++/* Il thread delle statistiche: stampa e sonda OGNI dieci secondi, qualunque
++ * cosa facciano le vCPU. Prima stampava la vCPU che usciva per prima, e con
++ * una vCPU sola che smette di uscire nessuno stampava e nessuno sondava --
++ * ciechi esattamente quando serviva vedere: una corsa sul campo ha avuto 31
++ * minuti di blocco senza una riga. I cancel stanno in coda a
++ * winq_whpx_stampa, quindi ogni giro riprova anche a scuotere le vCPU mute,
++ * e un cancel che continua a essere ignorato resta documentato dal contatore
++ * fermo della riga "nessuna uscita". */
++static gpointer winq_whpx_filo_stat(gpointer dati)
++{
++    (void)dati;
++    for (;;) {
++        g_usleep(10 * G_USEC_PER_SEC);
++        winq_whpx_stampa(g_get_monotonic_time());
++    }
++    return NULL;
++}
++
+ int whpx_vcpu_run(CPUState *cpu)
+ {
+     HRESULT hr;
+@@ -399,6 +760,34 @@
+     ARMCPU *arm_cpu = ARM_CPU(cpu);
+     AccelCPUState *vcpu = cpu->accel;
+     int ret;
++    struct winq_whpx_conta *winq_c =
++        cpu->cpu_index < WINQ_WHPX_VCPU_MAX ?
++        &winq_whpx_conta[cpu->cpu_index] : NULL;
++
++    /* winq_whpx_stat: la lettura dell'ambiente e' idempotente, e una corsa
++     * fra due vCPU che la fanno insieme scrive due volte lo stesso valore. */
++    if (winq_whpx_acceso < 0) {
++        const char *winq_v = getenv("WINQ_WHPX_STAT");
++
++        winq_whpx_acceso = !(winq_v && winq_v[0] == '0');
++        /* Una volta sola: questo punto gira con la BQL tenuta (l'assert qui
++         * sopra), quindi due vCPU non possono passarci insieme. */
++        if (winq_whpx_acceso > 0) {
++            g_thread_new("winq-whpx-stat", winq_whpx_filo_stat, NULL);
++        }
++    }
++    if (winq_c) {
++        winq_c->attiva = true;
++        winq_c->ultima_uscita_us = g_get_monotonic_time();
++        if (!winq_c->filo) {
++            /* Un handle vero e non lo pseudo-handle di GetCurrentThread():
++             * lo legge il thread di un'ALTRA vCPU al momento della stampa,
++             * e lo pseudo-handle li' indicherebbe il lettore, non noi. */
++            DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
++                            GetCurrentProcess(), &winq_c->filo,
++                            0, FALSE, DUPLICATE_SAME_ACCESS);
++        }
++    }
+ 
+ 
+     g_assert(bql_locked());
+@@ -416,6 +805,7 @@
+     cpu_exec_start(cpu);
+     do {
+         bool advance_pc = false;
++        int64_t winq_t0 = 0, winq_t1 = 0;
+         if (cpu->vcpu_dirty) {
+             whpx_set_registers(cpu, WHPX_LEVEL_RUNTIME_STATE);
+             cpu->vcpu_dirty = false;
+@@ -425,9 +815,44 @@
+             whpx_vcpu_kick(cpu);
+         }
+ 
++        if (winq_whpx_acceso > 0 && winq_c) {
++            winq_t0 = g_get_monotonic_time();
++        }
+         hr = whp_dispatch.WHvRunVirtualProcessor(
+             whpx->partition, cpu->cpu_index,
+             &vcpu->exit_ctx, sizeof(vcpu->exit_ctx));
++        if (winq_whpx_acceso > 0 && winq_c && !FAILED(hr)) {
++            winq_t1 = g_get_monotonic_time();
++            winq_c->dentro_us += winq_t1 - winq_t0;
++            winq_c->uscite++;
++            winq_c->ultima_uscita_us = winq_t1;
++            switch (vcpu->exit_ctx.ExitReason) {
++            case WHvRunVpExitReasonGpaIntercept:
++            case WHvRunVpExitReasonUnmappedGpa:
++                winq_c->mmio++;
++                winq_whpx_pagina(winq_c, vcpu->exit_ctx.MemoryAccess.Gpa);
++                winq_whpx_pc(winq_c, vcpu->exit_ctx.MemoryAccess.Header.Pc);
++                break;
++            case WHvRunVpExitReasonCanceled: {
++                /* Il PC non sta nel contesto di una cancellazione: lo si
++                 * legge, e la lettura e' sicura perche' siamo il thread di
++                 * questa vCPU e la vCPU e' appena uscita. E' il campione che
++                 * la sonda della stampa e' venuta a prendere. */
++                WHV_REGISTER_VALUE winq_pc_val;
++
++                whpx_get_reg(cpu, WHvArm64RegisterPc, &winq_pc_val);
++                winq_whpx_sonda(winq_c, winq_pc_val.Reg64);
++                winq_c->cancel++;
++                break;
++            }
++            case WHvRunVpExitReasonArm64Reset:
++                winq_c->reset++;
++                break;
++            default:
++                winq_c->altre++;
++                break;
++            }
++        }
+ 
+         if (FAILED(hr)) {
+             error_report("WHPX: Failed to exec a virtual processor,"
+@@ -496,6 +921,9 @@
+             pc.Reg64 = vcpu->exit_ctx.MemoryAccess.Header.Pc + 4;
+             whpx_set_reg(cpu, WHvArm64RegisterPc, pc);
+         }
++        if (winq_whpx_acceso > 0 && winq_c && winq_t1) {
++            winq_c->fuori_us += g_get_monotonic_time() - winq_t1;
++        }
+     } while (!ret);
+ 
+     cpu_exec_end(cpu);

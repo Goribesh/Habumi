@@ -1,0 +1,38 @@
+--- a/target/arm/whpx/whpx-all.c
++++ b/target/arm/whpx/whpx-all.c
+@@ -1395,6 +1395,35 @@
+      * On ARM64, have enlightenments off by default
+      * as they're not needed for performance.
+      */
++    /* winq_hv_sintetici -- le feature sintetiche si concedono DI DEFAULT, e il
++     * perche' e' una riparazione misurata sul campo (issue #1).
++     *
++     * Su tre Surface Pro 12" (Snapdragon X1P-42) il guest pagava 50-200x: gli
++     * interrupt del timer architetturale arrivavano tardi o mai, il kernel
++     * bruciava il 90% della CPU in attese a spinta (misurato col campionatore
++     * del PC: 38% dei campioni su UN indirizzo), e sopra una vCPU gli
++     * interrupt fra processori si perdevano del tutto. La sola concessione di
++     * questa banca di feature -- SENZA che il guest le usi: il kernel di
++     * quella corsa non aveva nemmeno CONFIG_HYPERV -- ha portato il boot da
++     * 4.865-7.786 s a 128 s e la CPU addebitata da 9,5 a 3-4 s ogni 10: con
++     * la banca Hv1 concessa, l'hypervisor vira su un percorso di
++     * virtualizzazione del timer che funziona. Su questa macchina (X1P-64,
++     * sana) il default acceso e' stato provato su piu' avvii completi: nessuna
++     * regressione, boot in 21-37 s come sempre.
++     *
++     * WINQ_HV_SINTETICI=0 lo spegne, ed e' l'interruttore del prodotto: chi
++     * invece usa QEMU a mano con l'opzione accel "hyperv=off" viene
++     * rispettato, perche' qui si tocca solo il caso in cui NESSUNO ha chiesto
++     * niente (required=false e allowed=true, lo stato di default). */
++    if (!whpx->hyperv_enlightenments_required &&
++        whpx->hyperv_enlightenments_allowed &&
++        !(getenv("WINQ_HV_SINTETICI") &&
++          getenv("WINQ_HV_SINTETICI")[0] == '0')) {
++        whpx->hyperv_enlightenments_required = true;
++        info_report("winq/hv: feature sintetiche concesse alla partizione "
++                    "(default; WINQ_HV_SINTETICI=0 per spegnerle)");
++    }
++
+     if (whpx->hyperv_enlightenments_required) {
+         hr = whp_dispatch.WHvSetPartitionProperty(
+                 whpx->partition,
