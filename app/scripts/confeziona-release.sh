@@ -65,7 +65,27 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 #     l'avvio fallisce.
 # In piu': README.md e KNOWN-ISSUES.md dicevano che la macchina di sviluppo e'
 # un Snapdragon X Elite. E' un X Plus X1P64100 a 10 core, ed era pubblico.
-VERSIONE="0.2.2"
+#
+# 0.2.3, e questa chiude l'issue #1 -- otto giorni di misure su tre Surface
+# Pro 12" che non avviavano, ed erano DUE guasti nostri piu' uno di Hyper-V:
+#   - LA RIPARAZIONE GROSSA: le feature sintetiche Hyper-V si concedono di
+#     default alla partizione (patch qemu-hv-sintetici). Su X1P-42 senza quella
+#     banca l'hypervisor virtualizza il timer architetturale per una via che
+#     PERDE gli interrupt: il guest brucia il 90% della CPU in attese a spinta
+#     e sopra una vCPU gli interrupt fra processori si perdono del tutto.
+#     MISURATO sul campo: boot da 81-130 minuti a 2, sei vCPU da mai partite a
+#     funzionanti. Il guest non deve fare niente: la concessione basta.
+#   - il guardiano dell'avvio, di nuovo: le soglie della 0.2.2 erano tarate su
+#     questa macchina. Prima riga del kernel a 16,0 s misurata la' contro i
+#     16 s di grazia, e cinque silenzi oltre gli 8 s in un avvio SANO. Ora:
+#     60 s di grazia, 45 di silenzio, tetto a 300 (misure nel commento in
+#     vm.c);
+#   - la diagnostica WHPX (patch qemu-diagnostica-whpx): ogni 10 s uscite,
+#     costi, CPU addebitata e PC campionato per vCPU, nel registro che gli
+#     utenti gia' mandano. E' lo strumento che ha trovato tutto il resto.
+#   - l'animazione d'avvio nuova: il serpente sul circuito, generata dal video
+#     tracciato accanto allo script (guest/bootanimation/genera.py).
+VERSIONE="0.2.3"
 # Il nome del PRODOTTO, non della cartella del progetto: finisce nel nome
 # dell'archivio e in quello della cartella di uscita qui sotto.
 NOME="Habumi"
