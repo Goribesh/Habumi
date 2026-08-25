@@ -328,9 +328,54 @@ static DWORD vm_ora_ultima_riga;
  *
  * Il tetto e' generoso di proposito: chi ha una macchina lenta preferisce
  * aspettare due minuti che vedersi dire una bugia in sedici secondi. */
-#define VM_ATTESA_KERNEL_MS      16000    /* minimo prima di poter giudicare */
-#define VM_KERNEL_SILENZIO_MS     8000    /* seriale muta per tanto = inchiodato */
-#define VM_KERNEL_TETTO_MS      120000    /* vivo ma senza arrivare: si rinuncia */
+/* I TRE NUMERI, E PERCHE' NON SONO PIU' QUELLI DI PRIMA (issue #1, tre Surface
+ * Pro 12" con Snapdragon X Plus). Erano 16000, 8000 e 120000, tarati su questa
+ * macchina, dove la prima riga del kernel arriva in 0,2 s. Su quelle tre arriva
+ * in QUINDICI SECONDI E MEZZO, e i due numeri piccoli cadevano esattamente
+ * sopra il comportamento normale di quelle macchine:
+ *
+ *   MISURATO sui loro registri, tempo dal lancio di QEMU alla prima riga:
+ *     roklipni  tentativo 2   15,6 s   <- sopravvissuto per 400 ms
+ *     easysynth tentativo 1   16,0 s   <- esattamente sulla scadenza
+ *   e ogni tentativo che il guscio ha dichiarato "0 serial lines" e' stato
+ *   ucciso allo scadere preciso dei 16 s, PRIMA che il kernel potesse parlare.
+ *
+ * Il guasto "non deterministico" era questo: una corsa fra il primo printk del
+ * kernel e il nostro cronometro. A volte 15,6 e passava, a volte 16,1 e
+ * moriva -- e il verdetto incolpava una corsa sui vCPU secondari sotto WHPX che
+ * non e' mai esistita. PROVA che non esisteva: su quelle macchine il kernel
+ * parte con SEI vCPU, quando lo si lascia parlare.
+ *
+ *   MISURATO, il silenzio dentro un avvio SANO su quelle macchine:
+ *     buchi fra due righe consecutive, avvio che arriva alla userspace di
+ *     Android:  8,5  9,8  9,9  11,3  12,3 s
+ *   Cinque silenzi oltre gli 8 s in un avvio che stava andando bene. Con
+ *   VM_KERNEL_SILENZIO_MS a 8000 sopravvivere era questione di DOVE cadeva il
+ *   buco: chi ne prendeva uno prima della duecentesima riga veniva ucciso, chi
+ *   lo prendeva dopo passava. Non e' un guardiano, e' un lancio di moneta.
+ *
+ * PERCHE' SOGLIE FISSE GENEROSE E NON UNA SOGLIA ADATTIVA. La prima idea era
+ * ricavare il budget dal ritmo osservato -- quattro volte il buco piu' grande
+ * visto finora. Le misure l'hanno bocciata: nelle prime 162 righe il buco
+ * massimo e' 2,3 s su una di quelle macchine e 2,4 s sull'altra, quindi il
+ * budget si sarebbe fermato a ~9 s, e piu' tardi lo stesso avvio sano ne
+ * produce uno da 12,3. La coda della distribuzione non si prevede da cio' che
+ * si e' visto prima, e un guardiano che la indovina a volte e' quello che
+ * avevamo.
+ *
+ * Il costo di essere generosi e' asimmetrico, e va nella nostra direzione: un
+ * guest DAVVERO morto non stampa niente, mai, quindi aspettare non cambia
+ * l'esito, cambia solo quanto ci si mette a dirlo. Un guest lento invece viene
+ * ucciso, e l'utente riceve una diagnosi falsa su un guasto che non ha. Un
+ * minuto perso nel caso raro vale il non mentire nel caso comune. */
+#define VM_ATTESA_KERNEL_MS      60000    /* minimo prima di poter giudicare:
+                                             16,0 s misurati con margine 4x */
+#define VM_KERNEL_SILENZIO_MS    45000    /* seriale muta per tanto = inchiodato:
+                                             12,3 s misurati con margine 3,6x */
+#define VM_KERNEL_TETTO_MS      300000    /* vivo ma senza arrivare: si rinuncia.
+                                             Su una macchina 40 volte piu' lenta
+                                             la userspace arriva dopo i due
+                                             minuti di prima */
 #define VM_RIGHE_SANE         200
 #define VM_ATTESA_ANDROID_MS  120000
 /* VENTIMILA, non trenta: winq (qemu/ui-winq/winq-window.c,
@@ -975,9 +1020,11 @@ VmStato vm_passo(void)
              * tetto raggiunto e' un guest vivo e troppo lento per noi. */
             if (da_riga >= VM_KERNEL_SILENZIO_MS) {
                 registro_riga(REG_GUSCIO, "boot hung: %d serial lines, then "
-                              "nothing for %lu s (needs %d lines): closing "
-                              "and retrying",
+                              "nothing for %lu s -- more than the %lu s a live "
+                              "boot is allowed to go quiet (needs %d lines): "
+                              "closing and retrying",
                               vm_righe_totali, (unsigned long)(da_riga / 1000),
+                              (unsigned long)(VM_KERNEL_SILENZIO_MS / 1000),
                               VM_RIGHE_SANE);
             } else {
                 registro_riga(REG_GUSCIO, "boot still going after %lu s but "
