@@ -572,6 +572,10 @@ static int vm_segui_seriale(void)
 }
 
 static int vm_righe_totali;
+/* Il conteggio di righe a cui si e' bloccato il tentativo PRECEDENTE: serve
+ * al secondo degrado (il muro), vedi il commento in VM_AVVIA. -1 = nessun
+ * blocco ancora. */
+static int vm_righe_blocco_prec = -1;
 
 static bool vm_lancia(void)
 {
@@ -958,9 +962,22 @@ VmStato vm_passo(void)
             break;
         }
         /* Quanti vCPU per QUESTO tentativo. vm_righe_totali qui contiene
-         * ancora il conto del tentativo precedente: vm_lancia lo azzera dopo. */
+         * ancora il conto del tentativo precedente: vm_lancia lo azzera dopo.
+         *
+         * IL SECONDO DEGRADO, quello del muro. Il primo (zero righe) copre il
+         * guest che non esegue nemmeno un'istruzione. Ma sull'issue #1 e'
+         * arrivato l'altro caso: tre tentativi a 6 vCPU morti TUTTI a 164
+         * righe, sulla stessa identica riga -- il primo initcall che aspetta
+         * una risposta da un'altra CPU, con gli interrupt fra processori che
+         * su quella macchina a volte si perdono anche con le feature
+         * sintetiche concesse. Non e' una corsa da rigiocare: e' un muro, e
+         * si sposta solo col numero di vCPU. Due blocchi consecutivi sullo
+         * STESSO conteggio di righe non capitano per varianza (gli avvii veri
+         * oscillano di decine di righe): da li' in poi si dimezza, come per
+         * lo zero. */
         if (vm_tentativo == 1) {
             vm_vcpu_ora = vm_c->vcpu;
+            vm_righe_blocco_prec = -1;
         } else if (vm_righe_totali == 0 && vm_vcpu_ora > 1) {
             int prima = vm_vcpu_ora;
 
@@ -972,7 +989,22 @@ VmStato vm_passo(void)
                           "output at all, so the guest never ran a single "
                           "instruction: retrying with %d vCPU instead of %d",
                           vm_vcpu_ora, prima);
+        } else if (vm_righe_totali > 0 &&
+                   vm_righe_totali == vm_righe_blocco_prec &&
+                   vm_vcpu_ora > 1) {
+            int prima = vm_vcpu_ora;
+
+            vm_vcpu_ora /= 2;
+            if (vm_vcpu_ora < 1) {
+                vm_vcpu_ora = 1;
+            }
+            registro_riga(REG_GUSCIO, "two attempts in a row hung at the "
+                          "same line (%d): that is a wall, not a race, and "
+                          "on some machines it moves with the vCPU count. "
+                          "Retrying with %d vCPU instead of %d",
+                          vm_righe_totali, vm_vcpu_ora, prima);
         }
+        vm_righe_blocco_prec = vm_righe_totali;
 
         if (!vm_lancia()) {
             vm_vai(VM_FALLITA);

@@ -23,6 +23,21 @@ vcpu=1 -- it produced 97 and then 119 lines and was still going when the shell
 killed it. That turned out to be our bug, not the machine's: see the next
 entry. One success and one failure is the honest score.
 
+**On Surface Pro 12" (X1P-42), multi-vCPU boots stay a lottery.** *Mostly
+fixed in 0.2.3; the remainder is the hypervisor's.* Without the Hyper-V
+synthetic-feature grant that 0.2.3 turns on by default, that machine lost
+timer interrupts (boots of 81-130 minutes) and inter-processor interrupts
+(any vcpu above 1 hung within seconds, deterministically). With the grant,
+single-vCPU boots take about two minutes reliably, and six-vCPU boots have
+been seen to work -- and also seen to hang three runs in a row at the same
+kernel line, on the same machine, on a different day. The interrupt loss is
+inside Hyper-V's virtualization of this SoC and no guest or VMM setting we
+know of removes it entirely. If a multi-vCPU boot hangs repeatedly on this
+hardware, set `vcpu=1` in `runtime\bin\config.txt`: measured on the
+reporting machine, it is the configuration that always boots. The retry logic
+also halves the vCPU count by itself when two attempts in a row hang at the
+same serial line.
+
 **"boot hung" often meant "your machine is slower than mine".** *Fixed after
 0.2.1; if you are running 0.2.1 or earlier, this is probably what you are
 hitting.*
