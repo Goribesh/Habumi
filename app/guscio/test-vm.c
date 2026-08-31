@@ -347,6 +347,31 @@ static void ogni_stato_ha_la_sua_azione_di_chiusura(void)
     CHECK(vm_azione_chiusura(VM_FALLITA) == CHIUSURA_DURA);
 }
 
+/* La decisione fra i due messaggi dei due minuti. Vale la pena provarla per la
+ * stessa ragione della citazione della riga del kernel: il guasto che chiude si
+ * era gia' presentato, e non era un errore di calcolo ma un messaggio che
+ * accusava un avvio fermo mentre il guest stava parlando -- stampato 51 volte
+ * su una sessione che poi e' arrivata in fondo. */
+static void il_guardiano_distingue_vivo_e_lento_da_fermo(void)
+{
+    /* Prima dichiarazione: vale il totale, perche' non c'e' un prima. */
+    CHECK(vm_righe_nuove(0, -1) == 0);
+    CHECK(vm_righe_nuove(1, -1) == 1);
+    CHECK(vm_righe_nuove(2144, -1) == 2144);
+
+    /* Dichiarazioni successive: conta la differenza, non il totale. E' il
+     * cuore del difetto: 2144 righe ferme da due minuti sono un guest fermo,
+     * non un guest che ha detto 2144 cose. */
+    CHECK(vm_righe_nuove(2144, 2144) == 0);
+    CHECK(vm_righe_nuove(2145, 2144) == 1);
+    CHECK(vm_righe_nuove(2400, 2144) == 256);
+
+    /* Un totale che torna indietro non produce un numero negativo, che
+     * sarebbe "fermo" proprio dove il guest ha ricominciato da capo. */
+    CHECK(vm_righe_nuove(0, 2144) == 0);
+    CHECK(vm_righe_nuove(10, 2144) == 0);
+}
+
 int main(void)
 {
     registro_apri();
@@ -363,6 +388,7 @@ int main(void)
     con_gapps_i_necessari_sono_le_immagini_gapps();
     vm_verifica_file_riporta_un_nome_utile_se_manca_qualcosa();
     ogni_stato_ha_la_sua_azione_di_chiusura();
+    il_guardiano_distingue_vivo_e_lento_da_fermo();
     registro_chiudi();
 
     printf("test-vm: %d su %d passati\n", totali - fallimenti, totali);

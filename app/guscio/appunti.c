@@ -199,6 +199,11 @@ static void ap_accetta(void)
                                   "previous one closes (the last one wins)");
         ap_chiudi_cliente();
     }
+    /* Nemmeno la connessione accettata si eredita, per la stessa ragione
+     * dell'ascoltatore (vedi appunti_avvia): QEMU si riavvia a ogni riprova, e
+     * un socket accettato che finisse dentro l'orfano terrebbe in vita una
+     * connessione che dal nostro lato e' chiusa. */
+    SetHandleInformation((HANDLE)nuovo, HANDLE_FLAG_INHERIT, 0);
     /* La scadenza in scrittura si mette PRIMA di usare il socket: vedi
      * AP_INVIO_MS per cosa impedisce. */
     setsockopt(nuovo, SOL_SOCKET, SO_SNDTIMEO, (const char *)&scadenza,
@@ -461,12 +466,33 @@ bool appunti_avvia(int porta)
      * locale. Che resti locale e' comunque un'esposizione dichiarata nella spec:
      * anche qualunque altro processo di questa macchina puo' collegarsi. */
     indirizzo.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    /* NIENTE SO_REUSEADDR, e non e' una dimenticanza: su Windows quel flag non
-     * significa "riusa una porta in TIME_WAIT" come su Unix, significa "lascia
-     * che un altro socket si leghi a una porta che qualcuno sta gia' ascoltando"
-     * -- cioe' permetterebbe a un altro processo di prendersi le nostre
-     * connessioni. E il caso per cui su Unix lo si mette qui non esiste: il
-     * TIME_WAIT e' delle connessioni accettate, non del socket in ascolto. */
+    /* IL SOCKET NON SI EREDITA, ed e' la riga che impedisce il guasto piu' caro
+     * di questo file.
+     *
+     * vm.c lancia QEMU con CreateProcessA e bInheritHandles a TRUE (gli serve
+     * per il tubo dello stderr). I socket di Winsock sono handle EREDITABILI di
+     * nascita, quindi senza questa riga qemu-nostro.exe si ritrova una copia di
+     * questo ascoltatore. Finche' tutto va bene non si nota: QEMU non ci fa
+     * nulla. Si nota quando il guscio muore male e QEMU resta orfano, perche'
+     * la porta resta occupata dalla copia dentro l'orfano.
+     *
+     * MISURATO, ed e' il motivo per cui la diagnosi era andata altrove:
+     * netstat mostra ancora "127.0.0.1:15556 LISTENING" col PID DEL GUSCIO
+     * MORTO. Si cerca quel processo, non c'e', e si conclude che la porta e'
+     * bloccata da un TIME_WAIT senza padrone. Non lo e': si libera nell'istante
+     * in cui si uccide QEMU.
+     *
+     * NIENTE SO_REUSEADDR. Era la correzione che sembrava ovvia e non ripara
+     * nulla, MISURATO su questo Windows in quattro casi:
+     *  - TIME_WAIT vero sulla 15556, PID 0, nessun processo vivo -> il bind
+     *    riesce lo stesso, senza opzioni. Il commento di prima aveva ragione:
+     *    il TIME_WAIT e' delle connessioni accettate, non dell'ascoltatore.
+     *  - lo stesso con una connessione a meta' in FIN_WAIT_2.
+     *  - con un ascoltatore vivo, SO_REUSEADDR non ruba la porta come temeva il
+     *    commento di prima: da 10013, non 10048. Peggiora l'errore invece di
+     *    risolvere il caso, perche' 10013 non nomina la porta occupata.
+     *  - con l'orfano vivo, entrambi falliscono. La causa era lui. */
+    SetHandleInformation((HANDLE)ap_ascolto, HANDLE_FLAG_INHERIT, 0);
     if (bind(ap_ascolto, (struct sockaddr *)&indirizzo,
              sizeof(indirizzo)) == SOCKET_ERROR) {
         registro_riga(REG_GUSCIO, "clipboard: cannot listen on "

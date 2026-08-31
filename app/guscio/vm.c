@@ -287,6 +287,11 @@ static const Config *vm_c;
 static HANDLE vm_processo;
 static HANDLE vm_stderr_lettura;
 static HANDLE vm_thread_stderr;
+/* IL JOB A CUI QEMU E' AGGANCIATO. Vedi vm_aggancia_al_job: e' cio' che fa
+ * morire QEMU insieme al guscio anche quando il guscio non ha modo di
+ * chiederglielo. Sta aperto per tutta la vita del processo di proposito --
+ * chiuderlo ucciderebbe la VM. */
+static HANDLE vm_job;
 static VmStato vm_s;
 static DWORD vm_ora_stato;      /* GetTickCount64 troncato: bastano i ms */
 static int vm_tentativo;
@@ -576,6 +581,90 @@ static int vm_righe_totali;
  * al secondo degrado (il muro), vedi il commento in VM_AVVIA. -1 = nessun
  * blocco ancora. */
 static int vm_righe_blocco_prec = -1;
+/* Le righe totali all'ultima dichiarazione dei due minuti, e quante
+ * dichiarazioni sono gia' state fatte. Distinguono "vivo e lento" da "fermo":
+ * vedi VM_ATTESA_ANDROID. -1 = non si e' ancora dichiarato niente. */
+static int vm_righe_dette_android = -1;
+static int vm_dichiarazioni_android;
+
+int vm_righe_nuove(int totali, int dette)
+{
+    /* Alla prima dichiarazione non c'e' un confronto e vale il totale: se in
+     * due minuti di attesa di Android e' arrivata anche una sola riga, il guest
+     * sta parlando. */
+    if (dette < 0) {
+        return totali;
+    }
+    /* Mai negativo. Il totale non torna indietro entro un tentativo, ma un
+     * chiamante futuro che azzerasse il conteggio senza azzerare `dette`
+     * otterrebbe un numero negativo, cioe' il ramo "vivo e lento" spento
+     * proprio quando il guest ricomincia da capo. */
+    if (totali < dette) {
+        return 0;
+    }
+    return totali - dette;
+}
+
+/* Aggancia QEMU a un job che lo uccide quando il guscio muore.
+ *
+ * IL DIFETTO CHE CHIUDE, misurato: uccidendo Habumi.exe a forza --
+ * Stop-Process, Gestione attivita', un crash -- qemu-nostro.exe RESTA VIVO.
+ * Il difetto ha morso quattro volte e oltre sul campo, e i suoi sintomi non
+ * assomigliano alla causa: l'orfano tiene la 15555, tiene il socket degli
+ * appunti che ha ereditato (vedi appunti.c), e tiene aperto
+ * guest/logs/sessione-viva.log, cosi' il guscio successivo non riesce a
+ * ruotarlo e conta le righe di un avvio precedente credendole sue.
+ *
+ * PERCHE' UN JOB E NON PIU' CURA NELLA CHIUSURA. vm_uccidi gia' fa la cosa
+ * giusta quando viene eseguita. Il caso che perde e' quello in cui il guscio
+ * NON esegue niente: TerminateProcess sul guscio non chiama nessun codice,
+ * quindi nessuna sequenza di chiusura, per quanto accurata, puo' coprirlo.
+ * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE fa fare il lavoro al kernel: quando
+ * l'ultimo handle del job si chiude -- e alla morte del processo li chiude
+ * Windows, sempre, comunque sia morto -- il kernel uccide chi sta nel job.
+ *
+ * QEMU si crea SOSPESO e si riprende dopo l'aggancio: fra CreateProcess e
+ * AssignProcessToJobObject c'e' una finestra in cui il processo gira gia', e
+ * un guscio che morisse proprio li' lascerebbe di nuovo un orfano.
+ *
+ * Se l'aggancio non riesce si continua lo stesso: la VM parte comunque, e un
+ * guscio che si rifiuta di avviarsi sarebbe un danno peggiore dell'orfano che
+ * evita. Ma si scrive nel registro, perche' l'orfano che ne segue non nomina
+ * la causa. */
+static void vm_aggancia_al_job(HANDLE processo)
+{
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limiti;
+
+    if (!vm_job) {
+        /* Handle NON ereditabile (CreateJobObject con attributi NULL): se QEMU
+         * ne ereditasse una copia, l'ultimo handle non si chiuderebbe alla
+         * morte del guscio e il job non ucciderebbe nessuno -- cioe' proprio
+         * il caso da coprire. */
+        vm_job = CreateJobObjectA(NULL, NULL);
+        if (!vm_job) {
+            registro_riga(REG_GUSCIO, "cannot create the job object (%lu): if "
+                          "this shell is killed, QEMU may survive it",
+                          GetLastError());
+            return;
+        }
+        memset(&limiti, 0, sizeof(limiti));
+        limiti.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(vm_job, JobObjectExtendedLimitInformation,
+                                     &limiti, sizeof(limiti))) {
+            registro_riga(REG_GUSCIO, "cannot set kill-on-close on the job "
+                          "(%lu): if this shell is killed, QEMU may survive it",
+                          GetLastError());
+            CloseHandle(vm_job);
+            vm_job = NULL;
+            return;
+        }
+    }
+    if (!AssignProcessToJobObject(vm_job, processo)) {
+        registro_riga(REG_GUSCIO, "cannot put QEMU in the job (%lu): if this "
+                      "shell is killed, QEMU may survive it", GetLastError());
+    }
+}
 
 static bool vm_lancia(void)
 {
@@ -613,6 +702,40 @@ static bool vm_lancia(void)
                            "sessione-viva", ARCH_QUANTI, &ora)) {
             registro_riga(REG_GUSCIO, "the previous run's serial log is in "
                           "%s (%d are kept)", ARCH_CARTELLA, ARCH_QUANTI);
+        }
+        /* IL CANCELLO: che il file ATTIVO non ci sia piu'.
+         *
+         * Non basta guardare il valore ritornato. archivio_ruota torna false
+         * anche quando non c'era niente da ruotare, che e' il caso normale del
+         * primo avvio; e quando non riesce a spostare il file cancella, il che
+         * chiuderebbe la questione -- ma se qualcuno TIENE APERTO quel file
+         * fallisce pure la cancellazione, e allora torna false lasciandolo li'.
+         * Il chiamante non lo distingueva in alcun modo.
+         *
+         * MISURATO: con un qemu-nostro.exe orfano vivo, spostare il file da'
+         * "Il processo non puo' accedere al file perche' e' in uso da un altro
+         * processo", e cancellarlo fallisce uguale. Il guscio partiva, apriva
+         * il log vecchio dall'inizio e dichiarava "the kernel started (2144
+         * serial lines)" contando le righe di una sessione precedente: il
+         * verdetto ESATTAMENTE OPPOSTO a quello vero, su un avvio che non era
+         * mai partito.
+         *
+         * Meglio non partire che partire e giudicare su dati altrui. Il
+         * messaggio nomina la causa vera, perche' il sintomo non la nomina:
+         * chi legge vede una VM che non parte, non un processo di troppo. */
+        if (GetFileAttributesA("guest/logs/sessione-viva.log") !=
+            INVALID_FILE_ATTRIBUTES) {
+            /* DUE RIGHE E NON UNA: registro_riga tronca a 256 byte, prefisso
+             * compreso, e in silenzio. Un messaggio che si interrompe a meta'
+             * della frase che nomina la causa e' quasi peggio di non averlo. */
+            registro_riga(REG_GUSCIO, "the active serial log could not be "
+                          "rotated nor deleted: something still holds "
+                          "guest/logs/sessione-viva.log open.");
+            registro_riga(REG_GUSCIO, "almost always a leftover "
+                          "qemu-nostro.exe. Refusing to start: counting its "
+                          "lines as ours would call a dead boot healthy. "
+                          "Close it and try again.");
+            return false;
         }
     }
     if (vm_seriale) {
@@ -702,7 +825,10 @@ static bool vm_lancia(void)
     si.hStdOutput = scrivi;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
-    if (!CreateProcessA(NULL, riga, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    /* CREATE_SUSPENDED: si aggancia al job PRIMA che QEMU esegua un'istruzione.
+     * Vedi vm_aggancia_al_job per il perche' della sospensione. */
+    if (!CreateProcessA(NULL, riga, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL,
+                        NULL, &si, &pi)) {
         registro_riga(REG_GUSCIO, "cannot start QEMU (%lu)",
                       GetLastError());
         CloseHandle(vm_stderr_lettura);
@@ -711,6 +837,8 @@ static bool vm_lancia(void)
         return false;
     }
     CloseHandle(scrivi);
+    vm_aggancia_al_job(pi.hProcess);
+    ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     vm_processo = pi.hProcess;
     vm_thread_stderr = CreateThread(NULL, 0, vm_thread_stderr_corpo,
@@ -1079,6 +1207,11 @@ VmStato vm_passo(void)
                           "skip the failed attempts next time.",
                           vm_vcpu_ora, vm_c->vcpu, vm_vcpu_ora);
         }
+        /* Si riparte da zero a ogni ingresso: dopo una riprova, i contatori del
+         * tentativo precedente direbbero "nessuna riga nuova" su un guest che
+         * ha appena ricominciato a parlare. */
+        vm_righe_dette_android = -1;
+        vm_dichiarazioni_android = 0;
         vm_vai(VM_ATTESA_ANDROID);
         break;
     }
@@ -1112,18 +1245,57 @@ VmStato vm_passo(void)
             }
         }
         if (vm_adesso() - vm_ora_stato > VM_ATTESA_ANDROID_MS) {
-            /* NON si va in VM_PRONTO: quello stato accende i bottoni, e i
-             * bottoni passano da adb. Se adb non risponde, bottoni attivi che
-             * non fanno nulla sarebbero peggio di bottoni grigi -- l'utente
-             * crederebbe rotto Android invece del canale. Si resta in attesa e
-             * si dichiara, cosi' la VM e' usabile col mouse e col dito mentre il
-             * registro dice cosa manca. */
-            registro_riga(REG_GUSCIO, "no sys.boot_completed within two "
-                          "minutes. The Android window stays usable with "
-                          "touch and keyboard, but the buttons stay grey and "
-                          "closing will be HARD: without adb there is no clean "
-                          "shutdown. Look at the [guest] lines to see where "
-                          "the boot stopped.");
+            /* DUE MESSAGGI, PERCHE' SONO DUE SITUAZIONI.
+             *
+             * Il messaggio unico di prima mandava a cercare "dove si e' fermato
+             * l'avvio" anche quando l'avvio non si era fermato affatto: e'
+             * stato stampato 51 volte di fila su un avvio che POI E' RIUSCITO.
+             * Un messaggio che accusa un guasto inesistente e' peggio del
+             * silenzio: manda a leggere righe che non hanno niente da dire, e
+             * fa chiudere a mano una sessione che sarebbe arrivata in fondo.
+             *
+             * Il criterio e' quello che il guardiano usa gia' nello stato
+             * precedente: se le righe della seriale AVANZANO il guest e' vivo e
+             * lento, se sono ferme e' inchiodato. Qui non si chiude niente in
+             * nessuno dei due casi -- la finestra resta usabile col dito --
+             * quindi la differenza sta tutta in cosa si dice a chi legge.
+             *
+             * Alla prima dichiarazione il confronto non esiste ancora, e si usa
+             * il totale: se in due minuti di attesa di Android sono arrivate
+             * righe, il guest sta parlando. */
+            int nuove = vm_righe_nuove(vm_righe_totali,
+                                       vm_righe_dette_android);
+
+            vm_dichiarazioni_android++;
+            vm_righe_dette_android = vm_righe_totali;
+            if (nuove > 0) {
+                /* Due righe: registro_riga tronca a 256 byte, in silenzio. */
+                registro_riga(REG_GUSCIO, "no sys.boot_completed after %d "
+                              "minutes, but the guest is ALIVE and slow: %d new "
+                              "serial lines since the last check, %d in all.",
+                              vm_dichiarazioni_android * 2, nuove,
+                              vm_righe_totali);
+                registro_riga(REG_GUSCIO, "nothing is stuck. The window is "
+                              "already usable with touch and keyboard; the "
+                              "buttons turn on when adb answers.");
+            } else {
+                /* NON si va in VM_PRONTO: quello stato accende i bottoni, e i
+                 * bottoni passano da adb. Se adb non risponde, bottoni attivi
+                 * che non fanno nulla sarebbero peggio di bottoni grigi --
+                 * l'utente crederebbe rotto Android invece del canale. Si resta
+                 * in attesa e si dichiara, cosi' la VM e' usabile col mouse e
+                 * col dito mentre il registro dice cosa manca. */
+                registro_riga(REG_GUSCIO, "no sys.boot_completed after %d "
+                              "minutes, and the serial has gone quiet too: %d "
+                              "lines, none new since the last check. Look at "
+                              "the [guest] lines to see where the boot "
+                              "stopped.",
+                              vm_dichiarazioni_android * 2, vm_righe_totali);
+                registro_riga(REG_GUSCIO, "the window stays usable with touch "
+                              "and keyboard, but the buttons stay grey, and "
+                              "closing will be HARD: without adb there is no "
+                              "clean shutdown.");
+            }
             vm_ora_stato = vm_adesso();   /* si ridichiara ogni due minuti */
         }
         break;

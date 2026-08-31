@@ -333,6 +333,18 @@ typedef enum {
  * di ogni singolo stato. */
 AzioneChiusura vm_azione_chiusura(VmStato s);
 
+/* Quante righe di seriale sono arrivate dalla dichiarazione precedente dei due
+ * minuti, mentre si aspetta sys.boot_completed. `dette` e' il totale
+ * all'ultima dichiarazione, -1 se non ce n'e' stata ancora nessuna.
+ *
+ * ESTRATTA per la stessa ragione di vm_azione_chiusura: prima era una
+ * sottrazione dentro il gestore dello stato e nessuna prova poteva
+ * raggiungerla. E' la decisione fra due messaggi opposti -- "vivo e lento" e
+ * "l'avvio si e' fermato" -- e sbagliarla e' gia' costato: il messaggio unico
+ * di prima ha mandato a cercare dove si era fermato un avvio che stava
+ * procedendo, 51 volte di fila, su una sessione che poi e' riuscita. */
+int vm_righe_nuove(int totali, int dette);
+
 /* --- finestra.c -------------------------------------------------------- */
 
 #include <windows.h>
