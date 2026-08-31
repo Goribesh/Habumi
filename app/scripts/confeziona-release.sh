@@ -85,7 +85,37 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 #     utenti gia' mandano. E' lo strumento che ha trovato tutto il resto.
 #   - l'animazione d'avvio nuova: il serpente sul circuito, generata dal video
 #     tracciato accanto allo script (guest/bootanimation/genera.py).
-VERSIONE="0.2.3"
+#
+# 0.2.4, e questa e' tutta sul guscio: cio' che l'issue #1 ha mostrato dei
+# NOSTRI difetti mentre inseguivamo quello di Hyper-V. Erano quattro sintomi con
+# una causa sola, e la causa non era dove sembrava:
+#   - GLI ORFANI. Uccidendo Habumi.exe a forza -- Gestione attivita', un crash
+#     -- qemu-nostro.exe restava vivo, e da li' tutto il resto: teneva le porte,
+#     teneva aperto il log della seriale, affamava i tentativi successivi. Ha
+#     morso quattro volte e oltre sul campo. Ora QEMU sta in un job object che
+#     il kernel svuota quando il guscio muore, comunque muoia: non e' piu' cura
+#     nella chiusura, perche' il caso che si perdeva e' proprio quello in cui il
+#     guscio non esegue niente.
+#   - LA PORTA DEGLI APPUNTI. Il socket veniva EREDITATO da QEMU (il guscio lo
+#     lancia con bInheritHandles, gli serve per lo stderr), quindi dopo la morte
+#     del guscio netstat mostrava la 15556 in ascolto COL PID DI UN MORTO. Da
+#     qui la diagnosi sbagliata "TIME_WAIT senza padrone" e la correzione che
+#     sembrava ovvia -- SO_REUSEADDR -- che MISURATA non ripara nulla e su un
+#     ascoltatore vivo da' 10013 invece di 10048, cioe' un errore che nomina la
+#     porta ancora meno. La correzione vera e' non far ereditare l'handle.
+#   - LA SERIALE STANTIA. Con il log tenuto aperto dall'orfano, la rotazione non
+#     riusciva ne' a spostarlo ne' a cancellarlo e taceva: il guardiano contava
+#     le righe di un avvio precedente e dichiarava "the kernel started (2144
+#     serial lines)" su un avvio mai partito -- il verdetto opposto al vero. Ora
+#     il guscio verifica e si rifiuta di partire, nominando la causa.
+#   - IL MESSAGGIO DEI DUE MINUTI. Diceva di andare a vedere "dove si e' fermato
+#     l'avvio" anche quando l'avvio stava procedendo: stampato 51 volte di fila
+#     su una sessione che poi e' riuscita. Ora distingue "vivo e lento" da
+#     "fermo" con lo stesso criterio che il guardiano usa gia' un passo prima.
+# In piu', gia' in albero da prima: il degrado dei vCPU scatta anche sul MURO
+# (due tentativi bloccati alla stessa riga seriale dimezzano), non solo sullo
+# zero, e KNOWN-ISSUES.md dice cosa resta del Surface Pro 12".
+VERSIONE="0.2.4"
 # Il nome del PRODOTTO, non della cartella del progetto: finisce nel nome
 # dell'archivio e in quello della cartella di uscita qui sotto.
 NOME="Habumi"
