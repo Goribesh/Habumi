@@ -103,11 +103,22 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 #     sembrava ovvia -- SO_REUSEADDR -- che MISURATA non ripara nulla e su un
 #     ascoltatore vivo da' 10013 invece di 10048, cioe' un errore che nomina la
 #     porta ancora meno. La correzione vera e' non far ereditare l'handle.
-#   - LA SERIALE STANTIA. Con il log tenuto aperto dall'orfano, la rotazione non
-#     riusciva ne' a spostarlo ne' a cancellarlo e taceva: il guardiano contava
-#     le righe di un avvio precedente e dichiarava "the kernel started (2144
-#     serial lines)" su un avvio mai partito -- il verdetto opposto al vero. Ora
-#     il guscio verifica e si rifiuta di partire, nominando la causa.
+#   - LA SERIALE STANTIA, e qui la causa vera e' venuta fuori solo alla fine.
+#     Con il log tenuto aperto, la rotazione non riusciva ne' a spostarlo ne' a
+#     cancellarlo e taceva: il guardiano contava le righe di un avvio precedente
+#     e dichiarava "the kernel started (2144 serial lines)" su un avvio mai
+#     partito -- il verdetto opposto al vero. Ora il guscio verifica e si rifiuta
+#     di partire, nominando la causa. Ma a tenere quel file non era QEMU: era
+#     ADB. Il guscio lo lancia con bInheritHandles, quindi adb ereditava l'handle
+#     della seriale, e il server di adb SI STACCA e sopravvive al guscio --
+#     provato uccidendo il solo adb.exe rimasto da una sessione finita sedici
+#     minuti prima: il file e' tornato spostabile all'istante. Ora la seriale e
+#     il registro si aprono e si marcano subito come non ereditabili
+#     (archivio_non_ereditare).
+#   - IL FILO CHE LEGA I TRE. Su Windows bInheritHandles e' tutto o niente: il
+#     figlio riceve una copia di OGNI handle ereditabile che il padre possiede in
+#     quel momento, e gli handle di fopen e i socket di Winsock lo sono di
+#     nascita. Tre guasti diversi, una regola sola.
 #   - IL MESSAGGIO DEI DUE MINUTI. Diceva di andare a vedere "dove si e' fermato
 #     l'avvio" anche quando l'avvio stava procedendo: stampato 51 volte di fila
 #     su una sessione che poi e' riuscita. Ora distingue "vivo e lento" da

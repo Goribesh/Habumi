@@ -494,6 +494,12 @@ static int vm_segui_seriale(void)
 
     if (!vm_seriale) {
         vm_seriale = fopen("guest/logs/sessione-viva.log", "rb");
+        /* Questo file resta aperto per tutta la sessione, e il guscio lancia
+         * QEMU e adb con bInheritHandles: senza questa riga il server di adb
+         * ne eredita una copia, si stacca, sopravvive al guscio, e la sessione
+         * successiva non riesce piu' ne' a ruotare ne' a cancellare la seriale.
+         * Vedi archivio_non_ereditare in guscio.h: e' stato misurato. */
+        archivio_non_ereditare(vm_seriale);
         if (!vm_seriale) {
             return 0;
         }

@@ -31,6 +31,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <io.h>       /* _get_osfhandle, per archivio_non_ereditare */
 #include <windows.h>
 #include "guscio.h"
 
@@ -182,4 +183,26 @@ bool archivio_ruota(const char *percorso, const char *cartella,
      * grave che leggere dati vecchi credendoli nuovi. */
     DeleteFileA(percorso);
     return false;
+}
+
+/* Vedi guscio.h per il perche'. Sta QUI e non in file.c perche' e' esattamente
+ * il difetto che impedisce ad archivio_ruota di fare il proprio lavoro: un
+ * handle ereditato da un figlio che sopravvive rende quel file impossibile sia
+ * da spostare sia da cancellare. */
+void archivio_non_ereditare(FILE *f)
+{
+    HANDLE h;
+
+    if (!f) {
+        return;
+    }
+    h = (HANDLE)_get_osfhandle(_fileno(f));
+    if (h == INVALID_HANDLE_VALUE || h == NULL) {
+        return;
+    }
+    /* Il valore di ritorno non si guarda: se fallisce non c'e' niente di utile
+     * da fare qui, e fermare l'avvio per questo sarebbe peggio del difetto che
+     * evita. Chi vuole la certezza la verifica, e test-archivio.c lo fa con
+     * GetHandleInformation. */
+    SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
 }

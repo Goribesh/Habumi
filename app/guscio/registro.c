@@ -159,6 +159,12 @@ void registro_apri(void)
         archivio_ruota(percorso, ARCH_CARTELLA, "registro-guscio", ARCH_QUANTI,
                        &ora);
         reg_file = fopen(percorso, "w");
+        /* Il registro resta aperto per tutta la sessione, ed e' il primo file
+         * che archivio_ruota deve poter spostare al prossimo avvio. Se QEMU o
+         * il server di adb ne ereditassero una copia, quella rotazione
+         * fallirebbe e la sessione nuova scriverebbe in coda a quella vecchia.
+         * Vedi archivio_non_ereditare in guscio.h. */
+        archivio_non_ereditare(reg_file);
     }
     reg_aperto = true;
 }

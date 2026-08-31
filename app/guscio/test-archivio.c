@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <io.h>
 #include <wchar.h>
 #include <windows.h>
 #include "guscio.h"
@@ -297,6 +298,46 @@ static void un_tetto_a_zero_si_comporta_come_prima(void)
     togli_cartella(base);
 }
 
+/* L'igiene degli handle. Vale la pena provarla perche' il difetto che evita non
+ * si vede mai dove sta: si presenta come un file che non si sposta o una porta
+ * occupata, in una sessione DIVERSA da quella che ha lasciato l'handle in giro.
+ * Una prova che guarda il flag costa un millisecondo e chiude la categoria. */
+static void un_file_aperto_non_si_fa_ereditare(void)
+{
+    char percorso[MAX_PATH];
+    char cartella[MAX_PATH];
+    FILE *f;
+    DWORD flag = 0;
+
+    GetTempPathA(sizeof(cartella), cartella);
+    snprintf(percorso, sizeof(percorso), "%sprova-eredita-%lu.txt", cartella,
+             GetCurrentProcessId());
+    f = fopen(percorso, "wb");
+    CHECK(f != NULL);
+    if (!f) {
+        return;
+    }
+
+    /* PRIMA: un file di fopen E' ereditabile. Se un giorno il CRT cambiasse
+     * questo default, questa riga fallirebbe e direbbe perche' -- meglio che
+     * scoprire in silenzio che la funzione sotto non serviva piu' a niente. */
+    CHECK(GetHandleInformation((HANDLE)_get_osfhandle(_fileno(f)), &flag));
+    CHECK((flag & HANDLE_FLAG_INHERIT) != 0);
+
+    archivio_non_ereditare(f);
+
+    flag = 0;
+    CHECK(GetHandleInformation((HANDLE)_get_osfhandle(_fileno(f)), &flag));
+    CHECK((flag & HANDLE_FLAG_INHERIT) == 0);
+
+    fclose(f);
+    DeleteFileA(percorso);
+
+    /* Un puntatore nullo non deve far saltare niente: registro.c la chiama
+     * subito dopo una fopen che puo' fallire, e li' fermarsi sarebbe peggio. */
+    archivio_non_ereditare(NULL);
+}
+
 int main(void)
 {
     il_nome_porta_la_data_ordinabile();
@@ -306,6 +347,7 @@ int main(void)
     pota_i_piu_vecchi_e_tiene_gli_ultimi();
     due_avvii_nello_stesso_secondo_non_si_sovrascrivono();
     un_tetto_a_zero_si_comporta_come_prima();
+    un_file_aperto_non_si_fa_ereditare();
 
     printf("test-archivio: %d su %d passati\n", totali - fallimenti, totali);
     return fallimenti ? 1 : 0;

@@ -17,6 +17,7 @@
 
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdio.h>   /* FILE, per archivio_non_ereditare */
 
 /* varianti.h serve solo per VarNome, il tipo del campo Config.variante qui
  * sotto: e' un'inclusione di un header, non di un modulo. varianti.c resta
@@ -511,6 +512,31 @@ int archivio_nome(char *dest, int max, const char *cartella,
  * credendoli nuovi. */
 bool archivio_ruota(const char *percorso, const char *cartella,
                     const char *prefisso, int quanti, const SYSTEMTIME *ora);
+
+/* Toglie a un file gia' aperto il diritto di essere ereditato dai processi
+ * figli. Da chiamare SUBITO DOPO la fopen, su ogni file che il guscio tiene
+ * aperto a lungo.
+ *
+ * PERCHE' ESISTE, e non e' zelo. Il guscio lancia QEMU (vm.c) e adb (adb.c)
+ * con bInheritHandles a TRUE, perche' a entrambi serve passare un tubo. Su
+ * Windows quel flag e' TUTTO O NIENTE: il figlio riceve una copia di OGNI
+ * handle ereditabile che il padre possiede in quel momento, e gli handle di
+ * fopen lo sono di nascita.
+ *
+ * MISURATO, e la stessa classe di guasto si e' presentata tre volte in un
+ * giorno solo:
+ *  - il socket degli appunti finiva in QEMU, e dopo la morte del guscio netstat
+ *    mostrava la porta in ascolto col PID di un morto;
+ *  - guest/logs/sessione-viva.log finiva in ADB, e li' e' peggio, perche' il
+ *    server di adb si stacca e sopravvive al guscio: la sessione dopo non
+ *    riusciva ne' a ruotare ne' a cancellare quel file. Provato uccidendo il
+ *    solo adb.exe rimasto (avviato 16 minuti prima, dalla sessione precedente):
+ *    il file e' tornato spostabile all'istante;
+ *  - lo stesso vale per il registro, che resta aperto per tutta la sessione.
+ *
+ * Il difetto non assomiglia mai alla causa: si vede un file che non si sposta,
+ * o una porta occupata, e si va a cercare il processo sbagliato. */
+void archivio_non_ereditare(FILE *f);
 
 /* --- apk.c: installare un APK trascinato -------------------------------- */
 
