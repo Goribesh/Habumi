@@ -88,6 +88,33 @@ if [ ! -f "$PATCH_SUONO" ]; then
 fi
 sh "$PATCH_SUONO" "$SRC"
 
+# --- IL PORTING HYPER-V, DIETRO UN INTERRUTTORE SPENTO DI DEFAULT.
+#
+# Le due patch qui sopra sono obbligatorie: senza, il kernel prodotto e' guasto.
+# Questa no. E' il porting del timer sintetico di Hyper-V (issue #1), materiale
+# di ricerca che NON SI SPEDISCE: si compila solo con KERNEL_HYPERV=1
+# nell'ambiente, e senza quella variabile non viene nemmeno applicato.
+#
+# Che sia spento non basta a renderlo innocuo, e per questo l'interruttore agisce
+# in DUE punti — qui sui sorgenti e piu' sotto sul .config. Anche con la patch
+# gia' applicata all'albero (per esempio dopo una compilazione sperimentale),
+# senza CONFIG_HYPERV=y il defconfig di arm64 non abilita nulla: mshyperv.c non
+# entra (arch/arm64/Kbuild lo lega a CONFIG_HYPERV) e HYPERV_TIMER resta n.
+#
+# MISURATO, non dedotto: nel System.map del kernel di serie ricompilato non c'e'
+# un solo simbolo hv_stimer o hv_common, e il binario differisce da quello
+# spedito in 54 byte, tutti timbri di build (la data dentro UTS_VERSION due
+# volte, il GNU build-id, l'mtime nelle intestazioni cpio dell'initramfs).
+if [ "${KERNEL_HYPERV:-0}" = 1 ]; then
+    PATCH_HYPERV="$SCRIPTDIR/patch-kernel-hyperv-stimer.sh"
+    if [ ! -f "$PATCH_HYPERV" ]; then
+        echo "FERMO: KERNEL_HYPERV=1 ma manca $PATCH_HYPERV."
+        exit 1
+    fi
+    echo "=== KERNEL_HYPERV=1: kernel SPERIMENTALE, non da spedire"
+    sh "$PATCH_HYPERV" "$SRC"
+fi
+
 echo "=== configurazione di base"
 make ARCH=arm64 defconfig
 
@@ -474,6 +501,22 @@ CONFIG_LSM="lockdown,yama,loadpin,safesetid,selinux,bpf"
 CONFIG_DEBUG_INFO_NONE=y
 EOF
 
+# La seconda meta' dell'interruttore. CONFIG_HYPERV non compare nel defconfig di
+# arm64 e nessun altro simbolo lo seleziona, quindi e' questa riga — e solo
+# questa — a far entrare nella compilazione arch/arm64/hyperv/ e, per il
+# def_bool aperto dalla patch, HYPERV_TIMER.
+#
+# HYPERV_VMBUS resta spento di proposito: questo guest non ha VMBus (niente
+# ACPI, nessun nodo nel device tree), ed e' il motivo per cui la patch aggiunge
+# una initcall autonoma che avvia clocksource e stimer da sola.
+if [ "${KERNEL_HYPERV:-0}" = 1 ]; then
+    cat >> .config-extra <<'EOF'
+
+# --- winq: il timer sintetico di Hyper-V (issue #1), SPERIMENTALE
+CONFIG_HYPERV=y
+EOF
+fi
+
 ./scripts/kconfig/merge_config.sh -m .config .config-extra
 make ARCH=arm64 olddefconfig
 
@@ -512,6 +555,23 @@ else
     printf "  %-22s %s\n" "LSM" "$lsm_line"
 fi
 
+# Con l'interruttore acceso i due simboli del porting si verificano come tutti
+# gli altri: HYPERV_TIMER e' un def_bool, cioe' nessuno puo' chiederlo a mano, e
+# se la patch al Kconfig non fosse in posto resterebbe n in silenzio — si
+# otterrebbe un kernel con dentro Hyper-V e senza il timer, che e' esattamente il
+# kernel che non serve a nulla.
+if [ "${KERNEL_HYPERV:-0}" = 1 ]; then
+    for sym in HYPERV HYPERV_TIMER; do
+        if grep -q "^CONFIG_$sym=y" .config; then
+            printf "  %-22s y\n" "$sym"
+        else
+            printf "  %-22s MANCANTE: %s\n" "$sym" \
+                "$(grep -E "^(CONFIG_$sym=|# CONFIG_$sym is)" .config || echo assente)"
+            fail=1
+        fi
+    done
+fi
+
 if [ "$fail" != 0 ]; then
     echo "FERMO: opzioni indispensabili non abilitate. Il boot fallirebbe o"
     echo "       Android non partirebbe; meglio accorgersene ora che dopo"
@@ -533,3 +593,16 @@ make ARCH=arm64 -j"$JOBS" modules
 ls -la arch/arm64/boot/Image
 echo "=== moduli compilati: $(find . -name '*.ko*' | wc -l)"
 echo "=== fatto: $SRC/arch/arm64/boot/Image"
+
+if [ "${KERNEL_HYPERV:-0}" = 1 ]; then
+    echo
+    echo "=== ATTENZIONE: questo NON e' il kernel da spedire."
+    echo "    Non sovrascrivere guest/images/kernel-guest-arm64: quello e' il"
+    echo "    kernel di serie. Questo va accanto, con un nome che lo dica"
+    echo "    (kernel-guest-arm64.hv-stimer)."
+    echo
+    echo "    E non fa nulla da solo. Perche' rilevi Hyper-V serve"
+    echo "    'hyperv.force=1' sulla riga di comando del guest, e perche' non"
+    echo "    muoia serve il grant delle funzioni sintetiche lato QEMU"
+    echo "    (qemu/patches/qemu-hv-sintetici.patch, attivo di default dalla 0.2.3)."
+fi

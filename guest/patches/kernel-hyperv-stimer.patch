@@ -1,0 +1,295 @@
+Porta il timer sintetico di Hyper-V (stimer0) sul kernel ARM64 del guest.
+
+QUESTA PATCH NON E' SPEDITA. Il kernel in guest/images/kernel-guest-arm64 non ne
+contiene nulla. Si applica solo con KERNEL_HYPERV=1 nell'ambiente di
+guest/scripts/build-guest-kernel.sh, e il risultato va accanto al kernel di
+serie, non al suo posto. E' materiale di ricerca sull'issue #1, tenuto
+riproducibile perche' finora esisteva come binario e come modifiche a mano in un
+albero fuori dal repo.
+
+IL DIFETTO CHE AGGREDISCE. Su X1P-42 (Surface Pro 12) Hyper-V virtualizza il
+timer architetturale per le partizioni WHP prive di funzioni sintetiche e perde
+gli interrupt — quelli del timer e le SGI. Il guest aspetta una scadenza che non
+arriva mai: l'avvio passa da 4,865-7,786 s a decine di minuti, la CPU addebitata
+resta al 89-94% in attesa attiva, il 38% dei campioni del contatore di programma
+cade su un solo indirizzo, e il giro di andata e ritorno su MMIO si allunga di 53
+volte. La riproduzione e' binaria e sta in un flag solo: concedere alla
+partizione SyntheticProcessorFeaturesBanks con base Hv1 ripara il timer, non
+concederlo lo rompe.
+
+DUE META', E QUESTA E' LA SECONDA. Il grant lato host —
+qemu/patches/qemu-hv-sintetici.patch, attivo di default dalla 0.2.3 — ripara il
+timer architetturale e porta l'avvio del Pro 12 da 81-130 minuti a 2. Resta pero'
+un guest che dipende da un timer emulato da chi lo aveva rotto. Questa patch e'
+l'altra meta': il guest smette di usarlo e passa allo stimer0 di Hyper-V piu' la
+pagina TSC, cioe' alle stesse strutture che il grant gli ha appena concesso.
+Misurato con grant e kernel insieme: il guest gira su stimer (PPI 24) e pagina
+TSC, avvio in 21,6 s sulla macchina sana.
+
+PERCHE' NON SI SPEDISCE COMUNQUE. Con il solo grant il Pro 12 avvia in 2 minuti,
+che e' utilizzabile; e le SGI restano migliorate ma non affidabili (con 6 vCPU,
+sulla stessa macchina: un avvio riuscito in un giorno, tre muri identici alla
+stessa riga seriale — la 164 — in un altro). Un kernel
+diverso da quello provato su tutte le altre macchine e' un rischio che quel
+guadagno non paga finche' il campo non lo chiede.
+
+QUATTRO MODIFICHE, E IL PERCHE' DI OGNUNA
+
+1. drivers/hv/Kconfig. HYPERV_TIMER e' dichiarato "def_bool HYPERV && X86". Il
+   driver in drivers/clocksource/hyperv_timer.c e' pero' gia' scritto per essere
+   multi-architettura: ha per intero il ramo delle IRQ per-cpu, che x86 non usa
+   perche' li' lo stimer arriva su un vettore globale. Mancava solo il permesso
+   di compilarlo.
+
+2. drivers/clocksource/hyperv_timer.c. Due cose che su x86 vengono gratis.
+
+   La prima e' l'aggancio dell'interrupt. Il codice di serie passa per
+   acpi_register_gsi, che presuppone le tabelle ACPI. Questo guest e' avviato con
+   -kernel su QEMU virt: ha CONFIG_ACPI=y ma acpi_disabled a runtime, e solo il
+   device tree. Si aggiunge la via OF, che mappa la PPI direttamente sul dominio
+   del GIC — la stessa strada che farebbe un nodo del device tree, senza
+   pretendere un nodo che nessuno ha scritto. Il vettore e' la PPI 24: su virt le
+   PPI occupate sono la 23 (PMU) e le 26-28 e 30 (i timer architetturali), la 24
+   e' libera. Non e' una costante dell'architettura, e' un INTID che sceglie il
+   guest.
+
+   La seconda e' chi avvia la catena. Su x86 hv_init_clocksource e
+   hv_stimer_alloc li chiama VMBus. Qui VMBus non c'e' affatto — niente ACPI,
+   nessun nodo nel device tree, HYPERV_VMBUS spento — quindi senza un chiamante
+   il timer sintetico resterebbe compilato e mai usato. Si aggiunge una initcall
+   autonoma, tarda di proposito: le IRQ per-cpu vogliono il GIC e i cpuhp gia'
+   in piedi.
+
+   La rimozione diventa simmetrica: si de-registra dall'ACPI solo cio' che
+   all'ACPI era stato registrato. Senza il flag, un guest che ha preso la via OF
+   chiamerebbe acpi_unregister_gsi su un IRQ che l'ACPI non ha mai visto.
+
+3. arch/arm64/include/asm/hyperv_timer.h — NUOVO. Il gemello dell'header x86.
+   hyperv_timer.c usa tre nomi che oggi esistono solo li': hv_get_raw_timer, che
+   su ARM64 e' il contatore architetturale; hv_raw_get_msr, che su x86 legge
+   l'MSR scavalcando il paravisor mentre qui il paravisor non c'e' e la via
+   normale e' gia' quella cruda; e __bss_decrypted, l'attributo SEV per la
+   memoria condivisa in chiaro, che senza memoria cifrata e' vuoto.
+
+4. arch/arm64/hyperv/mshyperv.c — LA RILEVAZIONE, ED E' IL PUNTO DELICATO.
+
+   Nessuna delle due vie di serie vede questo ambiente. hyperv_detect_via_acpi
+   vuole le tabelle, che non ci sono. hyperv_detect_via_smccc confronta lo UUID
+   dell'hypervisor, e quello che risponde e' QEMU: dal punto di vista del guest
+   il mediatore e' lui. Sotto pero' c'e' Hyper-V per davvero, e con il grant le
+   ipercall rispondono: la rilevazione dice di no su un ambiente in cui la
+   risposta giusta e' si'.
+
+   La prima versione risolse la cosa scrivendo "return true" al posto della
+   verifica, con un commento che diceva di non committarlo. Quel commento non e'
+   un cancello. Un kernel compilato da quell'albero esegue hv_get_vpreg in
+   qualunque ambiente, e dove la partizione non ha le funzioni sintetiche —
+   cioe' ovunque manchi il grant — muore all'avvio: chiunque avesse ricompilato
+   da li' avrebbe prodotto un kernel guasto senza alcun segno che lo dicesse.
+   La forzatura e' quindi diventata un parametro della riga di comando,
+   hyperv.force, spento di default: senza di esso questo kernel si comporta
+   esattamente come quello di serie, e accenderlo e' una scelta scritta nella
+   riga di comando del guest.
+
+COME SI USA. Servono le tre cose insieme, e nessuna funziona da sola:
+
+    KERNEL_HYPERV=1 sh guest/scripts/build-guest-kernel.sh   (compila)
+    hyperv.force=1                                           (riga di comando del guest)
+    il grant lato QEMU                                       (attivo di default dalla 0.2.3)
+
+Senza la terza il kernel forzato non parte. Senza la seconda non rileva nulla e
+si comporta da kernel di serie.
+
+PERCHE' UNO SCRIPT E NON SOLO QUESTO DOCUMENTO. La stessa lezione della patch
+dei formati di Android, che per una sessione intera esistette solo come prosa:
+il kernel che funzionava era un file binario e nessuno poteva ricostruirlo.
+guest/scripts/patch-kernel-hyperv-stimer.sh applica queste modifiche in modo
+idempotente, disinnesca la forzatura di prova se la trova, e verifica il
+risultato. Provato su albero vergine estratto dal tarball: il risultato e'
+identico byte per byte all'albero su cui sono state fatte le misure, salvo
+appunto la forzatura sostituita dal parametro.
+
+--- a/drivers/hv/Kconfig
++++ b/drivers/hv/Kconfig
+@@ config HYPERV_TIMER
+ config HYPERV_TIMER
+-	def_bool HYPERV && X86
++	def_bool HYPERV && (X86 || ARM64)
+
+--- a/drivers/clocksource/hyperv_timer.c
++++ b/drivers/clocksource/hyperv_timer.c
+@@ dopo gli include
+ #include <asm/mshyperv.h>
+
++/*
++ * winq (esperimento issue #1): su ARM64 il vettore del modo diretto dello
++ * stimer0 e' un INTID del GIC che sceglie IL GUEST, non una costante
++ * dell'architettura. Sulla macchina virt di QEMU le PPI occupate sono 23
++ * (PMU), 26-28 e 30 (i timer architetturali): la 24 e' libera.
++ */
++#ifdef CONFIG_ARM64
++#include <linux/of.h>
++#include <linux/of_irq.h>
++#include <linux/irqdomain.h>
++#define HYPERV_STIMER0_VECTOR	24
++#endif
++
+ static struct clock_event_device __percpu *hv_clock_event;
+@@ prima di #ifdef CONFIG_ACPI
++#ifdef CONFIG_ARM64
++/*
++ * winq: la via ACPI qui sotto presuppone le tabelle, e un guest avviato con
++ * -kernel su QEMU virt ha solo il device tree (CONFIG_ACPI=y ma
++ * acpi_disabled a runtime, quindi acpi_register_gsi fallirebbe). La PPI si
++ * mappa direttamente sul dominio del GIC: stessa strada che il device tree
++ * farebbe, senza pretendere un nodo che non c'e'.
++ */
++static bool stimer0_da_acpi;
++
++static int hv_setup_stimer0_irq_of(void)
++{
++	struct device_node *gic;
++	struct irq_fwspec fwspec;
++	int ret;
++
++	gic = of_find_compatible_node(NULL, NULL, "arm,gic-v3");
++	if (!gic) {
++		pr_err("stimer0: GIC v3 non trovato nel device tree\n");
++		return -ENODEV;
++	}
++	fwspec.fwnode = of_node_to_fwnode(gic);
++	fwspec.param_count = 3;
++	fwspec.param[0] = 1;	/* GIC_PPI */
++	fwspec.param[1] = HYPERV_STIMER0_VECTOR - 16;
++	fwspec.param[2] = IRQ_TYPE_EDGE_RISING;
++	stimer0_irq = irq_create_fwspec_mapping(&fwspec);
++	of_node_put(gic);
++	if (stimer0_irq <= 0) {
++		pr_err("stimer0: mappatura della PPI %d fallita\n",
++		       HYPERV_STIMER0_VECTOR);
++		stimer0_irq = -1;
++		return -EINVAL;
++	}
++	ret = request_percpu_irq(stimer0_irq, hv_stimer0_percpu_isr,
++		"Hyper-V stimer0", &stimer0_evt);
++	if (ret) {
++		pr_err("stimer0: request_percpu_irq %d fallita, %d\n",
++		       stimer0_irq, ret);
++		stimer0_irq = -1;
++	}
++	return ret;
++}
++#endif
++
+ #ifdef CONFIG_ACPI
+@@ hv_setup_stimer0_irq
+ 	int ret;
+
++#ifdef CONFIG_ARM64
++	if (acpi_disabled)
++		return hv_setup_stimer0_irq_of();
++	stimer0_da_acpi = true;
++#endif
+ 	ret = acpi_register_gsi(NULL, HYPERV_STIMER0_VECTOR,
+@@ hv_remove_stimer0_irq
+ 		free_percpu_irq(stimer0_irq, &stimer0_evt);
++#ifdef CONFIG_ARM64
++		if (stimer0_da_acpi)
++			acpi_unregister_gsi(stimer0_irq);
++#else
+ 		acpi_unregister_gsi(stimer0_irq);
++#endif
+ 		stimer0_irq = -1;
+@@ prima di hv_remap_tsc_clocksource
++#ifdef CONFIG_ARM64
++/*
++ * winq: su x86 clocksource e stimer li avvia la catena di VMBus. Questo
++ * guest non ha VMBus (niente ACPI, niente nodo nel device tree): senza
++ * qualcuno che chiami hv_init_clocksource e hv_stimer_alloc, il timer
++ * sintetico resterebbe compilato e mai usato. L'initcall e' tardo di
++ * proposito: le percpu IRQ vogliono il GIC e i cpuhp gia' in piedi.
++ */
++static int __init hv_stimer_autonomo_init(void)
++{
++	if (!hv_is_hyperv_initialized())
++		return 0;
++	hv_init_clocksource();
++	return hv_stimer_alloc(true);
++}
++device_initcall(hv_stimer_autonomo_init);
++#endif
++
+ void __init hv_remap_tsc_clocksource(void)
+
+--- /dev/null
++++ b/arch/arm64/include/asm/hyperv_timer.h
+@@ file nuovo
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * winq (esperimento issue #1): il gemello ARM64 dell'header x86. La lettura
++ * grezza del tempo, per lo stimer di Hyper-V, e' il contatore architetturale.
++ *
++ * I due shim sotto coprono x86-ismi usati da hyperv_timer.c:
++ *  - hv_raw_get_msr su x86 legge l'MSR scavalcando il paravisor; su ARM64 il
++ *    paravisor non c'e' e la via normale (hv_get_msr -> hv_get_vpreg) E' la
++ *    via cruda.
++ *  - __bss_decrypted e' l'attributo SEV di x86 per la memoria condivisa in
++ *    chiaro; su ARM64 senza memoria cifrata l'attributo e' vuoto.
++ */
++#ifndef _ASM_ARM64_HYPERV_TIMER_H
++#define _ASM_ARM64_HYPERV_TIMER_H
++
++#include <clocksource/arm_arch_timer.h>
++#include <asm/mshyperv.h>
++
++#define hv_get_raw_timer() arch_timer_read_counter()
++
++#ifndef hv_raw_get_msr
++#define hv_raw_get_msr(reg) hv_get_msr(reg)
++#endif
++
++#ifndef __bss_decrypted
++#define __bss_decrypted
++#endif
++
++#endif
+
+--- a/arch/arm64/hyperv/mshyperv.c
++++ b/arch/arm64/hyperv/mshyperv.c
+@@ include
+ #include <linux/cpuhotplug.h>
++#include <linux/kstrtox.h>
+ #include <asm/mshyperv.h>
+@@ prima di hyperv_detect_via_smccc
++/*
++ * winq (esperimento issue #1): le due rilevazioni sopra non vedono questo
++ * ambiente. Il guest gira su QEMU con WHPX: l'ACPI non c'e' (avvio con
++ * -kernel, solo device tree) e lo UUID SMCCC dell'hypervisor e' quello di
++ * QEMU, che e' il mediatore. Ma sotto c'e' Hyper-V per davvero, e con il
++ * grant delle funzioni sintetiche (SyntheticProcessorFeaturesBanks, vedi
++ * qemu/patches/qemu-hv-sintetici.patch) le ipercall rispondono.
++ *
++ * SPENTO DI DEFAULT, e non e' prudenza formale: un kernel che rilevasse
++ * Hyper-V sempre eseguirebbe hv_get_vpreg anche dove la partizione non ha
++ * le funzioni sintetiche, cioe' ovunque manchi quel grant, e li' morirebbe
++ * all'avvio.
++ */
++static bool hyperv_forzato __initdata;
++
++static int __init hyperv_imposta_forzatura(char *arg)
++{
++	if (!arg) {
++		hyperv_forzato = true;
++		return 0;
++	}
++	return kstrtobool(arg, &hyperv_forzato);
++}
++early_param("hyperv.force", hyperv_imposta_forzatura);
++
+ static bool __init hyperv_detect_via_smccc(void)
+@@ hyperv_init
+-	if (!hyperv_detect_via_acpi() && !hyperv_detect_via_smccc())
++	if (hyperv_forzato)
++		pr_info("Hyper-V: rilevazione forzata da hyperv.force\n");
++	else if (!hyperv_detect_via_acpi() && !hyperv_detect_via_smccc())
+ 		return 0;
