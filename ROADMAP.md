@@ -60,6 +60,42 @@ decision about where the data directory lives across versions.
 Dragging an APK onto the window, or a file association, would remove the single
 most common piece of friction for anyone who is not a developer.
 
+**More than one instance at a time, and something to manage them.**
+The shape people expect is a launcher that lists instances and starts them, the
+way other Android-on-desktop products do it: the shell stays one VM in one
+window, and a separate process keeps the register, hands out the ports and
+clones a data image from a template. That division matters, because everything
+the shell does today keeps working unchanged.
+
+Today a single instance is enforced on purpose, and by five separate fixed
+names rather than one switch. All five have to move before two instances can
+coexist:
+
+| where | what is fixed |
+|---|---|
+| `app/guscio/main.c` | the single-instance mutex, `AndroidRuntimeGuscio.istanza` |
+| `app/guscio/tubo.c` | the command pipe, `\\.\pipe\AndroidRuntimeGuscio.comandi`, created with `nMaxInstances = 1` |
+| `runtime/bin/config.txt` | `adb_port`, chosen in a file rather than assigned |
+| `runtime/bin/config.txt` | `clipboard_port`, same |
+| `app/guscio/vm.c` | one writable `data.img`, opened `cache=writeback` |
+
+Two things make this cheaper than it looks. `system.img` and `vendor.img` are
+passed to QEMU `readonly=on`, so instances can share them: a new instance costs
+one 4 GB data image, not the whole set. And QEMU already dies with its own shell
+rather than with any shell, because it is attached to a job object owned by that
+process — which is the first thing a second instance would otherwise break.
+
+One trap to design around rather than discover. The `-drive` paths are
+**relative**, and the shell expects the project root as its working directory.
+With several trees on one disk the same relative path already denotes different
+files, and that has already produced one wrong reading of a guest's identity.
+Per-instance working directories, or absolute paths, are part of the feature and
+not a detail of it.
+
+Not on the list next to this one: per-instance device profiles, sensors or
+telephony. Several instances of *this* Android is a different thing from a
+general-purpose emulator, and only the first is in scope.
+
 ## Things deliberately not on this list
 
 **Turning this into a general-purpose Android emulator.** The goal is running
