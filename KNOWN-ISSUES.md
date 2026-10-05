@@ -1,142 +1,135 @@
 # Known issues
 
-What this does not do yet, what it does badly, and what it does on exactly one
-machine. Nothing here is a surprise to the authors — it is written down so it is
-not a surprise to you either.
+This page describes the remaining limits of the product and the prepared 0.2.4
+candidate. Historical observations are identified as such; a documentation
+update is not a new runtime test.
 
-Severity is about what it costs *you*, not how hard it is to fix.
+## Hardware and boot
 
-## Blocking for most people
+**Hardware coverage is limited.** Full feature and performance measurements
+come from a Surface Pro 11, Snapdragon X Plus X1P64100, Adreno X1-85. External
+Surface Pro 12" reports established additional boot behaviour, but do not
+validate every feature on those machines. A first run on other hardware still
+needs a report naming the SoC, Windows build and GPU driver.
 
-**It has only ever run on one machine.** A Surface Pro 11: Snapdragon X Plus
-X1P64100, 10 cores, Adreno X1-85, Windows 11 Home on ARM. Every claim in this
-repository about "it works" means "it works there".
-A system DLL that happens to be present here and absent elsewhere would not have
-been caught by any test that exists. Treat the first run on new hardware as an
-experiment, and please report what happens.
+**Surface Pro 12" (X1P-42) multi-vCPU boot remains intermittent.** Since 0.2.3,
+the Hyper-V synthetic-feature grant is enabled by default. The recorded boot
+time improved from 81-130 minutes to about two minutes, and six-vCPU boots have
+succeeded, but repeated hangs have also been observed. `vcpu=1` in
+`runtime\bin\config.txt` is the fallback measured as reliable on the reporting
+machine. Retries halve the vCPU count after no serial output, or after repeated
+hangs at the same serial position. The shipped default remains `vcpu=6`.
 
-**The second machine it was tried on did not boot.** A Surface Pro 12" with a
-Snapdragon X Plus and an Adreno X1-45. The graphics half came up correctly —
-WGL context, Mesa 26.2.0 on D3D12, a frame presented — but the guest kernel
-produced no serial output at all on the first run, and on the second -- with
-vcpu=1 -- it produced 97 and then 119 lines and was still going when the shell
-killed it. That turned out to be our bug, not the machine's: see the next
-entry. One success and one failure is the honest score.
+**Older boot-watchdog descriptions are obsolete.** 0.2.1 and earlier could
+kill a healthy but slow boot. The current kernel-progress watchdog uses a
+60-second grace period, 45 seconds of serial silence and a five-minute ceiling.
+Android readiness has a separate 120-second threshold; the shell can continue
+waiting while serial output still advances. Messages distinguish a live but
+unfinished boot from missing ADB or stopped progress. These thresholds do not
+guarantee boot on every machine. See [RELEASE-NOTES.md](RELEASE-NOTES.md) for
+the 0.2.4 cleanup fixes.
 
-**On Surface Pro 12" (X1P-42), multi-vCPU boots stay a lottery.** *Mostly
-fixed in 0.2.3; the remainder is the hypervisor's.* Without the Hyper-V
-synthetic-feature grant that 0.2.3 turns on by default, that machine lost
-timer interrupts (boots of 81-130 minutes) and inter-processor interrupts
-(any vcpu above 1 hung within seconds, deterministically). With the grant,
-single-vCPU boots take about two minutes reliably, and six-vCPU boots have
-been seen to work -- and also seen to hang three runs in a row at the same
-kernel line, on the same machine, on a different day. The interrupt loss is
-inside Hyper-V's virtualization of this SoC and no guest or VMM setting we
-know of removes it entirely. If a multi-vCPU boot hangs repeatedly on this
-hardware, set `vcpu=1` in `runtime\bin\config.txt`: measured on the
-reporting machine, it is the configuration that always boots. The retry logic
-also halves the vCPU count by itself when two attempts in a row hang at the
-same serial line.
+## Android stability and audio
 
-**"boot hung" often meant "your machine is slower than mine".** *Fixed after
-0.2.1; if you are running 0.2.1 or earlier, this is probably what you are
-hitting.*
+**Historical `system_server` crashes remain unresolved.** Recorded crashes
+during network activity and package installation restarted the Android framework
+and closed running applications. Binder failures reached Java as an uncaught
+`RuntimeException`. The exact triggering transaction was not established for
+every occurrence, so one common cause has not been proven. This is not a claim
+that every current session crashes. If it happens again, capture
+`adb logcat -b crash -d` and `adb shell dmesg` before restarting; the active
+serial log and its archived sessions are also useful.
 
-The shell used to give the kernel sixteen seconds to produce two hundred lines
-of serial output and, failing that, declare the boot hung and blame a race in
-bringing up the secondary vCPUs under WHPX. On the Surface Pro 12" above the
-kernel was producing 119 lines in those sixteen seconds **and still climbing** —
-each retry got further than the last. Nothing was hung; the watchdog was killing
-a healthy boot and then naming the wrong cause, which sent everyone looking for
-a non-deterministic fault that was not there.
+**Audio during physical interaction needs a controlled check.** The virtio-snd
+freeze and the measured starvation gaps were corrected, with a 4096-frame HAL
+ring removing the recorded 12 gaps per 30 seconds. Clicks during physical input
+were recorded, but Android touch sounds were enabled during those captures.
+The follow-up with touch sounds disabled was left pending. The residual clicks
+therefore are neither proven fixed nor conclusively attributed to an audio bug.
+The ring size is not a measurement of end-to-end audio latency.
 
-The watchdog now judges **progress**: as long as serial lines keep arriving the
-boot is alive and it waits, up to two minutes. A hang is silence — no new line
-for eight seconds. The message says which of the two happened, because they send
-you to different places.
+## Graphics and window
 
-The WHPX race is real and separate: QEMU stays alive and the serial produces
-**nothing at all**, not a slow trickle. If you see zero lines across every
-attempt, `vcpu=1` in `runtime\bin\config.txt` is worth trying — with a single
-vCPU there are no secondary vCPUs to race.
+**Applications requiring Vulkan are unsupported.** The shipped Android graphics
+path is OpenGL ES 3.1 through virgl, host Mesa and D3D12. Experimental Venus
+probes have enumerated devices, but that is not usable Vulkan in Android apps.
+Recorded obstacles include external-memory and Android native-buffer support
+and a crash in the Qualcomm D3D12 driver on the Dozen path. Venus remains off
+in the product; updating the guest GL driver alone has not shown a benefit.
 
-The shipped default is `vcpu=6`, tuned for the machine this was developed on.
-There is no evidence yet that it is a good default anywhere else.
+**Guest rotation does not resize the host window.** Android and its framebuffer
+alternate between portrait and landscape, but the QEMU host client keeps its
+fixed shape. A portrait framebuffer can consequently be squeezed into a
+landscape window. The rotation command itself was corrected; the window-shape
+work remains outstanding.
 
-**The binaries are not signed.** Windows SmartScreen will warn, and on some
-policies will refuse. There is no certificate and no plan to buy one yet.
+**The boot animation occupies only part of the screen in the recorded setup.**
+Cropping versus scaling still needs verification before changing its dimensions.
 
-**There is no updater.** New versions are new downloads. Nothing checks, nothing
-notifies, nothing migrates your data directory.
+**The high-resolution default has a measurable cost.** `guest_scale=yes` is
+enabled in the shipped configuration. At 200% scale, 1280x800 logical pixels
+become 2560x1600 guest pixels. The latest recorded UI A/B measured a
+90th-percentile frame time of 16-18 ms at that resolution versus 7-8 ms at
+1280x800, with density adjusted to preserve logical geometry. It did not
+establish an improvement in the reported jank rate. The fixed host client also
+means guest rendering can be supersampled rather than presented pixel for
+pixel. Reducing resolution trades sharpness for drawing cost.
 
-## Graphics
-
-**Vulkan does not reach the guest.** The guest gets OpenGL ES through virgl on
-top of a Direct3D 12 backend. The Vulkan path (Venus) is not working: the host
-side refuses to create an instance on the drivers available here, so anything
-that needs Vulkan in the guest falls back or fails. Applications that require
-Vulkan will not run.
-
-**The guest's GL driver is older than the host's.** The host renders through a
-Mesa 26.2.0 build shipped with the release; the guest uses the GLES driver that
-comes inside the Android image, which is older. Replacing it is possible but has
-not been done: the version in the image and the one on the host do not have to
-match, and updating only one side has repeatedly proven not to be the win it
-looks like.
-
-**High resolutions cost more than they look.** Rendering the guest at the scaled
-resolution of a 200% display means four times the pixels. The cost is measured
-and written next to the `scala_guest` key in `runtime/bin/config.txt`: median GPU
-time roughly doubles. The default is off for that reason.
-
-**Touch-to-pixel latency is about 16 ms**, roughly two frames at 120 Hz. About
-half of that is the frame drawing itself, which at 120 Hz has an 8.3 ms budget
-and uses most of it; the rest is the sampling phase and the wait for the host to
-present. Delivering the touch to the application adds nothing measurable.
+**The recorded roughly 16 ms touch-to-pixel figure includes an estimate.**
+Input delivery and frame work were timed, but the final host presentation was
+bounded rather than directly measured. It is not an optical end-to-end latency
+measurement. The frame budget at the shipped 120 Hz is 8.3 ms.
 
 ## Host and lifecycle
 
-**The virtual machine freezes when Windows sleeps.** Modern standby suspends the
-whole VM: the guest's monotonic clock stops with its virtual CPUs while the wall
-clock keeps going. On resume Android's own watchdog notices that hours passed
-without its handlers running and spends the next few seconds recovering. During
-that window `adb shell` answers but anything going through the Android framework
-— `pm`, `dumpsys`, `am` — returns nothing. It recovers on its own. A VM left
-running overnight on a laptop that sleeps may not have booted at all.
+**Variant selection has a persistence mismatch in the sources.** The config
+reader accepts `variant`, but the shell's variant writer searches and writes
+`variante`. A UI selection can therefore leave the existing `variant=vanilla`
+entry controlling the next launch while adding an ignored `variante=gapps`
+entry. This was identified by source inspection; a runtime reproduction and
+fix remain pending. For a manual selection, the accepted key is
+`variant=vanilla` or `variant=gapps`.
 
-**Nothing keeps the machine awake while the VM runs.** Whether it should is an
-open design question — holding a laptop awake for a background VM is a battery
-decision, not obviously the right default.
+**Windows sleep suspends the VM.** The guest clock and virtual CPUs stop while
+wall-clock time continues. On resume Android can enter watchdog recovery;
+`adb shell` may answer while framework commands such as `pm` and `dumpsys` do
+not. A VM suspended during startup may simply not have completed boot.
+
+**Nothing keeps the host awake for the VM.** Sleep handling remains a product
+decision because preventing sleep changes battery use.
+
+**One VM runs at a time.** Vanilla and Google-app variants have separate data
+images, but they are alternatives selected at startup. They are not simultaneous
+instances. Multi-instance support needs separate mutexes, command pipes, ports
+and writable data images; see [ROADMAP.md](ROADMAP.md).
 
 ## Packaging and licensing
 
-**The license inventory of the runtime libraries is incomplete.** The release
-ships 107 DLLs from MSYS2 under a mix of permissive and copyleft licenses. "A
-mix" is not good enough for a distribution meant for other people, and finishing
-that inventory is outstanding work. See `app/release/LICENSES/DLL-MSYS2-NOTA.txt`.
+**The binaries are unsigned and there is no updater.** SmartScreen can warn or
+block execution under some policies. New versions require a manual download;
+there is no automatic notification or data migration.
 
-**The Android images are not redistributed.** They download themselves from
-Waydroid's official sources on first run. This is deliberate — it keeps their
-licenses off this repository and off the release archive — but it means the
-first run needs a network connection and depends on someone else's server.
+**The runtime DLL license inventory is incomplete.** The release ships 107
+MSYS2 DLLs; a per-library inventory remains outstanding. See
+`app/release/LICENSES/DLL-MSYS2-NOTA.txt` and [NOTICE.md](NOTICE.md).
 
-**The audio HAL cannot be rebuilt from this repository.** `audio.primary.waydroid.so`
-was extracted from an already-modified vendor image and is committed as a binary.
-It is also tied to the vendor build it came from, and the product checks that tie
-on first run.
+**The first run depends on Waydroid's image servers.** Android system and vendor
+images are downloaded rather than redistributed, with their published hashes
+checked before use. Network availability is required on first run.
 
-**SELinux debt.** Two components — the DRM compositor and the audio HAL — are
-installed in a way that does not carry proper SELinux labelling. It works, and it
-is not how it should end.
+**The audio HAL build is not reproducible from this repository alone.** The
+4096-frame `audio.primary.waydroid.so` is supplied as an overlay binary tied to
+the pinned vendor build. There is no complete public rebuild recipe for that
+artifact. This is distinct from the documented kernel and QEMU builds.
 
-## Reporting something
+**SELinux labelling remains unfinished.** The compositor and audio HAL overlays
+do not yet carry proper SELinux labels.
 
-Open an issue with: what you ran, what you expected, what happened, the contents
-of `guest/logs/` if the product got far enough to write them, and the machine —
-SoC, Windows build, GPU driver version. A report that names the hardware is worth
-several that do not.
+## Reporting a problem
 
-If it did not boot, add the `vcpu` value you used and whether `vcpu=1` changed
-anything. And say so even when the answer is "still nothing": a workaround that
-does not work is as informative as one that does, and right now the sample size
-for every one of these questions is one.
+Include the version, expected and observed behaviour, SoC, Windows build, GPU
+driver and `guest\logs\registro-guscio.log`. Earlier sessions are kept in
+`guest\logs\archivio\`; `guest\logs\sessione-viva.log` contains guest serial
+output. For boot failures, include the configured `vcpu`, the retry counts seen
+in the log and whether `vcpu=1` changed the result. Full feature coverage and
+successful boot on another machine are separate things worth reporting.

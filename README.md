@@ -16,10 +16,11 @@ modifying the vendor images.
 
 ## Status — read this before you install
 
-Everything listed under [What works](#what-works) has been measured, not
-assumed. But this release has **only ever been installed on one machine**, the
-one it was developed on. That is its single biggest limitation, and no amount of
-testing here can substitute for someone else running it.
+The full feature and performance measurements come from a Surface Pro 11.
+External reports from Surface Pro 12" machines helped fix boot failures in
+0.2.3, but multi-vCPU boot on that hardware is still intermittent. Hardware
+coverage remains limited; see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) for the measured
+fallback and the remaining limitations.
 
 **[KNOWN-ISSUES.md](KNOWN-ISSUES.md) is the full list** of what does not work
 yet, ordered by what it costs you. The short version: no code signing, so
@@ -32,7 +33,14 @@ to Waydroid build `20260403`, because an image that changed by itself would
 change the bugs by itself; and **comments and internal documentation are in
 Italian**, see [Language](#language) below.
 
-If it breaks, the log in `guest\logs\registro-guscio.log` is the thing to send.
+As of October 5, 2026, the latest published release is
+[0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3). The repository
+also contains the process-cleanup and inherited-handle fixes prepared for
+0.2.4. Its archive has been built and exercised locally, but 0.2.4 has not been
+published as a GitHub release. See [RELEASE-NOTES.md](RELEASE-NOTES.md).
+
+If it breaks, send `guest\logs\registro-guscio.log`. Previous sessions are
+preserved in `guest\logs\archivio\`.
 
 ## Requirements
 
@@ -63,17 +71,22 @@ all of this.
 ## What works
 
 Measured on a Surface Pro 11 — Snapdragon X Plus X1P64100, 10 cores, Adreno
-X1-85 — which is the only machine any of this has been measured on:
+X1-85. These feature measurements do not establish compatibility on every
+Windows ARM machine:
 
-- **Touch, multi-touch and rotation**, with the guest resolution following the window
-- **Audio**, host and guest, through a rebuilt audio HAL with a 4096-frame ring
+- **Touch, multi-touch and guest rotation**. The host window still needs to
+  follow the rotated framebuffer's shape; see the known issues
+- **Audio playback and input**, through an audio HAL with a 4096-frame ring.
+  The measured starvation gaps were fixed; audio during physical interaction
+  still needs a controlled check
 - **Shared clipboard**, both directions, between Windows and Android
 - **Drag and drop** of files, folders and APKs onto the window — they land in
   `/sdcard/Download`; an APK is installed
 - **Keyboard mapping** for games: keys become touches, `WASD` becomes a virtual
   stick, profiles live in `runtime\keymaps\` as plain text
-- **Two Android variants** — with and without Google apps — side by side, each
-  keeping its own apps and data. Switching does not erase anything
+- **Two Android variants** — with and without Google apps — stored separately,
+  each keeping its own apps and data. One VM runs at a time; switching does
+  not erase anything
 
 ## Build from source
 

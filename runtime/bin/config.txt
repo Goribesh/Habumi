@@ -59,17 +59,12 @@ guest_scale=yes
 # reads the panel with GetDeviceCaps(VREFRESH), which is what happens today
 # without this key. Otherwise 24..240.
 #
-# 120 is the shipped default, decided WITH THE NUMBERS IN VIEW. At 2560x1600,
-# 120 Hz takes janky frames from
-# 8.47% to 34.40% (legacy: from 52.54% to 94.80%), because the per-frame budget
-# drops from 16.7 to 8.3 ms while the GPU median alone is already 9 ms -- the
-# budget does not fit, no matter what else the GPU has to do.
-#
-# 60 would be defensible for a precise reason: it divides both 60 and 120
-# exactly, so it stays free of stutter in BOTH states of this panel's variable
-# refresh (at 120 each guest frame lasts two scans, at 60 one). 120 is the
-# choice that was made anyway, knowing these numbers: it is not the reader's
-# job to argue it, only to make it work.
+# 120 is the shipped default and remains the agreed product choice.
+# The old 34.40% jank figure describes a build before the WGL wait fix.
+# Later measurements recorded about 1% in the compared configuration.
+# At 120 Hz the frame budget is 8.3 ms; resolution still affects the tail
+# of frame times. See KNOWN-ISSUES.md for the current limits and caveats.
+# These measurements do not change the chosen refresh rate by themselves.
 hz=120
 
 # The logical density to impose on the guest with "wm density", once, as soon
@@ -129,18 +124,16 @@ gl_flush_wait=no
 
 # How many attempts against a boot that does not come up.
 #
-# The attempts are not just repetition: they DEGRADE. If an attempt produces no
-# serial output at all -- meaning the guest never ran a single instruction --
-# the next one halves the vCPU count, so the default sequence is 6, 3, 1. Two
-# machines have been seen where vcpu=6 produced nothing every time and vcpu=1
-# booted, and on those the third attempt gets there on its own.
+# Retries can halve the vCPU count after zero serial output, or after two
+# hangs at the same serial position. With six vCPUs the degraded sequence
+# is 6, 3, 1. This is a measured fallback, not a guarantee on all hardware.
 #
-# It only halves on ZERO lines. A slow trickle means the guest is running, and
-# then the vCPU count is not the suspect: the shell waits as long as new lines
-# keep arriving, and calls it hung only after eight seconds of silence.
+# The kernel-progress watchdog has 60 s of grace, a 45 s silence limit and
+# a 300 s ceiling. Android readiness has a separate 120 s threshold and
+# can keep waiting while serial progress continues. The log identifies
+# the stage and the reason; see KNOWN-ISSUES.md.
 #
-# With retries=1 there is no degradation and the value below is used as is,
-# which is what you want when measuring one configuration at a time.
+# With retries=1 the configured count is used without another attempt.
 retries=3
 
 # The adb port on the host.

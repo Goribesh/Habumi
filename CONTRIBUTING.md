@@ -22,14 +22,16 @@ reports `x86_64` even under CLANGARM64.
 
 ```bash
 bash app/scripts/build-guscio.sh    # builds runtime/bin/Habumi.exe
-bash app/scripts/test-guscio.sh     # 12 suites, no virtual machine needed
+bash app/scripts/test-guscio.sh     # 13 suites, no virtual machine needed
 ```
 
 Both must be run from MSYS2 CLANGARM64, with an **absolute path** to the script.
 
 **Green tests do not mean the product links.** `test-guscio.sh` compiles one
 suite at a time; a missing source file in the product's own link step passes
-every suite and then fails. Run the build too, always.
+every suite and then fails. For shell code changes, run both tests and the build.
+For documentation-only changes, check the diff, local links and consistency with
+the sources instead. No new runtime validation is implied by a documentation edit.
 
 ## The rules
 

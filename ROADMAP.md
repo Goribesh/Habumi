@@ -11,11 +11,10 @@ half of something written there.
 ## Worth doing first
 
 **Run it on hardware that is not ours.** — *help wanted*
-Every "it works" in this repository has a sample size of one machine. Two or
-three reports from different Snapdragon generations, different Windows builds and
-different GPU driver versions would either raise confidence a lot or find the
-first real bug. This is the single highest-value contribution right now, and it
-costs a download.
+Full feature and performance measurements still come from the development
+Surface Pro 11. Surface Pro 12" reports helped repair the boot path, but
+multi-vCPU reliability remains unresolved there. Reports from more Snapdragon
+generations, Windows builds and GPU drivers would extend that coverage.
 
 **Finish the license inventory of the runtime DLLs.**
 107 libraries from MSYS2, licenses collected as "a mix". Mechanical work, no
@@ -34,8 +33,11 @@ nothing but does not fix anything. Neither has been chosen.
 The Venus path is the reason the guest still runs GL on top of a translation
 layer. Making it work would remove a whole layer for applications that ask for
 Vulkan, and would open the door to replacing the guest's GL driver with a current
-one. It is also the hardest item on this page: the blocker is on the host side,
-in instance creation, and it is not obviously ours.
+one. It is also the hardest item on this page: the blockers involve the host
+graphics path and guest integration. Probes have enumerated a Venus device, but that
+does not establish usable Vulkan in Android applications. The recorded
+blockers include memory-sharing and Android buffer support, plus a crash in
+the Qualcomm D3D12 driver on the Dozen path.
 
 **Update the guest's GL driver.**
 Only worth doing together with the item above, or the newer driver has nothing
@@ -44,9 +46,18 @@ better to talk to.
 **Reduce the drawing cost per frame.**
 At 120 Hz the budget is 8.3 ms and drawing uses most of it. The delivery of input
 to the application adds nothing measurable, so the gain has to come from the
-frame itself, not from the plumbing around it.
+frame itself, not from the plumbing around it. The latest recorded A/B reduced
+the UI's 90th-percentile frame time from 16-18 ms to 7-8 ms by reducing pixels;
+it did not establish a reduction in the reported jank rate. An extra frame
+buffer did not reduce the measured dequeue wait. Resolution and refresh rate
+remain product choices, rather than defaults to change from these numbers alone.
 
 ## Product
+
+**Use the same configuration key when saving and reading a variant.**
+Source inspection found that the reader accepts `variant` while the shell
+writer uses `variante`. Reproduce the selection across a restart, then align
+the writer and reader while preserving existing data images.
 
 **Sign the binaries.**
 A certificate turns "Windows protected your PC" into a normal install. Costs
@@ -56,9 +67,14 @@ money, not time.
 Today a new version is a new download and a manual copy. Anything better needs a
 decision about where the data directory lives across versions.
 
-**A way to install applications that is not `adb install`.** — *help wanted*
-Dragging an APK onto the window, or a file association, would remove the single
-most common piece of friction for anyone who is not a developer.
+**Finish rotation of the host window.**
+APK drag and drop already exists, as do file and folder transfers. The remaining
+window defect is that the guest and framebuffer rotate while the fixed host
+client keeps its old shape.
+
+**Size the boot animation for the display.**
+The recorded issue is an animation occupying only part of the screen. Verify
+whether Android crops or scales it before changing the animation dimensions.
 
 **More than one instance at a time, and something to manage them.**
 The shape people expect is a launcher that lists instances and starts them, the

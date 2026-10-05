@@ -1,5 +1,11 @@
 # guscio: Habumi.exe
 
+> **Current status:** the prepared 0.2.4 candidate fixes orphaned processes
+> and inherited handles. This document also preserves earlier investigations
+> and timeout values; use [KNOWN-ISSUES.md](../KNOWN-ISSUES.md) and
+> [RELEASE-NOTES.md](../RELEASE-NOTES.md) for the current limits. APK drag and
+> drop is already available; rotating the host window's shape remains pending.
+
 Il supervisore Win32 che avvia QEMU con Android dentro, mostra i suoi progressi, e lo spegne pulito comunque lo si chieda -- da un bottone, da una finestra, o da Windows stesso.
 
 Sorgenti in `app/guscio/`, compilati in `runtime/bin/Habumi.exe` da `app/scripts/build-guscio.sh`.
