@@ -6262,7 +6262,7 @@ similar terms.
 
 /*
 ** This file is in the public domain, so clarified as of
-** by Arthur David Olson.
+** 2006-07-17 by Arthur David Olson.
 */
 
 ============================================================
@@ -19368,7 +19368,7 @@ SAX comes with NO WARRANTY or guarantee of fitness for any
 purpose.
 
 David Megginson, david@megginson.com
-
+2000-05-05
 
 ============================================================
 Notices for file(s):

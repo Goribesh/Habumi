@@ -45,8 +45,9 @@ result belongs to the earlier development profile, not this fresh package.
 
 The runtime inventory identifies 104 DLLs byte-for-byte with installed MSYS2
 packages, alongside the ADB notices, pinned Mesa asset and rebuilt renderer.
-Some package license texts and platform-tools version provenance remain
-unverified; consult `app/release/LICENSES/RUNTIME-INVENTORY.json`. This is not
+All DLLs have license text references; platform-tools 37.0.0-14910828 matches
+the installed SDK byte-for-byte. Copyright and complete dependency auditing
+remain open; consult `app/release/LICENSES/RUNTIME-INVENTORY.json`. This is not
 a claim that the entire dependency/licensing audit is complete.
 
 Distribute the corresponding-source bundle with the runtime archive, including

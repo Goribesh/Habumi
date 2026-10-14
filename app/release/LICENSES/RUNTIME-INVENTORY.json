@@ -4,16 +4,18 @@
   "completeAudit": false,
   "limitations": [
     "Only exact SHA-256 matches to installed MSYS2 binaries are attributed as verified MSYS2 release binaries. Candidate package metadata is separately identified when hashes differ.",
-    "Android platform-tools and the release-profile Mesa renderer are maintainer-attributed. Their platform-tools version is not independently verified; Mesa attribution is maintainer-provided.",
-    "License texts are included only when available under local MSYS2 package license directories.",
-    "Native renderer hash is the isolated release build, intentionally different from the development profile."
+    "Android platform-tools match the installed SDK version 37.0.0-14910828 byte-for-byte, including adb.exe and both DLLs. Mesa attribution records the pinned third-party release asset.",
+    "Every DLL has license text references. Missing local package texts were supplemented with standard licenses or identified upstream texts; copyright and full dependency source auditing remain incomplete.",
+    "Native renderer hash is the isolated release build, intentionally different from the development profile.",
+    "Generic GPL in the gmp package metadata has no version; GPL-2.0 and GPL-3.0 standard texts are included as references without mapping one to a specific file or binary component.",
+    "The lz4 package metadata covers both BSD and GPL material; the upstream v1.10.0 lib/LICENSE is the BSD-2-Clause text for lib/ sources, while the repository distinguishes non-library tools separately."
   ],
   "dlls": [
     {
       "filename": "AdbWinApi.dll",
       "sha256": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965",
-      "package": "Android SDK Platform-Tools (maintainer-attributed)",
-      "version": null,
+      "package": "Android SDK Platform-Tools",
+      "version": "37.0.0-14910828",
       "declaredLicense": null,
       "candidateMsys2": {
         "package": null,
@@ -24,18 +26,20 @@
         "profileHash": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965",
         "profileMatches": true,
         "msys2Hash": null,
-        "msys2Matches": false
+        "msys2Matches": false,
+        "sdkHash": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965",
+        "sdkMatches": true
       },
       "licenseFiles": [
         "ANDROID-PLATFORM-TOOLS-NOTICE.txt"
       ],
-      "status": "UNVERIFIED - Android platform-tools; maintainer-attributed; existing notice"
+      "status": "VERIFIED - identical to installed Android SDK Platform-Tools 37.0.0"
     },
     {
       "filename": "AdbWinUsbApi.dll",
       "sha256": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60",
-      "package": "Android SDK Platform-Tools (maintainer-attributed)",
-      "version": null,
+      "package": "Android SDK Platform-Tools",
+      "version": "37.0.0-14910828",
       "declaredLicense": null,
       "candidateMsys2": {
         "package": null,
@@ -46,12 +50,14 @@
         "profileHash": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60",
         "profileMatches": true,
         "msys2Hash": null,
-        "msys2Matches": false
+        "msys2Matches": false,
+        "sdkHash": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60",
+        "sdkMatches": true
       },
       "licenseFiles": [
         "ANDROID-PLATFORM-TOOLS-NOTICE.txt"
       ],
-      "status": "UNVERIFIED - Android platform-tools; maintainer-attributed; existing notice"
+      "status": "VERIFIED - identical to installed Android SDK Platform-Tools 37.0.0"
     },
     {
       "filename": "libaom.dll",
@@ -532,7 +538,9 @@
         "msys2Hash": "4938ba3c7a0007717a846276b3657f06d9a2f6565b8c92b506d0bb5354f116cf",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-2.0.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -773,7 +781,11 @@
         "msys2Hash": "bfc6046e374a27838b54bde5602851c7cc426ac9438cb65f019b9e67a961f47c",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-2.0.txt",
+        "MSYS2/common/GPL-3.0.txt",
+        "MSYS2/common/LGPL-3.0.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -793,7 +805,10 @@
         "msys2Hash": "c9454d1c4835a8944b452ab21b7821da15fd084246b753a0c398ab0b42f4ec27",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-3.0.txt",
+        "MSYS2/common/LGPL-2.1.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -858,7 +873,9 @@
         "msys2Hash": "e0e094fec0ac7b2b7cf6193fdb00da0b71274e558d3ee038b3595cbc41bb31b3",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/LGPL-2.1.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -878,7 +895,9 @@
         "msys2Hash": "28193edb2c754b976f8c33b2cf157b9292434d7ed91c63647a3b14853d89b074",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/LGPL-2.1.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -898,7 +917,9 @@
         "msys2Hash": "d99dabf7c5ca30cdd9d4be41e97808eb3499c154f83341e9cc98ad8ac6f75bf3",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/LGPL-2.1.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -962,7 +983,10 @@
         "msys2Hash": "75d6cb61e58b896f06d2edf1c1467997405de307cd989fb21bc49f1f400f84a8",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-2.0.txt",
+        "MSYS2/common/LGPL-3.0.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1006,7 +1030,10 @@
         "msys2Hash": "0e3d9e52a20dcd7a6941413932f938893f1ed791dd0e09613b870803971783e9",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-2.0.txt",
+        "MSYS2/common/LGPL-3.0.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1206,7 +1233,9 @@
         "msys2Hash": "7c31d23b5a20d7aab73ca4908cf34263f9e4a6671ae88440c5986be9417985f2",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-lz4/upstream-v1.10.0-lib-LICENSE"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1296,7 +1325,10 @@
         "msys2Hash": "edf29fa2eab72831301ffc2d4d07d399c67a3b2ff4f7336224f4e177662383e9",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/GPL-2.0.txt",
+        "MSYS2/common/LGPL-3.0.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1495,7 +1527,9 @@
         "msys2Hash": "d6f838835d4ed4d49b372c8efe69ffbd26382ce544e5f3d6077908b45037844d",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-p11-kit/upstream-0.26.4-COPYING"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1824,7 +1858,9 @@
         "msys2Hash": "976d550c239977769d5cd770eb2f7b0e7d4a24404b7cb94c071bf83dff125188",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-snappy/upstream-1.2.2-COPYING"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -1866,7 +1902,9 @@
         "msys2Hash": "b582a6de63f9dd5547a54032d8af0baac1c2a06ac1e17cc3f1f4f31fb9930f51",
         "msys2Matches": true
       },
-      "licenseFiles": [],
+      "licenseFiles": [
+        "MSYS2/common/LGPL-2.1.txt"
+      ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     },
     {
@@ -2384,5 +2422,67 @@
       ],
       "status": "VERIFIED - identical to installed MSYS2 binary"
     }
-  ]
+  ],
+  "supplementalLicenseTextSources": {
+    "commonDirectoriesChecked": [
+      {
+        "path": "/usr/share/licenses/common",
+        "present": false
+      },
+      {
+        "path": "/clangarm64/share/licenses/common",
+        "present": false
+      }
+    ],
+    "standardTexts": [
+      {
+        "file": "MSYS2/common/GPL-2.0.txt",
+        "license": "GPL-2.0",
+        "installedSource": "CLANGARM64 package dtc, /clangarm64/share/licenses/dtc/GPL"
+      },
+      {
+        "file": "MSYS2/common/GPL-3.0.txt",
+        "license": "GPL-3.0",
+        "installedSource": "CLANGARM64 package gettext, /clangarm64/share/licenses/gettext/COPYING"
+      },
+      {
+        "file": "MSYS2/common/LGPL-2.1.txt",
+        "license": "LGPL-2.1",
+        "installedSource": "CLANGARM64 package gettext-runtime, /clangarm64/share/licenses/gettext-runtime/intl/COPYING.LIB"
+      },
+      {
+        "file": "MSYS2/common/LGPL-3.0.txt",
+        "license": "LGPL-3.0",
+        "installedSource": "MSYS2 package libargp, /usr/share/licenses/libargp/COPYING.LESSERv3"
+      }
+    ],
+    "standardTextNotice": "These are standard license texts copied from installed MSYS2 package license directories for reference; they are not a copyright audit or a file-level license mapping.",
+    "upstreamTexts": [
+      {
+        "file": "MSYS2/mingw-w64-clang-aarch64-lz4/upstream-v1.10.0-lib-LICENSE",
+        "package": "mingw-w64-clang-aarch64-lz4",
+        "version": "1.10.0-1",
+        "tag": "v1.10.0",
+        "url": "https://raw.githubusercontent.com/lz4/lz4/v1.10.0/lib/LICENSE",
+        "note": "Official lib/ license file; applies to LZ4 library sources under lib/."
+      },
+      {
+        "file": "MSYS2/mingw-w64-clang-aarch64-p11-kit/upstream-0.26.4-COPYING",
+        "package": "mingw-w64-clang-aarch64-p11-kit",
+        "version": "0.26.4-1",
+        "tag": "0.26.4",
+        "url": "https://raw.githubusercontent.com/p11-glue/p11-kit/0.26.4/COPYING",
+        "note": "COPYING fetched from the official upstream release tag."
+      },
+      {
+        "file": "MSYS2/mingw-w64-clang-aarch64-snappy/upstream-1.2.2-COPYING",
+        "package": "mingw-w64-clang-aarch64-snappy",
+        "version": "1.2.2-2",
+        "tag": "1.2.2",
+        "url": "https://raw.githubusercontent.com/google/snappy/1.2.2/COPYING",
+        "note": "COPYING fetched from the official upstream release tag."
+      }
+    ],
+    "upstreamScopeNote": "Upstream texts identify the release-tag license files; they do not audit copyright holders in the packaged binaries."
+  }
 }
