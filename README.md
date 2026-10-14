@@ -34,13 +34,16 @@ to Waydroid OTA commit `026205c747d314865fa18398375ff3b0e7bd7f70` (build `202609
 change the bugs by itself; and **comments and internal documentation are in
 Italian**, see [Language](#language) below.
 
-As of October 14, 2026, the latest published release is
-[0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3). The repository
-is preparing **0.3.0-rc.1**, a prerelease with native Vulkan through Venus,
-Zink composition and asynchronous Android controls. It includes the cleanup,
-variant-restart and English-text changes made after 0.2.3. The candidate is not
-published yet. See [RELEASE-NOTES.md](RELEASE-NOTES.md) and
-[the native Vulkan guide](docs/NATIVE-VULKAN.md).
+**[0.3.0-rc.1](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1)**
+is the native Vulkan prerelease: Venus forwards Android Vulkan to the Qualcomm
+driver, while Zink handles GLES composition. It also includes asynchronous
+Android controls, variant-restart fixes and English product text. The latest
+stable release remains [0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3).
+The prerelease passed a clean-data boot and a final packaged reboot on the
+maintainer's PC; a first-initialization SystemUI exception and repeated
+overnight resume remain open. See [RELEASE-NOTES.md](RELEASE-NOTES.md),
+[the native Vulkan guide](docs/NATIVE-VULKAN.md), and
+[the validation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
 
 If it breaks, send `guest\logs\registro-guscio.log`. Previous sessions are
 preserved in `guest\logs\archivio\`.
@@ -50,8 +53,8 @@ preserved in `guest\logs\archivio\`.
 | | |
 |---|---|
 | OS | Windows 11 **ARM64**. Not x86-64: there is nothing here to run on it |
-| Disk | about 8 GB free |
-| Network | about **805 MB** on first run — the Android images download themselves |
+| Disk | allow **12 GB free** for the default GApps images, downloads and initial 4 GiB data image |
+| Network | about **1.3 GB** on the default GApps first run — the Android images download themselves |
 | Virtualization | the **Windows Hypervisor Platform** feature must be enabled |
 | Graphics | a compatible native **Qualcomm Vulkan ICD** installed by the device graphics driver |
 
@@ -60,7 +63,7 @@ is a real dependency, not an implementation detail.
 
 ## Install
 
-1. Download the release archive and unpack it wherever you like — any path works.
+1. Download [Habumi-0.3.0-rc.1.zip](https://github.com/Goribesh/Habumi/releases/download/0.3.0-rc.1/Habumi-0.3.0-rc.1.zip), verify it against the release's `SHA256SUMS.txt`, and unpack it into a new directory.
 2. Run **`Start.cmd`**, which selects the native graphics driver and launches Habumi.
 
 For this prerelease, use a new directory. Keep your existing installation and

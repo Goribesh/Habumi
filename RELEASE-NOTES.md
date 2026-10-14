@@ -1,15 +1,18 @@
 # Release notes
 
-## 0.3.0-rc.1 — prerelease in preparation, not published
+## 0.3.0-rc.1 — native Vulkan prerelease
 
-This candidate is being prepared with native Qualcomm Vulkan through Venus;
+This prerelease introduces native Qualcomm Vulkan through Venus;
 GLES rendering and window composition use Zink. On the development machine,
 Android booted, visible frames were presented and 3DMark Wild Life completed
 with the user confirming that the 3D scenes were visible. The benchmark UI
 reported “Maxed out”; its internal score is not an official comparative score.
 This is a test-profile result, not broad hardware coverage or a guarantee for
-other applications. The packaged candidate and a clean fresh-install check are
-still in preparation.
+other applications. The packaged candidate passed a clean-data installation
+using verified official GApps/vendor images and a final reboot on the
+maintainer's PC. The final reboot reached readiness in 27.656 seconds at
+1600x2560; normal shutdown completed in 5.016 seconds. All 332 runtime ZIP
+entries and final archive checksums were verified.
 
 **Start Vulkan builds only through `Start.cmd`**, which invokes
 `Start-Habumi.ps1` to select the native ICD and set the process environment.
@@ -42,7 +45,16 @@ An archived synthetic Vulkan prototype estimated 9.2% median frame-time
 overhead, with an uncertainty interval crossing 10% and no confirmed FPS gain.
 It was not adopted as a product optimization. No battery or energy benefit is
 claimed. Signing, an updater, broader hardware coverage and a complete runtime
-DLL license inventory remain outstanding.
+dependency and copyright audit remain outstanding. All runtime DLLs now have
+license text references, and ADB 37.0.0-14910828 matches the installed SDK
+byte-for-byte. The release includes the corresponding-source archive for the
+project, patched QEMU, Linux kernel and native renderer.
+
+A SystemUI AppOps null-pointer exception occurred during fresh initialization;
+Home recovered and navigation passed. Repeated overnight standby/hibernation,
+other hardware, Google sign-in, first-run download dialogs and a full variant
+switch in both directions still need validation. These limits are recorded in
+[the release validation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
 
 ## Historical — unreleased changes after the prepared 0.2.4 archive
 

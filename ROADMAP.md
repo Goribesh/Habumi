@@ -5,20 +5,22 @@ Nothing here is promised and nothing has a date. Items marked **help wanted**
 are the ones where someone else's machine or expertise matters more than more
 hours on this one.
 
-The project is preparing a 0.3.0-rc.1 prerelease; it has not been published.
-The test-only Vulkan and shell-control results below are evidence from the
-development machine, not release-wide guarantees.
+The 0.3.0-rc.1 prerelease introduces the native Vulkan path. Its clean-data
+boot, final reboot and normal close passed on the maintainer's PC. The Vulkan
+and shell-control results below remain evidence from that machine, not
+release-wide guarantees.
 
 Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) first: most of what follows is the other
 half of something written there.
 
 ## Worth doing first
 
-**Prepare a clean, reproducible prerelease package.**
-Build from a clean checkout, pin and verify the Android images, then test a
-fresh install and upgrade path without relying on the development profile.
-Include reproducible kernel and audio build steps and verify release contents
-before publishing.
+**Complete installation and upgrade coverage.**
+The prerelease now has pinned Android metadata, verified runtime contents,
+corresponding source snapshots and a fresh-data smoke test using official
+images. First-run download dialogs, both variant-switch directions and an
+upgrade path still need testing. Improve rebuild documentation and complete
+the dependency and copyright audit.
 
 **Run it on hardware that is not ours.** — *help wanted*
 Full feature and performance measurements still come from the development

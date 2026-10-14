@@ -1,9 +1,10 @@
 # Known issues
 
-This page describes known limits while preparing the 0.3.0-rc.1 prerelease.
-It is not a notice that the prerelease has been published. Historical
-observations are identified as such; a documentation update is not a new
-runtime test.
+This page describes known limits of the
+[0.3.0-rc.1 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1).
+Historical observations are identified as such; a documentation update is not
+a new runtime test. Package checks are recorded in
+[the release validation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
 
 ## Hardware and boot
 

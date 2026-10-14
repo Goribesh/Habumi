@@ -1,7 +1,8 @@
-# Habumi 0.3.0-rc.1 preparation
+# Habumi 0.3.0-rc.1 validation and build record
 
-This is a local prerelease candidate, not a published GitHub release. Install in
-a new directory and keep existing Android data separately. The release target
+This record describes the tested candidate for the
+[0.3.0-rc.1 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1).
+Install in a new directory and keep existing Android data separately. The release target
 is Windows 11 ARM64 with the native Qualcomm Vulkan driver. Source comments
 retain their established language; product text and release documents are English.
 
@@ -29,6 +30,11 @@ retain their established language; product text and release documents are Englis
 - The isolated control probe passed density, Home, Recents, Home and Back.
 - Normal close logged guest Power down and QEMU exiting on its own in 4.484
   seconds, without the forced-shutdown fallback.
+- The final package reboot reached readiness in 27.656 seconds, with a
+  1600x2560 framebuffer and one guest Vulkan device. Host logs confirmed the
+  native Qualcomm Adreno driver. Its normal close completed in 5.016 seconds.
+- All 332 runtime archive entries and both final archive SHA-256 checksums
+  were verified. The corresponding-source project matches the release commit.
 
 ## Limits and publication conditions
 

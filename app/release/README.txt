@@ -1,15 +1,22 @@
 Habumi - README
 =======================
 
-RELEASE STATUS: 0.3.0-rc.1 IN PREPARATION
+RELEASE STATUS: 0.3.0-rc.1 PRERELEASE
 ------------------------------------------
 
-This prerelease is not published. It is being prepared with native Qualcomm
-Vulkan through Venus and Zink for GLES rendering and window composition. A
-development-machine test completed 3DMark Wild Life with visible scenes, but
+This prerelease uses native Qualcomm Vulkan through Venus and Zink for GLES
+rendering and window composition. Release downloads and checksum files are at:
+https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1
+A development-machine test completed 3DMark Wild Life with visible scenes, but
 this is not broad hardware coverage or a guarantee for other applications.
 The benchmark displayed "Maxed out", so its internal score is not an official
 comparative score. A clean-data boot, readable Home, Vulkan enumeration, navigation and normal shutdown passed locally.
+
+The final package reboot reached readiness in 27.656 seconds and closed
+normally in 5.016 seconds. A SystemUI AppOps exception occurred during first
+initialization before Home recovered. Repeated overnight standby/hibernation,
+other hardware, Google sign-in, first-run download dialogs and bidirectional
+variant switching still need validation. This release is experimental.
 
 Use a new, separate installation directory. The package contains no user's
 Android data. System and vendor images are downloaded and checked against

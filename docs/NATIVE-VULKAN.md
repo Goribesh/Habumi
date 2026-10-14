@@ -1,7 +1,9 @@
 # Native Vulkan prerelease
 
-Habumi 0.3.0-rc.1 is being prepared for Windows 11 ARM64 machines with a
-compatible native Qualcomm Vulkan driver. The development profile has booted
+Habumi [0.3.0-rc.1](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1)
+targets Windows 11 ARM64 machines with a compatible native Qualcomm Vulkan
+driver. The packaged candidate passed a fresh-data boot, final reboot and
+normal close on the maintainer's PC. The development profile has booted
 Android 13, enumerated an Adreno-backed Venus device and completed Wild Life
 with visible scenes. Coverage on other devices and applications remains open.
 
