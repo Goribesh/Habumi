@@ -24,6 +24,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 IMG="$ROOT/guest/images/android"
+OUTPUT="${WINQ_INITRAMFS_OUTPUT:-$IMG/initramfs.img}"
+if [ -n "${WINQ_INITRAMFS_OUTPUT:-}" ] && [ -e "$OUTPUT" ]; then
+    echo "FERMO: l'uscita isolata esiste gia': $OUTPUT"
+    exit 1
+fi
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -57,19 +62,19 @@ BOOTANIM="$ROOT/guest/bootanimation/bootanimation.zip"
 [ -f "$BOOTANIM" ] || { echo "FERMO: manca $BOOTANIM"; exit 1; }
 # asound.conf e' cio' che fa suonare l'audio: senza, l'HAL non trova il
 # dispositivo ALSA e il guest resta muto. Stava dentro system.img fino al
-# ; ora passa dall'overlay, perche' le immagini si vogliono vergini.
+# 05/08/2026; ora passa dall'overlay, perche' le immagini si vogliono vergini.
 ASOUND="$ROOT/guest/overlay-system/asound.conf"
 [ -f "$ASOUND" ] || { echo "FERMO: manca $ASOUND (il guest resterebbe muto)"; exit 1; }
 
 # L'HAL audio con l'anello da 4096 frame. Stava DENTRO vendor.img fino al
-#, ed era l'ultima immagine del progetto che non fosse vergine: da
+# 09/08/2026, ed era l'ultima immagine del progetto che non fosse vergine: da
 # qui in poi passa dall'overlay, come tutto il resto, e vendor.img si puo'
 # scaricare vergine da monte invece di essere redistribuita.
 #
 # FERMO e non avviso, perche' il sintomo dell'assenza e' muto: senza questo file
 # il guest si avvia, suona, e ha l'anello di serie da 1024 frame. Nessun
 # messaggio, e cio' che si sente e' lo stutter audio sotto carico che il lavoro
-# serviva a togliere. Meglio non costruire l'initramfs affatto.
+# del 02/08 serviva a togliere. Meglio non costruire l'initramfs affatto.
 HALAUDIO="$ROOT/guest/overlay-vendor/audio.primary.waydroid.so"
 [ -f "$HALAUDIO" ] || { echo "FERMO: manca $HALAUDIO (l'anello audio tornerebbe a 1024 frame, in silenzio)"; exit 1; }
 
@@ -115,11 +120,11 @@ if [ "${WINQ_PROBE:-0}" = "1" ]; then
     echo "    (inclusa la sonda interna)"
 fi
 
-mkdir -p "$IMG"
-( cd "$STAGE" && find . -print0 | cpio --null -o -H newc --quiet ) | gzip -9 > "$IMG/initramfs.img"
+mkdir -p "$(dirname "$OUTPUT")"
+( cd "$STAGE" && find . -print0 | cpio --null -o -H newc --quiet ) | gzip -9 > "$OUTPUT"
 
 echo "=== risultato"
-ls -l "$IMG/initramfs.img"
+ls -l "$OUTPUT"
 echo "contenuto:"
 # Il "./" e' opzionale nel filtro perche' i cpio recenti (Ubuntu 26.04) normalizzano
 # i nomi e li elencano senza prefisso, mentre quelli vecchi li lasciano come li ha
@@ -128,4 +133,4 @@ echo "contenuto:"
 # un'immagine perfettamente valida: un finto fallimento che invita a rifare la build
 # o a cercare un guasto che non c'e'. Il `|| true` serve allo stesso scopo: questa e'
 # una stampa di controllo, non un cancello.
-zcat "$IMG/initramfs.img" | cpio -t --quiet 2>/dev/null | grep -E '^(\./)?(init|bin/busybox|winq/)' | sed 's/^/  /' || true
+zcat "$OUTPUT" | cpio -t --quiet 2>/dev/null | grep -E '^(\./)?(init|bin/busybox|winq/)' | sed 's/^/  /' || true

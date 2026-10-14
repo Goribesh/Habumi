@@ -156,7 +156,7 @@ static void sposta_il_file_invece_di_cancellarlo(void)
     char vivo[MAX_PATH];
     char arch[MAX_PATH];
     SYSTEMTIME t = ora_finta(2026, 8, 4, 14, 30, 59);
-    char letto[64];
+    char letto[MAX_PATH];  /* percorso completo, non contenuto del file */
     FILE *f;
 
     cartella_di_prova(base, sizeof(base), "pf-arch-1");

@@ -11,6 +11,9 @@
 # Le patch devono conservare i byte esatti: una conversione dei fine di riga le
 # fa fallire, e in questo repo sono l'unico modo di ricostruire il ponte.
 *.patch -text
+# Il contesto di una patch e i testi upstream non sono codice da riformattare.
+*.patch -whitespace
+app/release/LICENSES/** -whitespace
 
 # Binari: nessuna conversione, nessun diff testuale.
 *.img binary

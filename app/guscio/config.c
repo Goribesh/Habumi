@@ -32,17 +32,27 @@ void config_default(Config *c)
      * 127.0.0.1 e l'app del guest chiama come 10.0.2.2. */
     c->porta_appunti = 15556;
     strcpy(c->gl, "wgl");
-    /* Senza attesa, e il perche' sta sul campo in guscio.h:
+    /* Senza attesa dal 13/08/2026, e il perche' sta sul campo in guscio.h:
      * 257 us per commutazione con l'attesa contro 26-29 senza, misurati. */
     c->gl_attesa_flush = false;
-    /* Acceso : il kernel del guest ha virtio-snd builtin, quindi
+    /* Acceso dal 01/08/2026: il kernel del guest ha virtio-snd builtin, quindi
      * /dev/snd esiste e l'HAL lo apre. Prima era spento perche' il dispositivo
      * non aveva nessuno che lo aprisse. */
     c->audio = true;
     c->scala_guest = false;
     c->hz = 0;
+    c->hz_batteria = 0;
     c->densita = 0;
     c->variante = VAR_VANILLA;
+}
+
+int config_hz_effettivi(const Config *c, bool batteria)
+{
+    if (batteria && c->hz_batteria > 0 &&
+        (c->hz == 0 || c->hz_batteria < c->hz)) {
+        return c->hz_batteria;
+    }
+    return c->hz;
 }
 
 /* Toglie spazi in testa e in coda, in posto. */
@@ -193,17 +203,17 @@ void config_carica(Config *c, const char *percorso)
         if (!strcmp(chiave, "vcpu")) {
             intero(valore, 1, 64, &c->vcpu, "vcpu");
         } else if (!strcmp(chiave, "memory")) {
-            intero(valore, 1024, 65536, &c->memoria, "memoria");
+            intero(valore, 1024, 65536, &c->memoria, "memory");
         } else if (!strcmp(chiave, "width")) {
-            intero(valore, 320, 8192, &c->larghezza, "larghezza");
+            intero(valore, 320, 8192, &c->larghezza, "width");
         } else if (!strcmp(chiave, "height")) {
-            intero(valore, 320, 8192, &c->altezza, "altezza");
+            intero(valore, 320, 8192, &c->altezza, "height");
         } else if (!strcmp(chiave, "retries")) {
-            intero(valore, 1, 10, &c->riprove, "riprove");
+            intero(valore, 1, 10, &c->riprove, "retries");
         } else if (!strcmp(chiave, "adb_port")) {
             int p = c->porta_adb;
 
-            if (intero(valore, 1024, 65535, &p, "porta_adb")) {
+            if (intero(valore, 1024, 65535, &p, "adb_port")) {
                 /* MISURATO: adb esplora 5554-5585 in coppie per scoprire gli
                  * emulatori. Con la nostra porta in quell'intervallo adb la
                  * prende per un emulatore, inventa un'entrata "emulator-5554" e
@@ -226,7 +236,7 @@ void config_carica(Config *c, const char *percorso)
             /* Qui si controlla SOLO l'intervallo generale: gli altri due
              * rifiuti stanno dopo il ciclo, vedi la dichiarazione di
              * appunti_letto per il perche'. */
-            if (intero(valore, 1024, 65535, &p, "porta_appunti")) {
+            if (intero(valore, 1024, 65535, &p, "clipboard_port")) {
                 appunti_letto = p;
             }
         } else if (!strcmp(chiave, "gl")) {
@@ -267,7 +277,7 @@ void config_carica(Config *c, const char *percorso)
                               "ignored, the values are yes or no. Staying at %s.",
                               valore, c->scala_guest ? "yes" : "no");
             }
-        } else if (!strcmp(chiave, "variant")) {
+        } else if (!strcmp(chiave, VAR_CONFIG_CHIAVE)) {
             VarNome v;
             if (var_da_testo(valore, &v)) {
                 c->variante = v;
@@ -280,10 +290,13 @@ void config_carica(Config *c, const char *percorso)
                               "using vanilla", valore);
             }
         } else if (!strcmp(chiave, "hz")) {
-            intero_o_zero(valore, 24, 240, &c->hz, "hz", "automatico");
+            intero_o_zero(valore, 24, 240, &c->hz, "hz", "automatic");
+        } else if (!strcmp(chiave, "battery_hz")) {
+            intero_o_zero(valore, 24, 240, &c->hz_batteria, "battery_hz",
+                          "use the regular refresh setting");
         } else if (!strcmp(chiave, "density")) {
-            intero_o_zero(valore, 120, 640, &c->densita, "densita",
-                          "non tocca la densita' del guest");
+            intero_o_zero(valore, 120, 640, &c->densita, "density",
+                          "leave guest density unchanged");
         } else {
             registro_riga(REG_GUSCIO, "config: unknown key '%s' "
                                       "on line %d, ignored.", chiave, numero);

@@ -53,6 +53,10 @@ struct Mappa {
  * lettura e non un tasto ignorato in silenzio: una mappa in cui una riga non
  * fa niente, e nessuno lo dice, e' peggio di una mappa rifiutata. */
 static const struct { const char *nome; int vk; } tasti[] = {
+    /* I nomi inglesi vengono prima: vk_a_nome li salva nei nuovi profili.
+     * Le vecchie grafie restano leggibili nei profili gia' esistenti. */
+    { "SPACE", 0x20 }, { "ENTER", 0x0D }, { "SHIFT", 0x10 },
+    { "UP", 0x26 }, { "DOWN", 0x28 }, { "LEFT", 0x25 }, { "RIGHT", 0x27 },
     { "SPAZIO", 0x20 }, { "INVIO", 0x0D }, { "MAIUSC", 0x10 },
     { "CTRL", 0x11 }, { "ALT", 0x12 }, { "TAB", 0x09 }, { "ESC", 0x1B },
     { "SU", 0x26 }, { "GIU", 0x28 }, { "SINISTRA", 0x25 }, { "DESTRA", 0x27 },
@@ -215,7 +219,7 @@ bool mappa_carica(Mappa *m, const char *percorso,
 
     f = fopen(percorso, "rb");
     if (!f) {
-        snprintf(errore, errore_n, "non riesco ad aprire %s", percorso);
+        snprintf(errore, errore_n, "Cannot open %s", percorso);
         return false;
     }
 
@@ -242,7 +246,7 @@ bool mappa_carica(Mappa *m, const char *percorso,
 
             if (prossimo != EOF) {
                 ungetc(prossimo, f);
-                snprintf(errore, errore_n, "riga troppo lunga (oltre %d caratteri)",
+                snprintf(errore, errore_n, "Line too long (more than %d characters)",
                          (int)sizeof(linea) - 1);
                 goto male;
             }
@@ -260,11 +264,11 @@ bool mappa_carica(Mappa *m, const char *percorso,
             && consumati > 0) {
             int vk = nome_a_vk(parola), i;
             if (!resto_vuoto(p + consumati)) {
-                snprintf(errore, errore_n, "campi in piu'");
+                snprintf(errore, errore_n, "Extra fields");
                 goto male;
             }
             if (vk < 0) {
-                snprintf(errore, errore_n, "tasto sconosciuto: %s", parola);
+                snprintf(errore, errore_n, "Unknown key: %s", parola);
                 goto male;
             }
             /* Un tasto che e' GIA' fra i quattro del joystick non puo' anche
@@ -276,23 +280,23 @@ bool mappa_carica(Mappa *m, const char *percorso,
                 for (i = 0; i < 4; i++) {
                     if (m->joy_vk[i] == vk) {
                         snprintf(errore, errore_n,
-                                 "tasto %s e' anche nel joystick", parola);
+                                 "Key %s is also assigned to the joystick", parola);
                         goto male;
                     }
                 }
             }
             if (!in_intervallo(a) || !in_intervallo(b)) {
-                snprintf(errore, errore_n, "coordinata fuori da 0..1000");
+                snprintf(errore, errore_n, "Coordinate outside 0..1000");
                 goto male;
             }
             for (i = 0; i < m->n_tocchi; i++) {
                 if (m->tocchi[i].vk == vk) {
-                    snprintf(errore, errore_n, "tasto %s gia' assegnato", parola);
+                    snprintf(errore, errore_n, "Key %s is already assigned", parola);
                     goto male;
                 }
             }
             if (m->n_tocchi >= MAPPA_TOCCHI_MAX) {
-                snprintf(errore, errore_n, "piu' di %d tocchi", MAPPA_TOCCHI_MAX);
+                snprintf(errore, errore_n, "More than %d touch mappings", MAPPA_TOCCHI_MAX);
                 goto male;
             }
             m->tocchi[m->n_tocchi].vk = vk;
@@ -308,22 +312,22 @@ bool mappa_carica(Mappa *m, const char *percorso,
             int i, j;
             int32_t rx, ry;
             if (!resto_vuoto(p + consumati)) {
-                snprintf(errore, errore_n, "campi in piu'");
+                snprintf(errore, errore_n, "Extra fields");
                 goto male;
             }
             if (m->joy_c_e) {
-                snprintf(errore, errore_n, "un solo joystick per profilo");
+                snprintf(errore, errore_n, "Only one joystick is allowed per profile");
                 goto male;
             }
             if (strlen(tasti_joy) != 4) {
-                snprintf(errore, errore_n, "il joystick vuole quattro tasti");
+                snprintf(errore, errore_n, "The joystick requires four keys");
                 goto male;
             }
             for (i = 0; i < 4; i++) {
                 char uno[2]; uno[0] = tasti_joy[i]; uno[1] = '\0';
                 m->joy_vk[i] = nome_a_vk(uno);
                 if (m->joy_vk[i] < 0) {
-                    snprintf(errore, errore_n, "tasto sconosciuto: %s", uno);
+                    snprintf(errore, errore_n, "Unknown key: %s", uno);
                     goto male;
                 }
             }
@@ -336,8 +340,8 @@ bool mappa_carica(Mappa *m, const char *percorso,
                 for (j = i + 1; j < 4; j++) {
                     if (m->joy_vk[i] == m->joy_vk[j]) {
                         snprintf(errore, errore_n,
-                                 "i quattro tasti del joystick devono essere "
-                                 "diversi: %c ripetuto", tasti_joy[i]);
+                                 "The four joystick keys must be "
+                                 "different: %c is repeated", tasti_joy[i]);
                         goto male;
                     }
                 }
@@ -357,7 +361,7 @@ bool mappa_carica(Mappa *m, const char *percorso,
                 }
             }
             if (!in_intervallo(a) || !in_intervallo(b) || !in_intervallo(c)) {
-                snprintf(errore, errore_n, "coordinata fuori da 0..1000");
+                snprintf(errore, errore_n, "Coordinate outside 0..1000");
                 goto male;
             }
             /* IL CERCHIO SI VALIDA INTERO, non un campo alla volta. Con i tre
@@ -385,8 +389,8 @@ bool mappa_carica(Mappa *m, const char *percorso,
             ry = pm_y_da_corto(m, c);
             if (a - rx < 0 || a + rx > 1000 || b - ry < 0 || b + ry > 1000) {
                 snprintf(errore, errore_n,
-                         "il joystick esce dall'area: cx+-r e cy+-r devono "
-                         "stare in 0..1000");
+                         "The joystick extends outside the area: cx+-r and cy+-r must "
+                         "stay within 0..1000");
                 goto male;
             }
             m->joy_cx = a; m->joy_cy = b; m->joy_r = c;
@@ -394,7 +398,7 @@ bool mappa_carica(Mappa *m, const char *percorso,
             continue;
         }
 
-        snprintf(errore, errore_n, "riga non riconosciuta");
+        snprintf(errore, errore_n, "Unrecognized line");
     male:
         *riga = n;
         fclose(f);
@@ -882,7 +886,7 @@ bool mappa_salva(Mappa *m, const char *percorso, char *errore, size_t errore_n)
     errore[0] = '\0';
     if (!f) {
         free(testa);
-        snprintf(errore, errore_n, "non riesco a scrivere %s", percorso);
+        snprintf(errore, errore_n, "Cannot write %s", percorso);
         return false;
     }
     /* "wb" e non "w": su Windows "w" tradurrebbe ogni \n in \r\n, e il formato
@@ -897,8 +901,8 @@ bool mappa_salva(Mappa *m, const char *percorso, char *errore, size_t errore_n)
         fputs(testa, f);
         free(testa);
     } else {
-        fputs("# mappa dei tasti -- scritta dal modo impara\n"
-              "# Coordinate in permille dell'area cliente (0..1000), non in pixel.\n"
+        fputs("# Key map -- saved by learn mode\n"
+              "# Coordinates are per mille of the client area (0..1000), not pixels.\n"
               "\n", f);
     }
     if (m->joy_c_e) {
@@ -933,7 +937,7 @@ bool mappa_salva(Mappa *m, const char *percorso, char *errore, size_t errore_n)
     }
     if (!bene) {
         snprintf(errore, errore_n,
-                 "scrittura di %s non riuscita: il file e' rimasto a meta'",
+                 "Writing %s failed: the file is incomplete",
                  percorso);
         return false;
     }

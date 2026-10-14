@@ -45,7 +45,7 @@ static void i_default_sono_quelli_della_spec(void)
     CHECK(c.porta_adb == 15555);
     CHECK(c.porta_appunti == 15556);
     CHECK(strcmp(c.gl, "wgl") == 0);
-    /* l'audio e' acceso di default: il kernel del guest ha
+    /* Dal 01/08/2026 l'audio e' acceso di default: il kernel del guest ha
      * virtio-snd builtin, quindi /dev/snd esiste e la catena fino a Windows e'
      * provata. Un emulatore muto sorprende chi apre un video. */
     CHECK(c.audio == true);
@@ -252,8 +252,8 @@ static void la_scala_guest_e_no_di_default_e_vuole_si_o_no(void)
 
     /* Il default (del codice) e' "no" perche' con "si" il guest disegnerebbe
      * 4x i pixel su questa macchina. Il costo E' misurato (tabella nel
-     * commento della chiave in runtime/bin/config.txt): la mediana GPU passa
-     * da 4 ms a 1280x800 a 7 ms a
+     * commento della chiave in runtime/bin/config.txt e in
+     * qemu/PRESTAZIONI.md): la mediana GPU passa da 4 ms a 1280x800 a 7 ms a
      * 2560x1600@60. Un default che costa senza che nessuno l'abbia chiesto e'
      * peggio di una chiave in meno, anche conoscendone il prezzo. */
     config_default(&c);
@@ -423,6 +423,49 @@ static void la_variante_e_vanilla_di_default_e_vuole_vanilla_o_gapps(void)
     CHECK(c.variante == VAR_VANILLA);
 }
 
+static void la_variante_salvata_si_rilegge_dopo_il_riavvio(void)
+{
+    char testo[256];
+    Config c;
+
+    CHECK(var_config_riscrivi("width=800\nvariant=vanilla\nvariante=gapps\n",
+                             VAR_GAPPS, testo, sizeof(testo)) > 0);
+    scrivi("prova-variante-migrata.txt", testo);
+    config_default(&c);
+    config_carica(&c, "prova-variante-migrata.txt");
+    CHECK(c.variante == VAR_GAPPS);
+    CHECK(c.larghezza == 800);
+    CHECK(strstr(testo, "variante=") == NULL);
+    remove("prova-variante-migrata.txt");
+}
+
+static void la_frequenza_batteria_preserva_le_scelte_esistenti(void)
+{
+    Config c;
+
+    config_default(&c);
+    CHECK(c.hz_batteria == 0);
+    CHECK(config_hz_effettivi(&c, true) == 0);
+    scrivi("prova-battery-hz.txt", "hz=120\nbattery_hz=60\n");
+    config_carica(&c, "prova-battery-hz.txt");
+    CHECK(c.hz_batteria == 60);
+    CHECK(config_hz_effettivi(&c, true) == 60);
+    CHECK(config_hz_effettivi(&c, false) == 120);
+    c.hz = 30;
+    CHECK(config_hz_effettivi(&c, true) == 30);
+    c.hz = 0;
+    CHECK(config_hz_effettivi(&c, true) == 60);
+    CHECK(config_hz_effettivi(&c, false) == 0);
+    scrivi("prova-battery-hz.txt", "battery_hz=23\nbattery_hz=241\nbattery_hz=no\n");
+    config_carica(&c, "prova-battery-hz.txt");
+    CHECK(c.hz_batteria == 60);
+    scrivi("prova-battery-hz.txt", "battery_hz=0\n");
+    config_carica(&c, "prova-battery-hz.txt");
+    c.hz = 120;
+    CHECK(config_hz_effettivi(&c, true) == 120);
+    remove("prova-battery-hz.txt");
+}
+
 int main(void)
 {
     registro_apri();
@@ -436,8 +479,10 @@ int main(void)
     un_gl_sconosciuto_resta_al_default();
     la_scala_guest_e_no_di_default_e_vuole_si_o_no();
     la_hz_e_zero_di_default_e_vuole_0_o_24_240();
+    la_frequenza_batteria_preserva_le_scelte_esistenti();
     la_densita_e_zero_di_default_e_vuole_0_o_120_640();
     la_variante_e_vanilla_di_default_e_vuole_vanilla_o_gapps();
+    la_variante_salvata_si_rilegge_dopo_il_riavvio();
     registro_chiudi();
 
     printf("test-config: %d su %d passati\n", totali - fallimenti, totali);

@@ -159,8 +159,8 @@ bool winq_wgl_attivo(void)
         v = getenv("WINQ_GL");
         winq_wgl_stato = (v && !strcmp(v, "angle")) ? 0 : 1;
         if (!winq_wgl_stato) {
-            info_report("winq: WINQ_GL=angle, using ANGLE instead of the desktop "
-                        "desktop. The guest will stay on OpenGL ES 2.0.");
+        info_report("winq: WINQ_GL=angle, using ANGLE instead of desktop "
+                    "OpenGL. The guest will stay on OpenGL ES 2.0.");
         }
     }
     return winq_wgl_stato == 1;
@@ -264,9 +264,9 @@ static bool winq_wgl_ha_flush_control(void)
 
         presente = (s && strstr(s, "WGL_ARB_context_flush_control")) ? 1 : 0;
         info_report("winq/wgl: WGL_ARB_context_flush_control %s",
-                    presente ? "c'e', i contesti chiederanno "
+                    presente ? "available; contexts will request "
                                "CONTEXT_RELEASE_BEHAVIOR_NONE"
-                             : "assente, si resta al flush con attesa");
+                             : "unavailable; keeping flush wait enabled");
     }
     return presente != 0;
 }
@@ -595,8 +595,8 @@ int winq_wgl_make_current(DisplayGLCtx *dgc, QEMUGLContext ctx)
     if ((winq_mc_falliti || winq_mc_diag()) &&
         adesso - winq_mc_ultimo_ms >= 1000) {
         winq_mc_ultimo_ms = adesso;
-        error_report("winq-mc/s: ok=%u falliti=%u stacchi=%u ultimo_errore=%lu "
-                     "thread_fallito=%lu thread=[%lu:%u %lu:%u %lu:%u %lu:%u]",
+        error_report("winq-mc/s: ok=%u failed=%u detached=%u last_error=%lu "
+                     "failed_thread=%lu thread=[%lu:%u %lu:%u %lu:%u %lu:%u]",
                      winq_mc_ok, winq_mc_falliti, winq_mc_stacchi,
                      winq_mc_ultimo_errore, winq_mc_thread_fallito,
                      winq_mc_thread_id[0], winq_mc_thread_conta[0],

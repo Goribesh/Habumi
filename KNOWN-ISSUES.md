@@ -1,8 +1,9 @@
 # Known issues
 
-This page describes the remaining limits of the product and the prepared 0.2.4
-candidate. Historical observations are identified as such; a documentation
-update is not a new runtime test.
+This page describes known limits while preparing the 0.3.0-rc.1 prerelease.
+It is not a notice that the prerelease has been published. Historical
+observations are identified as such; a documentation update is not a new
+runtime test.
 
 ## Hardware and boot
 
@@ -27,9 +28,15 @@ Android readiness has a separate 120-second threshold; the shell can continue
 waiting while serial output still advances. Messages distinguish a live but
 unfinished boot from missing ADB or stopped progress. These thresholds do not
 guarantee boot on every machine. See [RELEASE-NOTES.md](RELEASE-NOTES.md) for
-the 0.2.4 cleanup fixes.
+the historical 0.2.4 cleanup fixes.
 
 ## Android stability and audio
+
+**A fresh prerelease startup recorded a SystemUI exception.** The clean
+20260927 GApps initialization captured an AppOps-related null-pointer exception
+in SystemUI; Android subsequently reached a readable Home and accepted
+navigation. Its recurrence rate is not established. See the
+[release preparation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
 
 **Historical `system_server` crashes remain unresolved.** Recorded crashes
 during network activity and package installation restarted the Android framework
@@ -50,18 +57,25 @@ The ring size is not a measurement of end-to-end audio latency.
 
 ## Graphics and window
 
-**Applications requiring Vulkan are unsupported.** The shipped Android graphics
-path is OpenGL ES 3.1 through virgl, host Mesa and D3D12. Experimental Venus
-probes have enumerated devices, but that is not usable Vulkan in Android apps.
-Recorded obstacles include external-memory and Android native-buffer support
-and a crash in the Qualcomm D3D12 driver on the Dozen path. Venus remains off
-in the product; updating the guest GL driver alone has not shown a benefit.
+**Vulkan is verified on the development machine, not across supported
+hardware.** A test-only candidate using native Qualcomm Vulkan through Venus
+and Zink booted Android, presented visible frames and completed 3DMark Wild
+Life; the user confirmed the 3D scenes were visible. The result was marked
+“Maxed out” because portions exceeded 60 FPS, so its internal score is not an
+official comparative score. A separate archived prototype estimated 9.2%
+median frame-time overhead for one synthetic workload, but its uncertainty
+interval crossed 10%, no FPS improvement was confirmed, and it was not adopted
+as a product optimization. Neither result guarantees performance or rendering
+correctness on other devices or applications. The standard installation does
+not use the test profile; there, the HAL override applied only to the benchmark
+process, leaving other apps on the stock HAL. See the dated
+[Venus WSI report](docs/NATIVE-VULKAN.md) and [control confirmation](docs/NATIVE-VULKAN.md).
 
-**Guest rotation does not resize the host window.** Android and its framebuffer
-alternate between portrait and landscape, but the QEMU host client keeps its
-fixed shape. A portrait framebuffer can consequently be squeezed into a
-landscape window. The rotation command itself was corrected; the window-shape
-work remains outstanding.
+**Rotation controls work, but the host window does not rotate with the guest.**
+The async controls passed a live portrait/landscape rotation pair, restoring
+the original rotation and framebuffer dimensions. The QEMU host client still
+keeps its fixed shape, so a portrait framebuffer can be squeezed into a
+landscape window. See [async controls](docs/NATIVE-VULKAN.md).
 
 **The boot animation occupies only part of the screen in the recorded setup.**
 Cropping versus scaling still needs verification before changing its dimensions.
@@ -82,21 +96,25 @@ measurement. The frame budget at the shipped 120 Hz is 8.3 ms.
 
 ## Host and lifecycle
 
-**Variant selection has a persistence mismatch in the sources.** The config
-reader accepts `variant`, but the shell's variant writer searches and writes
-`variante`. A UI selection can therefore leave the existing `variant=vanilla`
-entry controlling the next launch while adding an ignored `variante=gapps`
-entry. This was identified by source inspection; a runtime reproduction and
-fix remain pending. For a manual selection, the accepted key is
-`variant=vanilla` or `variant=gapps`.
+**The prepared 0.2.4 archive still needs the variant-restart fixes.** During
+a switch, the shell can keep its own serial reader open and then fail to
+rotate that file, refusing the new boot. Its writer also uses `variante`
+while the reader accepts `variant`, so the selected variant may not persist.
+The current sources close the reader before rotation and save one canonical
+`variant` entry, removing legacy and duplicate entries. These fixes were
+tested on Windows and installed locally; they are not in the existing archive.
+See [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
-**Windows sleep suspends the VM.** The guest clock and virtual CPUs stop while
-wall-clock time continues. On resume Android can enter watchdog recovery;
-`adb shell` may answer while framework commands such as `pm` and `dumpsys` do
-not. A VM suspended during startup may simply not have completed boot.
-
-**Nothing keeps the host awake for the VM.** Sleep handling remains a product
-decision because preventing sleep changes battery use.
+**Suspend/resume callbacks are observed, but repeated reliability is not
+established.** The test profile logged Windows Modern Standby and hibernation
+callbacks, paused the VM and suspended WHPX partition time; a fresh ADB query
+after resume reported boot readiness. Async startup, shutdown and controls also
+passed live checks, including rotation, navigation and close/reopen. This
+single overnight observation does not establish reliability across repeated
+standby/hibernate cycles or all host hardware. It also does not promise that
+the host is kept awake; no battery or power claim is made. See the [callback
+experiment](docs/NATIVE-VULKAN.md) and [async controls
+report](docs/NATIVE-VULKAN.md).
 
 **One VM runs at a time.** Vanilla and Google-app variants have separate data
 images, but they are alternatives selected at startup. They are not simultaneous
@@ -105,9 +123,10 @@ and writable data images; see [ROADMAP.md](ROADMAP.md).
 
 ## Packaging and licensing
 
-**The binaries are unsigned and there is no updater.** SmartScreen can warn or
-block execution under some policies. New versions require a manual download;
-there is no automatic notification or data migration.
+**The prerelease is not yet published; binaries are unsigned and there is no
+updater.** SmartScreen can warn or block execution under some policies. New
+versions require a manual download; there is no automatic notification or data
+migration.
 
 **The runtime DLL license inventory is incomplete.** The release ships 107
 MSYS2 DLLs; a per-library inventory remains outstanding. See
@@ -117,10 +136,12 @@ MSYS2 DLLs; a per-library inventory remains outstanding. See
 images are downloaded rather than redistributed, with their published hashes
 checked before use. Network availability is required on first run.
 
-**The audio HAL build is not reproducible from this repository alone.** The
+**Kernel and audio builds are not yet fully reproducible from this repository
+alone.**
 4096-frame `audio.primary.waydroid.so` is supplied as an overlay binary tied to
 the pinned vendor build. There is no complete public rebuild recipe for that
-artifact. This is distinct from the documented kernel and QEMU builds.
+artifact or the pinned kernel build. QEMU build instructions do not close this
+gap.
 
 **SELinux labelling remains unfinished.** The compositor and audio HAL overlays
 do not yet carry proper SELinux labels.

@@ -141,7 +141,7 @@ void finestra_fase(const char *nome, const char *esito)
     char aggiunta[128];
     DWORD ms = (DWORD)GetTickCount64() - fin_ora_avvio;
 
-    snprintf(aggiunta, sizeof(aggiunta), "%s%s: %s (%lu,%lu s)",
+    snprintf(aggiunta, sizeof(aggiunta), "%s%s: %s (%lu.%lu s)",
              fin_testo_fasi[0] ? "    " : "", nome, esito,
              ms / 1000, (ms % 1000) / 100);
     strncat(fin_testo_fasi, aggiunta,
@@ -223,7 +223,7 @@ void finestra_passo(void)
          * lunga per raggiungere la soglia). */
         if (len > FIN_LOG_TRONCA) {
             static const char marcatore[] =
-                "[guscio] (le righe piu' vecchie sono state scartate)\r\n";
+                "[shell] (older log lines were discarded)\r\n";
 
             SendMessageA(fin_log, EM_SETSEL, 0, 200000);
             SendMessageA(fin_log, EM_REPLACESEL, FALSE, (LPARAM)marcatore);

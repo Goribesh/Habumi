@@ -289,7 +289,7 @@ void winq_handle_pointer_event(uint64_t slot, int wx, int wy,
         qemu_input_event_sync();
         if (winq_diag_tocco()) {
             info_report("winq touch: last finger up, BTN_TOUCH to 0 "
-                        "(compensazione dell'asimmetria di "
+                        "(compensating for the asymmetry in "
                         "console_handle_touch_event)");
         }
     }

@@ -18,7 +18,7 @@
  *     (hw/display/virtio-gpu-virgl.c:1315-1327 -> ui/console.c:981-985), che fa
  *     assert(con->gl). Senza queste quattro funzioni QEMU muore con
  *     "assertion failed: (con->gl)" a poche righe di avvio del guest, misurato
- * tre volte su tre in quella verifica. con->gl si popola solo con
+ *     tre volte su tre nel Task 3. con->gl si popola solo con
  *     qemu_console_set_display_gl_ctx(), che winq_init chiama passando
  *     winq.dgc con questo ops.
  *
@@ -289,7 +289,7 @@ static QEMUGLContext winq_gl_ctx_create(DisplayGLCtx *dgc,
          * hw/display/virtio-gpu-virgl.c:1445-1447; da lui poi arrivano le
          * texture di scanout che presentiamo. Il prezzo di quel ripiego --
          * GLES del guest da 3.1 a 2.0 -- e' misurato e riferito nel rapporto
-         * di quella verifica: non e' aggirabile da questo file.
+         * del Task 4: non e' aggirabile da questo file.
          * Si stampa una volta sola: virglrenderer ritenta l'intera scala a
          * ogni inizializzazione, e venti righe identiche coprirebbero
          * qualunque messaggio utile. */
@@ -405,7 +405,7 @@ static void winq_ricontrolla_dimensione(void)
     }
     if (getenv("WINQ_DIAG_RESIZE")) {
         info_report("winq resize: MISMATCH -- surface %dx%d against window "
-                    "%dx%d, riarmi %d%s", (int)sw, (int)sh,
+                    "%dx%d, redraw_retries %d%s", (int)sw, (int)sh,
                     winq.geom.win_w, winq.geom.win_h, winq_riarmi,
                     winq_riarmi < 3 ? "" : " (EXHAUSTED: no more redraws)");
     }
@@ -471,7 +471,7 @@ static void winq_viewport(int *x, int *y, int *w, int *h)
             psw = (int)sw;
             psh = (int)sh;
             info_report("winq resize: window %dx%d surface %dx%d "
-                        "guest %dx%d riarmi %d",
+                        "guest %dx%d redraw_retries %d",
                         winq.geom.win_w, winq.geom.win_h, (int)sw, (int)sh,
                         winq.geom.guest_w, winq.geom.guest_h, winq_riarmi);
         }
@@ -648,7 +648,7 @@ void winq_present_scanout_disable(DisplayChangeListener *dcl)
     winq_modo_scanout(false);
 }
 
-/* winq: IL COSTO DELLA PRESENTAZIONE, dietro WINQ_GPU_DIAG.
+/* winq: IL COSTO DELLA PRESENTAZIONE, dietro WINQ_PRESENT_DIAG o WINQ_GPU_DIAG.
  *
  * PERCHE' ESISTE. Lo shim che conta le chiamate GL vive dentro virglrenderer;
  * la presentazione sta qui, in QEMU, e nessuna diagnostica l'ha mai contata.
@@ -659,7 +659,7 @@ void winq_present_scanout_disable(DisplayChangeListener *dcl)
  * misura: gli Unlock del kernel NON sono i cambi di contesto (tagliati quattro
  * volte, unlock giu' solo di 1,5) e NON sono ricambio di risorse (create e
  * unref a zero sotto carico, cinque identificatori fissi). Restano 25 Unlock e
- * 3 paginazioni per fotogramma senza padrone.
+ * 3 paginazioni per fotogramma senza padrone. Storia in qemu/PRESTAZIONI.md.
  *
  * Le tre voci misurate sono le tre cose che questo percorso fa per frame:
  *   - corrente: winq_corrente(), che e' un wglMakeCurrent verso il contesto
@@ -680,7 +680,7 @@ static bool winq_pres_diag(void)
     static int acceso = -1;
 
     if (acceso < 0) {
-        acceso = getenv("WINQ_GPU_DIAG") ? 1 : 0;
+        acceso = (getenv("WINQ_PRESENT_DIAG") || getenv("WINQ_GPU_DIAG")) ? 1 : 0;
     }
     return acceso == 1;
 }
@@ -694,9 +694,10 @@ static void winq_pres_riepilogo(int64_t ora)
     if (ora - winq_pres_inizio < 1000000) {
         return;
     }
-    error_report("winq-present/s: frame=%lu corrente=%lld us blit=%lld us "
-                 "swap=%lld us totale=%lld us",
-                 winq_pres_giri, (long long)winq_pres_corrente_us,
+    error_report("winq-present/s: window=%lld us frame=%lu make_current=%lld us blit=%lld us "
+                 "swap=%lld us total=%lld us",
+                 (long long)(ora - winq_pres_inizio), winq_pres_giri,
+                 (long long)winq_pres_corrente_us,
                  (long long)winq_pres_blit_us, (long long)winq_pres_swap_us,
                  (long long)(winq_pres_corrente_us + winq_pres_blit_us +
                              winq_pres_swap_us));
@@ -779,9 +780,9 @@ static void winq_disegna_scanout(void)
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
             glReadPixels(vx + vw / 2, vy + vh / 2, 1, 1,
                          GL_RGBA, GL_UNSIGNED_BYTE, px);
-            info_report("winq/diag: frame %d blit err=0x%x letto=%d(st 0x%x) "
-                        "scritto=%d(st 0x%x) dest=%d,%d %dx%d "
-                        "guest_fb=%u %ux%u pixel=%u,%u,%u,%u err_letto=0x%x",
+            info_report("winq/diag: frame %d blit err=0x%x read=%d(st 0x%x) "
+                        "write=%d(st 0x%x) dest=%d,%d %dx%d "
+                        "guest_fb=%u %ux%u pixel=%u,%u,%u,%u read_error=0x%x",
                         chiamate, err, fb_letto, st_r, fb_scritto, st_w,
                         vx, vy, vw, vh,
                         winq_guest_fb.framebuffer,
@@ -817,6 +818,7 @@ void winq_present_gl_update(DisplayChangeListener *dcl,
     if (!winq_scanout_mode) {
         return;
     }
+    winq_segnala_attivita();
     winq_disegna_scanout();
 }
 
@@ -861,6 +863,7 @@ static void winq_ds_recupera(void)
     }
     surface_gl_create_texture(winq_gls, winq_ds);
     winq_ds_senza_texture = false;
+    winq_segnala_attivita();
     winq_updates++;
     info_report("winq: 2D surface texture created late, "
                 "the context was not current at the surface change");
@@ -869,6 +872,7 @@ static void winq_ds_recupera(void)
 void winq_present_gfx_switch(DisplayChangeListener *dcl,
                              DisplaySurface *new_surface)
 {
+    winq_segnala_attivita();
     if (!winq_corrente()) {
         /* Senza contesto non si distrugge la texture vecchia: la perdita e'
          * inevitabile e vale una superficie, mentre il puntatore va aggiornato
@@ -901,6 +905,7 @@ void winq_present_gfx_update(DisplayChangeListener *dcl,
     }
     winq_ds_recupera();
     surface_gl_update_texture(winq_gls, winq_ds, x, y, w, h);
+    winq_segnala_attivita();
     winq_updates++;
 }
 

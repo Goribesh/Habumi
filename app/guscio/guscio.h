@@ -76,8 +76,8 @@ typedef struct {
      * false, cioe' NON si aspetta, e non e' una scelta a occhio -- il costo di
      * una commutazione e' MISURATO, 257 us con l'attesa contro 26-29 senza, con
      * il ciclo principale che passa dal 69% al 37% del secondo e glmark2 da
-     * 803-856 a 1322-1463, su tre misure contro due. Il cancello visivo sullo
-     * sfarfallio -- cio' per cui a
+     * 803-856 a 1322-1463 (tabella in qemu/PRESTAZIONI.md, 13/08/2026, tre
+     * misure contro due). Il cancello visivo sullo sfarfallio -- cio' per cui a
      * monte l'attesa era stata aggiunta -- e' stato dato sulla finestra vera e
      * non ha mostrato niente.
      * Vale solo con gl=wgl: e' una variabile della nostra opengl32.dll, e sul
@@ -87,8 +87,8 @@ typedef struct {
     /* Moltiplicare la risoluzione del guest per la scala dello schermo. Default
      * (del codice) false: chi non scrive la chiave in config.txt non
      * paga nulla. NON e' piu' una leva ignota: il costo a 2560x1600 (200% su
-     * questa macchina) e' MISURATO (tabella nel commento della chiave in
-     * runtime/bin/config.txt), e la
+     * questa macchina) e' MISURATO (tabella in qemu/PRESTAZIONI.md, ripetuta
+     * nel commento della chiave in runtime/bin/config.txt), e la
      * densita' che Android calcolerebbe dall'EDID alla risoluzione alzata --
      * sbagliata di suo -- viene corretta dalla chiave densita' qui sotto. */
     bool scala_guest;
@@ -101,6 +101,9 @@ typedef struct {
      * per come winq la usa DAVVERO in entrambi i punti che decidono la
      * frequenza -- prima uno solo dei due la leggeva. */
     int hz;
+    /* Frequenza all'avvio a batteria, 0 = stessa scelta di hz. Non aumenta
+     * una hz esplicita piu' bassa e non cambia durante una VM gia' avviata. */
+    int hz_batteria;
     /* Densita' logica da imporre al guest con "wm density", 0 = non toccare
      * (comportamento di oggi). Applicata UNA VOLTA da main.c appena Android e'
      * pronto (VM_PRONTO), non da qui: config.c non parla con adb. Vedi il
@@ -119,6 +122,7 @@ typedef struct {
 } Config;
 
 void config_default(Config *c);
+int config_hz_effettivi(const Config *c, bool batteria);
 
 /* Non fallisce mai: parte dai default, applica cio' che riesce a leggere, e
  * scrive nel registro ogni riga ignorata con la sua ragione. */
@@ -223,7 +227,7 @@ int adb_ultima_riga(const char *uscita, char *dest, int max);
 /* Quanto tempo concedere a un trasferimento di TOT byte in TOT file, in ms.
  *
  * Non e' una scadenza di inattivita', e non per scelta: adb NON stampa il
- * progresso su un tubo rediretto -- misurato, 600 MB con sette
+ * progresso su un tubo rediretto -- misurato il 04/08/2026, 600 MB con sette
  * secondi di tubo muto, e l'unico flag che esiste (-q) serve a sopprimere il
  * progresso, non a pretenderlo. Vedi app/misure/pf-misure-preliminari.md.
  * Quindi il tempo si commisura al LAVORO invece di sorvegliare l'avanzamento.
@@ -262,12 +266,52 @@ bool adb_keyevent(const Config *c, const char *keycode);
  * Un involucro sottile su guscio_percorso_accanto (vedi sopra): adb_esegui/
  * adb_collega e vm_verifica_file la condividono, cosi' non esistono due copie
  * della stessa costruzione che possano divergere in silenzio (la revisione
- * di quella verifica ne ha trovate gia' due, e diverse). */
+ * del Task 3 ne ha trovate gia' due, e diverse). */
 void adb_percorso(char *dove, int max);
 
 /* Spegne Android pulito. MISURATO: la seriale chiude con "reboot: Power down" e
  * QEMU esce da se' in 7 s. */
 bool adb_spegni(const Config *c);
+
+/* Nonblocking shutdown client; poll from the VM timer and always close it.
+ * Closing cancels only this owned client, never the shared ADB server. */
+typedef struct AdbCliente AdbSpegnimento;
+typedef enum {
+    ADB_SPEGNI_ATTESA,
+    ADB_SPEGNI_OK,
+    ADB_SPEGNI_ERRORE
+} AdbSpegniStato;
+AdbSpegnimento *adb_spegni_avvia(const Config *c);
+AdbSpegniStato adb_spegni_passo(AdbSpegnimento *richiesta);
+/* False retains ownership: cancellation has not completed yet. */
+bool adb_spegni_chiudi(AdbSpegnimento *richiesta);
+
+/* One asynchronous boot check: property, optional connect, then one retry.
+ * The whole check has a 20-second deadline; completion never trusts serial logs. */
+typedef struct AdbPreparazione AdbPreparazione;
+typedef enum { ADB_PRONTO_ATTESA, ADB_PRONTO_SI, ADB_PRONTO_NO } AdbProntoStato;
+AdbPreparazione *adb_pronto_avvia(const Config *c);
+AdbProntoStato adb_pronto_passo(AdbPreparazione *richiesta);
+/* False retains ownership until cancellation actually completes. */
+bool adb_pronto_chiudi(AdbPreparazione *richiesta);
+
+typedef struct AdbCliente AdbComando;
+AdbComando *adb_comando_avvia(const Config *c, const char *comando);
+AdbSpegniStato adb_comando_passo(AdbComando *richiesta, char *uscita,
+                               int max, bool *troncata);
+bool adb_comando_chiudi(AdbComando *richiesta);
+
+/* UI-thread-only FIFO; VM lifetime cancels it before shutdown or restart. */
+typedef enum {
+    COMANDO_POWER, COMANDO_VOL_SU, COMANDO_VOL_GIU, COMANDO_HOME,
+    COMANDO_BACK, COMANDO_RECENTI, COMANDO_RUOTA, COMANDO_DENSITA
+} ComandoUi;
+bool comandi_accoda(const Config *c, ComandoUi tipo, int valore);
+void comandi_passo(void);
+bool comandi_annulla(void);
+bool comandi_in_corso(void);
+/* VM timer fallback retries retained cancellation without dispatching commands. */
+void comandi_pulizia(void);
 
 /* Legge la risoluzione che il guest crede di avere, da "wm size". Serve a
  * verificare che una rotazione sia stata recepita. */
@@ -466,7 +510,7 @@ void dpi_applica_scala_guest(Config *c, UINT dpi);
  *
  * PERCHE' NON BASTA SCAMBIARE w e h, ed e' il difetto che questa funzione chiude:
  * la rotazione chiedeva "scambia cio' che dice wm size", e wm size in questo QEMU
- * NON CAMBIA MAI. MISURATO nel registro del prodotto -- tre
+ * NON CAMBIA MAI. MISURATO il 04/08/2026 nel registro del prodotto -- tre
  * pressioni, tre volte lo stesso bersaglio (2560x1600 -> 1600x2560) mentre il
  * verso alternava correttamente. Effetto: dopo la prima pressione il framebuffer
  * restava verticale per sempre, e quando Android tornava orizzontale il contenuto
@@ -561,7 +605,7 @@ int apk_comando(char *dest, int max, const char *percorso);
  * Il conteggio avviene dentro il wndproc -- serve per dichiarare "214 file,
  * 1,3 GB" nel dialogo, e per dirlo bisogna averlo contato -- quindi un albero
  * enorme congelerebbe la finestra proprio mentre deve raccontare cosa sta
- * facendo. MISURATO (test-rilascio, che stampa il tempo):
+ * facendo. MISURATO il 04/08/2026 (test-rilascio, che stampa il tempo):
  * duemila file percorsi in 0,5 ms, contro il battito da 500 ms della finestra e
  * i 5 ms della pompa dell'input. Il margine e' di tre ordini di grandezza.
  *
@@ -572,7 +616,7 @@ int apk_comando(char *dest, int max, const char *percorso);
 
 /* L'avviso che il dialogo porta SEMPRE quando si copiano file.
  *
- * Dice "rimosso" e non "sostituito" per una ragione MISURATA : un
+ * Dice "rimosso" e non "sostituito" per una ragione MISURATA il 04/08/2026: un
  * file era stato copiato (44 byte, verificati), il secondo tentativo sullo stesso
  * nome e' fallito con "remote couldn't create file", e nel guest non e' rimasto
  * NIENTE -- ne' il nuovo ne' il vecchio. adb apre il file remoto prima di sapere
@@ -583,8 +627,8 @@ int apk_comando(char *dest, int max, const char *percorso);
  * Controllare le collisioni prima costerebbe un adb dentro il percorso della UI,
  * che bloccherebbe la finestra fino alla propria scadenza: si dichiara invece di
  * controllare. */
-#define RIL_AVVISO "Un file con lo stesso nome viene rimosso, e se la copia " \
-                   "non riesce non si recupera."
+#define RIL_AVVISO "An existing file with the same name is removed. If copying " \
+                   "fails, the removed file cannot be recovered."
 
 typedef struct {
     int voci_apk;

@@ -151,7 +151,7 @@ PY
 fi
 
 # --- 3. l'avviso quando non parte niente ------------------------------------
-if grep -q 'winq-snd: SID %u: nessun messaggio' "$MSG"; then
+if grep -Eq 'winq-snd: SID %u: (nessun messaggio|no message)' "$MSG"; then
     echo "  3/4 avviso in msg_send: gia' presente"
 else
     python3 - "$MSG" <<'PY'
@@ -443,6 +443,29 @@ PY
     echo "  6/6 un period_elapsed per periodo: aggiunto"
     fatto=1
 fi
+
+# Migra anche gli alberi gia' corretti: i testi originali erano italiani.
+python3 - "$MSG" "$OPS" "$ALBERO/sound/virtio/virtio_pcm.c" <<'PY'
+import sys
+traduzioni = {
+    "winq-snd: SID %u: nessun messaggio spedito con %lu byte pronti (periodo %lu, len[%lu]=%zu)":
+        "winq-snd: SID %u: no message sent with %lu bytes ready (period %lu, len[%lu]=%zu)",
+    "winq-snd: SID %u: %u messaggi con lunghezza residua, azzerati":
+        "winq-snd: SID %u: reset %u messages with residual lengths",
+    "winq-snd: SID %u: ritardo medio della coda di lavoro %llu us su %u periodi (budget 5333 us)":
+        "winq-snd: SID %u: average workqueue delay %llu us over %u periods (budget 5333 us)",
+}
+for percorso in sys.argv[1:]:
+    with open(percorso, encoding="utf-8") as f:
+        prima = f.read()
+    dopo = prima
+    for vecchio, nuovo in traduzioni.items():
+        dopo = dopo.replace(vecchio, nuovo)
+    if dopo != prima:
+        with open(percorso, "w", encoding="utf-8", newline="\n") as f:
+            f.write(dopo)
+        print("  runtime messages translated:", percorso)
+PY
 
 if [ "$fatto" = 0 ]; then
     echo "=== virtio-snd: albero gia' a posto, niente da fare"

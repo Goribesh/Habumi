@@ -1,6 +1,47 @@
 Habumi - README
 =======================
 
+RELEASE STATUS: 0.3.0-rc.1 IN PREPARATION
+------------------------------------------
+
+This prerelease is not published. It is being prepared with native Qualcomm
+Vulkan through Venus and Zink for GLES rendering and window composition. A
+development-machine test completed 3DMark Wild Life with visible scenes, but
+this is not broad hardware coverage or a guarantee for other applications.
+The benchmark displayed "Maxed out", so its internal score is not an official
+comparative score. A clean-data boot, readable Home, Vulkan enumeration, navigation and normal shutdown passed locally.
+
+Use a new, separate installation directory. The package contains no user's
+Android data. System and vendor images are downloaded and checked against
+published hashes, and the candidate creates a new 4 GiB data image. Do not
+overwrite an older installation or reuse its writable data image. A 16 GiB
+data image was used only in a local test profile and is not the release target.
+
+Expected starting configuration: GApps, 800x1280 logical display, density 426,
+1600x2560 guest framebuffer at 200% Windows scale,
+120 Hz on AC and 60 Hz on battery. These settings do not promise battery or
+energy savings.
+
+Initial graphics support is limited to Qualcomm Snapdragon Windows ARM64
+systems with a compatible native Vulkan ICD. If the ICD is missing, startup
+reports an error; it must not silently fall back to software rendering. The
+host Mesa 26.2.4 Zink build comes from the pinned mmozeiko/build-mesa asset.
+The machine's stock Vulkan driver is not redistributed. Other GPUs and
+hardware remain unverified.
+
+Async startup, shutdown, navigation, density and guest rotation passed live
+test-profile checks. Thirteen public shell suites (648 checks) and 133 async
+control checks passed; a normal test-profile shutdown took about five seconds.
+Windows suspend/resume callback handling is experimental and opt-in. A
+callback and post-resume boot query were observed, but repeated hibernation
+reliability has not been established. A clean-data packaged boot and normal shutdown passed locally.
+
+An archived synthetic Vulkan prototype estimated 9.2% median frame-time
+overhead, with an uncertainty interval crossing 10% and no confirmed FPS gain.
+It was not adopted as an optimization. No battery or energy benefit is claimed.
+Signing, an updater, hardware coverage and the complete runtime DLL license
+inventory remain outstanding.
+
 
 WHAT THIS IS
 ------------
@@ -36,11 +77,13 @@ and double-click:
 
 which sits in the main folder, the one you see right after unpacking.
 A black command-prompt window flashes for an instant: that is normal,
-it is only launching the real program, which is
+it is launching the shell at
 
     runtime\bin\Habumi.exe
 
-and which you can start directly instead, if you prefer.
+through `Start-Habumi.ps1`. Do not start `runtime\bin\Habumi.exe` directly
+for Vulkan: the launcher selects the native ICD and sets the required process
+environment for Venus and Zink.
 
 There is nothing to install: no Windows registry entries and no
 administrator rights to USE the program. The only thing that needs them
@@ -83,7 +126,8 @@ images are already on disk and are not downloaded again.
 THE TWO VARIANTS: VANILLA AND GAPPS
 ------------------------------------
 
-The program can run Android in two variants:
+The program can run Android in two variants. The 0.3.0-rc.1 candidate is
+expected to start with GApps by default:
 
 - VANILLA: without the Google apps (Play Store, Gmail, and so on).
 - GAPPS: with the Google apps included.
@@ -186,18 +230,19 @@ this is that offer, made precisely rather than generically:
 Anyone who wants the corresponding source can write to the address
 given on the page you obtained this archive from.
 
-MESA, AND IT IS MODIFIED TOO
+MESA OPENGL IMPLEMENTATION
 ----------------------------
 
-"opengl32.dll" in "runtime\bin" is Mesa, primarily under the MIT
-license. It is NOT the opengl32.dll that comes with Windows, and it is
-not a stock Mesa build either: it is the "d3d12" driver, built by us for
-Windows ARM64, with five patches on top. Without it this package would
-fall back on the system's OpenGL and lose what those patches do - one of
-them is the difference between starting and not starting at all.
+"opengl32.dll" in "runtime\bin" is Mesa 26.2.4 with the Zink driver,
+based on the pinned Windows ARM64 asset from mmozeiko/build-mesa. It is
+not the OpenGL implementation shipped with Windows. The development machine's
+Qualcomm Vulkan ICD is selected by the launcher and is not redistributed by
+this package. If the required ICD is unavailable, the launcher reports an
+error rather than choosing software rendering.
 
-Starting point, the patches one by one, the MIT text and the fact that
-Mesa is NOT uniformly MIT: "LICENSES\MESA-NOTA.txt".
+The Mesa starting point, license text and the fact that Mesa is not uniformly
+MIT are documented in "LICENSES\MESA-NOTA.txt". Other GPUs have not been
+validated for this candidate.
 
 
 VIRGLRENDERER, ALSO MODIFIED

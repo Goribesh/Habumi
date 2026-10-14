@@ -103,7 +103,7 @@ command -v git >/dev/null 2>&1 || { echo "FERMO: serve git per applicare la patc
 # li elenca), e la lista non li copiava. Invisibile sull'albero innestato, dove il
 # file c'e' da una copia a mano di allora; fatale su un albero vergine, dove
 # configure si ferma con "File winq-rotella.c does not exist" -- trovato il
-# provando per la prima volta la ricostruzione da tarball.
+# 13/08/2026 provando per la prima volta la ricostruzione da tarball.
 #
 # La glob winq* esclude da se' i test (test-winq-*.c) e i loro .exe, che nel
 # prodotto non entrano. Un elenco si dimentica; una glob no, ed e' la stessa
@@ -143,7 +143,7 @@ GIT="git -c core.autocrlf=false"
 # La domanda e' "questa modifica e' nell'albero?". Le due coincidono solo se
 # nessun'altra patch ha toccato il contesto attorno -- e qui cinque delle sei
 # toccano lo stesso hw/display/virtio-gpu-virgl.c, quindi si calpestano il
-# contesto a vicenda. Misurato sull'albero innestato e
+# contesto a vicenda. Misurato il 13/08/2026 sull'albero innestato e
 # funzionante:
 #
 #   patch                       patch -R (=dentro)   git apply -R
@@ -164,7 +164,7 @@ GIT="git -c core.autocrlf=false"
 # forte in pratica, perche' risponde alla domanda giusta e non si rompe quando
 # una patch vicina cambia il contesto.
 #
-# La tabella qui sopra e' di PRIMA della rigenerazione : le patch di
+# La tabella qui sopra e' di PRIMA della rigenerazione del 13/08: le patch di
 # oggi si applicano tutte in ordine su un albero vergine (vedi il blocco in fondo
 # a questo script), quindi su un albero vergine anche git apply --reverse
 # tornerebbe a funzionare. Il marcatore resta comunque la prova giusta, perche'
@@ -212,7 +212,7 @@ innesta qemu-diagnostica-gpu-tempo.patch WINQ_CTX_FORCE0 hw/display/virtio-gpu-v
 # chiamata incondizionatamente prima di ogni comando; ora e' selettiva per
 # tipo, con un elenco di esclusione la cui sicurezza sta nel default
 # (chiamare), non nella lista -- vedi il commento sopra winq_ctx0_serve() in
-# hw/display/virtio-gpu-virgl.c.
+# hw/display/virtio-gpu-virgl.c. PRESTAZIONI.md, sezione "La causa, misurata".
 innesta qemu-force-ctx0-selettivo.patch winq_ctx0_serve hw/display/virtio-gpu-virgl.c \
         "chiamata selettiva a force_ctx_0"
 
@@ -220,7 +220,7 @@ innesta qemu-force-ctx0-selettivo.patch winq_ctx0_serve hw/display/virtio-gpu-vi
 # ma non elencata qui, quindi un innesto su un albero pulito non l'avrebbe mai
 # messa e la riga winq-res/s sarebbe sparita senza che nessuno se ne accorgesse
 # -- si sarebbe letto "nessun ricambio di risorse" da una diagnostica assente.
-# Trovato mentre si aggiungeva la patch delle fasi, che dipende
+# Trovato il 12/08/2026 mentre si aggiungeva la patch delle fasi, che dipende
 # da questa (tocca il getenv dentro winq_res_conta): l'ordine qui sotto non e'
 # estetico, e' un vincolo.
 innesta qemu-diagnostica-risorse.patch WINQ_RES_MAX hw/display/virtio-gpu-virgl.c \
@@ -235,7 +235,7 @@ innesta qemu-fasi-submit3d.patch WINQ_FASE_CODA hw/display/virtio-gpu-virgl.c \
         "fasi di SUBMIT_3D"
 
 # WINQ_SUBMIT_SENZA_CTX0: esisteva SOLO nell'albero, in nessuna patch. Trovata il
-# rigenerando l'insieme: 47 righe -- l'interruttore piu' il suo
+# 13/08/2026 rigenerando l'insieme: 47 righe -- l'interruttore piu' il suo
 # commento -- che ricostruendo da vergine mancavano. Se quell'albero si fosse
 # perso, quel codice era perso con lui, e nessuno se ne sarebbe accorto fino a
 # quando qualcuno avesse riletto l'esperimento dell'11/08 nel commento che non
@@ -247,9 +247,13 @@ innesta qemu-submit-senza-ctx0.patch WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gp
 # Diagnostica del ciclo WHPX, nata dall'issue #1: ogni 10 s una riga per vCPU
 # con uscite, tempo dentro/fuori dall'hypervisor e pagine MMIO piu' battute.
 # Tocca un file suo (target/arm/whpx/whpx-all.c), quindi non calpesta il
-# contesto di nessuna delle patch qui sopra. Si spegne con WINQ_WHPX_STAT=0.
+# contesto di nessuna delle patch qui sopra. La patch successiva rende la
+# raccolta esplicitamente opzionale con WINQ_WHPX_STAT=1.
 innesta qemu-diagnostica-whpx.patch winq_whpx_stat target/arm/whpx/whpx-all.c \
         "diagnostica del ciclo WHPX"
+
+innesta qemu-whpx-stat-opt-in.patch winq_whpx_opt_in target/arm/whpx/whpx-all.c \
+        "diagnostica WHPX solo su richiesta"
 
 # La riparazione dell'issue #1: le feature sintetiche Hyper-V concesse di
 # default alla partizione. Sul Surface Pro 12 (X1P-42) la sola concessione
@@ -258,11 +262,15 @@ innesta qemu-diagnostica-whpx.patch winq_whpx_stat target/arm/whpx/whpx-all.c \
 innesta qemu-hv-sintetici.patch winq_hv_sintetici target/arm/whpx/whpx-all.c \
         "feature sintetiche Hyper-V di default"
 
-# CANCELLO PRIMA DI COMPILARE: tutti e otto i marcatori, o non si compila.
+# Solo testi: applicare dopo le patch che introducono queste diagnostiche.
+innesta qemu-user-messages-english.patch "synthetic features granted to the partition" \
+        target/arm/whpx/whpx-all.c "runtime messages in English"
+
+# CANCELLO PRIMA DI COMPILARE: tutti i marcatori, o non si compila.
 #
 # Serve perche' il guasto che questo script ha avuto per due giorni era SILENZIOSO
 # nell'altra direzione: una patch dimenticata nell'elenco (e' successo due volte
-# -- diagnostica-risorse, diagnostica-virtio-snd ) produce un
+# -- diagnostica-risorse il 12/08, diagnostica-virtio-snd il 13/08) produce un
 # binario che compila, gira, e ha una diagnostica in meno o il ritiro fence
 # sincrono. Nessun errore, solo numeri diversi che poi si attribuiscono a
 # qualcos'altro. Un elenco si dimentica; un cancello no.
@@ -284,6 +292,7 @@ verifica_marcatore WINQ_RES_MAX        hw/display/virtio-gpu-virgl.c      "diagn
 verifica_marcatore WINQ_FASE_CODA      hw/display/virtio-gpu-virgl.c      "fasi di SUBMIT_3D"
 verifica_marcatore WINQ_SUBMIT_SENZA_CTX0 hw/display/virtio-gpu-virgl.c   "interruttore WINQ_SUBMIT_SENZA_CTX0"
 verifica_marcatore winq_whpx_stat      target/arm/whpx/whpx-all.c         "diagnostica del ciclo WHPX"
+verifica_marcatore winq_whpx_opt_in    target/arm/whpx/whpx-all.c         "diagnostica WHPX opzionale"
 verifica_marcatore winq_hv_sintetici   target/arm/whpx/whpx-all.c         "feature sintetiche Hyper-V"
 if [ -n "$MANCANTI" ]; then
     echo "FERMO: l'albero non ha tutte le nostre modifiche. Manca:$MANCANTI"
@@ -294,7 +303,7 @@ echo "=== $QUANTI marcatori su $QUANTI presenti"
 
 # L'INSIEME RICOSTRUISCE L'ALBERO, e da oggi e' verificato -- prima non era vero.
 #
-# Fino al queste patch erano state catturate in momenti diversi contro
+# Fino al 13/08/2026 queste patch erano state catturate in momenti diversi contro
 # alberi via via piu' innestati, quindi il contesto di una conteneva righe
 # aggiunte da un'altra. Misurato allora: nessuna delle 120 permutazioni le
 # applicava tutte e sei su un albero vergine, e due modificavano lo stesso blocco

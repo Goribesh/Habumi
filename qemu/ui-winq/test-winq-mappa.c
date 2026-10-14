@@ -421,7 +421,7 @@ static void prova_joystick_stretto_valido_su_area_non_quadrata(void)
     CHECK(mappa_carica(fuori, scrivi("joystick WASD 500 100 200\n"),
                        err, sizeof(err), &riga) == false);
     CHECK(riga == 1);
-    CHECK(strstr(err, "esce dall'area") != NULL);
+    CHECK(strstr(err, "outside the area") != NULL);
 
     mappa_distruggi(m);
     mappa_distruggi(quadrata);
@@ -914,7 +914,7 @@ static void prova_salva_conserva_commenti_in_testa(void)
     CHECK(strstr(riletto, "# terza, dopo una riga vuota") != NULL);
     /* L'intestazione fissa NON si aggiunge sopra i commenti che c'erano: il
      * file crescerebbe di due righe a ogni salvataggio. */
-    CHECK(strstr(riletto, "scritta dal modo impara") == NULL);
+    CHECK(strstr(riletto, "saved by learn mode") == NULL);
     /* E cio' che si e' scritto si rilegge: i commenti conservati non devono
      * poter rompere il lettore. */
     CHECK(mappa_carica(m2, nome, err, sizeof(err), &riga) == true);
@@ -928,7 +928,7 @@ static void prova_salva_conserva_commenti_in_testa(void)
         letti = fread(riletto, 1, sizeof(riletto) - 1, f);
         riletto[letti] = '\0';
         fclose(f);
-        CHECK(strstr(riletto, "scritta dal modo impara") != NULL);
+        CHECK(strstr(riletto, "saved by learn mode") != NULL);
     }
 
     remove("test-mappa-senza-testa.txt");
@@ -1029,7 +1029,7 @@ static void prova_riga_troppo_lunga(void)
 
     CHECK(mappa_carica(m, scrivi(testo), err, sizeof(err), &riga) == false);
     CHECK(riga == 2);
-    CHECK(strstr(err, "troppo lunga") != NULL);
+    CHECK(strstr(err, "too long") != NULL);
 
     /* L'ULTIMA riga di un file puo' legittimamente non avere il '\n' finale:
      * quello non e' "troppo lunga". */
@@ -1191,6 +1191,17 @@ static void prova_salva_e_rileggi_nome_esteso(void)
     CHECK(mappa_impara_punto(m, 500, 850) == MAPPA_ESITO_FATTO);
 
     CHECK(mappa_salva(m, "test-mappa-salvata-nome.txt", err, sizeof(err)) == true);
+    {
+        FILE *f = fopen("test-mappa-salvata-nome.txt", "rb");
+        char testo[512] = {0};
+        CHECK(f != NULL);
+        if (f) {
+            fread(testo, 1, sizeof(testo) - 1, f);
+            fclose(f);
+            CHECK(strstr(testo, "touch SPACE 500 850") != NULL);
+            CHECK(strstr(testo, "SPAZIO") == NULL);
+        }
+    }
     CHECK(mappa_carica(m2, "test-mappa-salvata-nome.txt", err, sizeof(err), &riga) == true);
     CHECK(mappa_tasto(m2, vk_spazio, true, false, az, MAPPA_AZIONI_MAX) == 1);
     CHECK(az[0].x_pm == 500 && az[0].y_pm == 850);
@@ -1202,6 +1213,20 @@ static void prova_salva_e_rileggi_nome_esteso(void)
 
 int main(void)
 {
+    {
+        Mappa *m = mappa_crea();
+        char err[128];
+        int riga;
+        CHECK(mappa_carica(m, scrivi("touch SPACE 100 100\n"
+                                   "touch ENTER 200 200\n"
+                                   "touch SHIFT 300 300\n"
+                                   "touch UP 400 400\n"
+                                   "touch DOWN 500 500\n"
+                                   "touch LEFT 600 600\n"
+                                   "touch RIGHT 700 700\n"),
+                           err, sizeof(err), &riga));
+        mappa_distruggi(m);
+    }
     prova_file_valido();
     prova_solo_commenti();
     prova_caso_cattivo("touch NONESISTE 100 100\n", 1);

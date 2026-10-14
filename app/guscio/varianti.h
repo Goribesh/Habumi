@@ -30,6 +30,16 @@
 
 typedef enum { VAR_VANILLA = 0, VAR_GAPPS = 1, VAR_QUANTE = 2 } VarNome;
 
+/* Unica chiave condivisa da lettore e scrittore della configurazione. */
+#define VAR_CONFIG_CHIAVE "variant"
+
+/* Sostituisce la selezione, migra "variante" e toglie chiavi duplicate.
+ * Conserva tutte le altre righe; aggiunge un newline prima della chiave
+ * se il file ne era privo. Ritorna byte scritti (senza NUL), zero se non
+ * c'e' spazio: in quel caso il chiamante non deve salvare il buffer. */
+size_t var_config_riscrivi(const char *testo, VarNome v,
+                          char *fuori, size_t max);
+
 /* Cio' che si sa di un'immagine: come si chiama il file scaricato, la sua
  * impronta e quanti byte deve avere. Vuota (nome[0] == 0) se non e' mai stata
  * scelta.

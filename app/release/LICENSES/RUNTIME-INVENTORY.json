@@ -1,0 +1,2388 @@
+{
+  "title": "Runtime DLL provenance inventory",
+  "scope": "DLLs in Habumi-Native-Vulkan/runtime/bin release profile, cross-checked against candidate runtime/bin and installed MSYS2 CLANGARM64 binaries",
+  "completeAudit": false,
+  "limitations": [
+    "Only exact SHA-256 matches to installed MSYS2 binaries are attributed as verified MSYS2 release binaries. Candidate package metadata is separately identified when hashes differ.",
+    "Android platform-tools and the release-profile Mesa renderer are maintainer-attributed. Their platform-tools version is not independently verified; Mesa attribution is maintainer-provided.",
+    "License texts are included only when available under local MSYS2 package license directories.",
+    "Native renderer hash is the isolated release build, intentionally different from the development profile."
+  ],
+  "dlls": [
+    {
+      "filename": "AdbWinApi.dll",
+      "sha256": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965",
+      "package": "Android SDK Platform-Tools (maintainer-attributed)",
+      "version": null,
+      "declaredLicense": null,
+      "candidateMsys2": {
+        "package": null,
+        "version": null,
+        "declaredLicense": null
+      },
+      "matchingBinary": {
+        "profileHash": "120bef587119c6cb926b86b9be90fdfbce38937588eae28cd91a94ce63c7b965",
+        "profileMatches": true,
+        "msys2Hash": null,
+        "msys2Matches": false
+      },
+      "licenseFiles": [
+        "ANDROID-PLATFORM-TOOLS-NOTICE.txt"
+      ],
+      "status": "UNVERIFIED - Android platform-tools; maintainer-attributed; existing notice"
+    },
+    {
+      "filename": "AdbWinUsbApi.dll",
+      "sha256": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60",
+      "package": "Android SDK Platform-Tools (maintainer-attributed)",
+      "version": null,
+      "declaredLicense": null,
+      "candidateMsys2": {
+        "package": null,
+        "version": null,
+        "declaredLicense": null
+      },
+      "matchingBinary": {
+        "profileHash": "6ca69a2ca0e31309c087d288f058977d421ad03500e4c3e1dbd981241a069c60",
+        "profileMatches": true,
+        "msys2Hash": null,
+        "msys2Matches": false
+      },
+      "licenseFiles": [
+        "ANDROID-PLATFORM-TOOLS-NOTICE.txt"
+      ],
+      "status": "UNVERIFIED - Android platform-tools; maintainer-attributed; existing notice"
+    },
+    {
+      "filename": "libaom.dll",
+      "sha256": "c8afd73657d63c15c7a5ebc3639db6464c5557ea1583727a5e84b3a3abdeb0c0",
+      "package": "mingw-w64-clang-aarch64-aom",
+      "version": "3.14.1-1",
+      "declaredLicense": "spdx:BSD-2-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-aom",
+        "version": "3.14.1-1",
+        "declaredLicense": "spdx:BSD-2-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "c8afd73657d63c15c7a5ebc3639db6464c5557ea1583727a5e84b3a3abdeb0c0",
+        "profileMatches": true,
+        "msys2Hash": "c8afd73657d63c15c7a5ebc3639db6464c5557ea1583727a5e84b3a3abdeb0c0",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-aom/aom/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libatk-1.0-0.dll",
+      "sha256": "574828f5d2bfda6c2c0d73607c9c3ce05ce549d1dc4d0ef9ec68021cc5575bc1",
+      "package": "mingw-w64-clang-aarch64-atk",
+      "version": "2.60.5-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-atk",
+        "version": "2.60.5-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "574828f5d2bfda6c2c0d73607c9c3ce05ce549d1dc4d0ef9ec68021cc5575bc1",
+        "profileMatches": true,
+        "msys2Hash": "574828f5d2bfda6c2c0d73607c9c3ce05ce549d1dc4d0ef9ec68021cc5575bc1",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-atk/at-spi2-core/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libavif-16.dll",
+      "sha256": "7589ca3d5013dcf36d35937db30bba07e225ed0d432d83b83488df89230b2df7",
+      "package": "mingw-w64-clang-aarch64-libavif",
+      "version": "1.4.2-1",
+      "declaredLicense": "spdx:BSD-2-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libavif",
+        "version": "1.4.2-1",
+        "declaredLicense": "spdx:BSD-2-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "7589ca3d5013dcf36d35937db30bba07e225ed0d432d83b83488df89230b2df7",
+        "profileMatches": true,
+        "msys2Hash": "7589ca3d5013dcf36d35937db30bba07e225ed0d432d83b83488df89230b2df7",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libavif/libavif/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libbrotlicommon.dll",
+      "sha256": "6f2ab8fa291bfa9b3c8fd335a68c17094ee1f72db313e4ffe1f598a375126a7e",
+      "package": "mingw-w64-clang-aarch64-brotli",
+      "version": "1.2.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-brotli",
+        "version": "1.2.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "6f2ab8fa291bfa9b3c8fd335a68c17094ee1f72db313e4ffe1f598a375126a7e",
+        "profileMatches": true,
+        "msys2Hash": "6f2ab8fa291bfa9b3c8fd335a68c17094ee1f72db313e4ffe1f598a375126a7e",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-brotli/brotli/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libbrotlidec.dll",
+      "sha256": "916b14535c4cedd0edb53c6a3dc883f1223b8a378ec4838353b37f36cbf23822",
+      "package": "mingw-w64-clang-aarch64-brotli",
+      "version": "1.2.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-brotli",
+        "version": "1.2.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "916b14535c4cedd0edb53c6a3dc883f1223b8a378ec4838353b37f36cbf23822",
+        "profileMatches": true,
+        "msys2Hash": "916b14535c4cedd0edb53c6a3dc883f1223b8a378ec4838353b37f36cbf23822",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-brotli/brotli/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libbrotlienc.dll",
+      "sha256": "1bda85bb404c34879bced21a14004156471a5524a9a442791bb56f606fe52bc6",
+      "package": "mingw-w64-clang-aarch64-brotli",
+      "version": "1.2.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-brotli",
+        "version": "1.2.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "1bda85bb404c34879bced21a14004156471a5524a9a442791bb56f606fe52bc6",
+        "profileMatches": true,
+        "msys2Hash": "1bda85bb404c34879bced21a14004156471a5524a9a442791bb56f606fe52bc6",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-brotli/brotli/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libbz2-1.dll",
+      "sha256": "594db4ebf1f5323d0c6fe4a8eb1fee3878a1d35ca94ab952385c122e0a3924ad",
+      "package": "mingw-w64-clang-aarch64-bzip2",
+      "version": "1.0.8-3",
+      "declaredLicense": "custom",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-bzip2",
+        "version": "1.0.8-3",
+        "declaredLicense": "custom"
+      },
+      "matchingBinary": {
+        "profileHash": "594db4ebf1f5323d0c6fe4a8eb1fee3878a1d35ca94ab952385c122e0a3924ad",
+        "profileMatches": true,
+        "msys2Hash": "594db4ebf1f5323d0c6fe4a8eb1fee3878a1d35ca94ab952385c122e0a3924ad",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-bzip2/bzip2/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libc++.dll",
+      "sha256": "863b2275e85846197903fdb398b476737ddb0fda57406450683a9ce41ee79262",
+      "package": "mingw-w64-clang-aarch64-libc++",
+      "version": "22.1.8-1",
+      "declaredLicense": "spdx:Apache-2.0 WITH LLVM-exception",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libc++",
+        "version": "22.1.8-1",
+        "declaredLicense": "spdx:Apache-2.0 WITH LLVM-exception"
+      },
+      "matchingBinary": {
+        "profileHash": "863b2275e85846197903fdb398b476737ddb0fda57406450683a9ce41ee79262",
+        "profileMatches": true,
+        "msys2Hash": "863b2275e85846197903fdb398b476737ddb0fda57406450683a9ce41ee79262",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libc++/libc++/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcacard-0.dll",
+      "sha256": "f7c1519080d8550e2aff39e784f11b01a6445c9d6469bfaee12dcc9c2467f85a",
+      "package": "mingw-w64-clang-aarch64-libcacard",
+      "version": "2.8.1-2",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libcacard",
+        "version": "2.8.1-2",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "f7c1519080d8550e2aff39e784f11b01a6445c9d6469bfaee12dcc9c2467f85a",
+        "profileMatches": true,
+        "msys2Hash": "f7c1519080d8550e2aff39e784f11b01a6445c9d6469bfaee12dcc9c2467f85a",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libcacard/libcacard/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcairo-2.dll",
+      "sha256": "29e422b78d161caf6ef0b862150c21ed6d7c88806fb6bb620d29fb82c45fe892",
+      "package": "mingw-w64-clang-aarch64-cairo",
+      "version": "1.18.4-4",
+      "declaredLicense": "spdx:LGPL-2.1-or-later OR MPL-1.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-cairo",
+        "version": "1.18.4-4",
+        "declaredLicense": "spdx:LGPL-2.1-or-later OR MPL-1.1"
+      },
+      "matchingBinary": {
+        "profileHash": "29e422b78d161caf6ef0b862150c21ed6d7c88806fb6bb620d29fb82c45fe892",
+        "profileMatches": true,
+        "msys2Hash": "29e422b78d161caf6ef0b862150c21ed6d7c88806fb6bb620d29fb82c45fe892",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-cairo/cairo/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcairo-gobject-2.dll",
+      "sha256": "5a2e6d544ae85f7768f6c072b6af4bbe5adc1a89c29fa1f6f6235d7c8962ed59",
+      "package": "mingw-w64-clang-aarch64-cairo",
+      "version": "1.18.4-4",
+      "declaredLicense": "spdx:LGPL-2.1-or-later OR MPL-1.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-cairo",
+        "version": "1.18.4-4",
+        "declaredLicense": "spdx:LGPL-2.1-or-later OR MPL-1.1"
+      },
+      "matchingBinary": {
+        "profileHash": "5a2e6d544ae85f7768f6c072b6af4bbe5adc1a89c29fa1f6f6235d7c8962ed59",
+        "profileMatches": true,
+        "msys2Hash": "5a2e6d544ae85f7768f6c072b6af4bbe5adc1a89c29fa1f6f6235d7c8962ed59",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-cairo/cairo/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcapstone.dll",
+      "sha256": "9a3c9ee035e23dd05b3ed4ae482130974b63b380062e515fc9d9fd6551f30254",
+      "package": "mingw-w64-clang-aarch64-capstone",
+      "version": "5.0.9-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-capstone",
+        "version": "5.0.9-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "9a3c9ee035e23dd05b3ed4ae482130974b63b380062e515fc9d9fd6551f30254",
+        "profileMatches": true,
+        "msys2Hash": "9a3c9ee035e23dd05b3ed4ae482130974b63b380062e515fc9d9fd6551f30254",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-capstone/capstone/LICENSE.TXT"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcrypto-3-arm64.dll",
+      "sha256": "a67c058427ac9c59c4e3ab05e0840b7ef44867ee2cb211b0c6b40d4357662db7",
+      "package": "mingw-w64-clang-aarch64-openssl",
+      "version": "3.6.3-1",
+      "declaredLicense": "spdx:Apache-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-openssl",
+        "version": "3.6.3-1",
+        "declaredLicense": "spdx:Apache-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "a67c058427ac9c59c4e3ab05e0840b7ef44867ee2cb211b0c6b40d4357662db7",
+        "profileMatches": true,
+        "msys2Hash": "a67c058427ac9c59c4e3ab05e0840b7ef44867ee2cb211b0c6b40d4357662db7",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-openssl/openssl/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libcurl-4.dll",
+      "sha256": "e9412bdec410ee460d3b11109c1ffa0dd71f84e855df47e391c16a68e10994ee",
+      "package": "mingw-w64-clang-aarch64-curl",
+      "version": "8.21.0-2",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-curl",
+        "version": "8.21.0-2",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "e9412bdec410ee460d3b11109c1ffa0dd71f84e855df47e391c16a68e10994ee",
+        "profileMatches": true,
+        "msys2Hash": "e9412bdec410ee460d3b11109c1ffa0dd71f84e855df47e391c16a68e10994ee",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-curl/curl/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libdatrie-1.dll",
+      "sha256": "87a5a207eedf0515539f6965fa0df19eb751377f741105689a223093142efaaa",
+      "package": "mingw-w64-clang-aarch64-libdatrie",
+      "version": "0.2.14-1",
+      "declaredLicense": "LGPL",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libdatrie",
+        "version": "0.2.14-1",
+        "declaredLicense": "LGPL"
+      },
+      "matchingBinary": {
+        "profileHash": "87a5a207eedf0515539f6965fa0df19eb751377f741105689a223093142efaaa",
+        "profileMatches": true,
+        "msys2Hash": "87a5a207eedf0515539f6965fa0df19eb751377f741105689a223093142efaaa",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libdatrie/libdatrie/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libdav1d-7.dll",
+      "sha256": "4336bde484a7b4cf2f80c145e6d4b2154aaefa89b2ccb8e8e10a5e74eca91f80",
+      "package": "mingw-w64-clang-aarch64-dav1d",
+      "version": "1.5.4-1",
+      "declaredLicense": "spdx:BSD-2-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-dav1d",
+        "version": "1.5.4-1",
+        "declaredLicense": "spdx:BSD-2-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "4336bde484a7b4cf2f80c145e6d4b2154aaefa89b2ccb8e8e10a5e74eca91f80",
+        "profileMatches": true,
+        "msys2Hash": "4336bde484a7b4cf2f80c145e6d4b2154aaefa89b2ccb8e8e10a5e74eca91f80",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-dav1d/dav1d/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libdb-6.2.dll",
+      "sha256": "9d7a71ff8bed33d1d792ed71fe962deb860d504466f925cd6bcbe8da19e54981",
+      "package": "mingw-w64-clang-aarch64-db",
+      "version": "6.2.32-1",
+      "declaredLicense": "spdx:AGPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-db",
+        "version": "6.2.32-1",
+        "declaredLicense": "spdx:AGPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "9d7a71ff8bed33d1d792ed71fe962deb860d504466f925cd6bcbe8da19e54981",
+        "profileMatches": true,
+        "msys2Hash": "9d7a71ff8bed33d1d792ed71fe962deb860d504466f925cd6bcbe8da19e54981",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-db/db/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libdeflate.dll",
+      "sha256": "5be7f672fb5d1499455d3d8ed0e902d8da09418ee3585f6a8e4ef110f25a8db9",
+      "package": "mingw-w64-clang-aarch64-libdeflate",
+      "version": "1.25-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libdeflate",
+        "version": "1.25-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "5be7f672fb5d1499455d3d8ed0e902d8da09418ee3585f6a8e4ef110f25a8db9",
+        "profileMatches": true,
+        "msys2Hash": "5be7f672fb5d1499455d3d8ed0e902d8da09418ee3585f6a8e4ef110f25a8db9",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libdeflate/libdeflate/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libEGL.dll",
+      "sha256": "c082f7f26b0b5c1f9e63d847326f7765618ca3d43a8a6e34d2fcdda3307ff89d",
+      "package": "mingw-w64-clang-aarch64-angleproject",
+      "version": "2.1.r25748.890b5d8f-3",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-angleproject",
+        "version": "2.1.r25748.890b5d8f-3",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "c082f7f26b0b5c1f9e63d847326f7765618ca3d43a8a6e34d2fcdda3307ff89d",
+        "profileMatches": true,
+        "msys2Hash": "c082f7f26b0b5c1f9e63d847326f7765618ca3d43a8a6e34d2fcdda3307ff89d",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-angleproject/angleproject/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libepoxy-0.dll",
+      "sha256": "c5b3937f18fbff76004fe7e9fd99dc56cff7043c6d3a82d497fe491cc24b1375",
+      "package": "mingw-w64-clang-aarch64-libepoxy",
+      "version": "1.5.10-7",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libepoxy",
+        "version": "1.5.10-7",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "c5b3937f18fbff76004fe7e9fd99dc56cff7043c6d3a82d497fe491cc24b1375",
+        "profileMatches": true,
+        "msys2Hash": "c5b3937f18fbff76004fe7e9fd99dc56cff7043c6d3a82d497fe491cc24b1375",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libepoxy/libepoxy/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libexpat-1.dll",
+      "sha256": "c000edcc89b842a81068c1563e651865aeb106157676367876a8ea38b4cfeb4a",
+      "package": "mingw-w64-clang-aarch64-expat",
+      "version": "2.8.2-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-expat",
+        "version": "2.8.2-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "c000edcc89b842a81068c1563e651865aeb106157676367876a8ea38b4cfeb4a",
+        "profileMatches": true,
+        "msys2Hash": "c000edcc89b842a81068c1563e651865aeb106157676367876a8ea38b4cfeb4a",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-expat/expat/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libfdt-1.dll",
+      "sha256": "4938ba3c7a0007717a846276b3657f06d9a2f6565b8c92b506d0bb5354f116cf",
+      "package": "mingw-w64-clang-aarch64-dtc",
+      "version": "1.7.2-3",
+      "declaredLicense": "spdx:GPL-2.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-dtc",
+        "version": "1.7.2-3",
+        "declaredLicense": "spdx:GPL-2.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "4938ba3c7a0007717a846276b3657f06d9a2f6565b8c92b506d0bb5354f116cf",
+        "profileMatches": true,
+        "msys2Hash": "4938ba3c7a0007717a846276b3657f06d9a2f6565b8c92b506d0bb5354f116cf",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libffi-8.dll",
+      "sha256": "37c14c429e54a9187ee998399027c15e83541d35f6f4aca08c2c3a18459e8e87",
+      "package": "mingw-w64-clang-aarch64-libffi",
+      "version": "3.7.1-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libffi",
+        "version": "3.7.1-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "37c14c429e54a9187ee998399027c15e83541d35f6f4aca08c2c3a18459e8e87",
+        "profileMatches": true,
+        "msys2Hash": "37c14c429e54a9187ee998399027c15e83541d35f6f4aca08c2c3a18459e8e87",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libffi/libffi/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libfontconfig-1.dll",
+      "sha256": "21b3b5881745a2f6062c043ea22d049af7779da9089bef87f88c7247d3cfc03f",
+      "package": "mingw-w64-clang-aarch64-fontconfig",
+      "version": "2.18.2-1",
+      "declaredLicense": "custom",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-fontconfig",
+        "version": "2.18.2-1",
+        "declaredLicense": "custom"
+      },
+      "matchingBinary": {
+        "profileHash": "21b3b5881745a2f6062c043ea22d049af7779da9089bef87f88c7247d3cfc03f",
+        "profileMatches": true,
+        "msys2Hash": "21b3b5881745a2f6062c043ea22d049af7779da9089bef87f88c7247d3cfc03f",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-fontconfig/fontconfig/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libfreetype-6.dll",
+      "sha256": "6707259f147a2d24fd8358eef838fd925056f46d29683fc8e7756ef1ea858bbe",
+      "package": "mingw-w64-clang-aarch64-freetype",
+      "version": "2.14.3-1",
+      "declaredLicense": "spdx:GPL-2.0-or-later OR FTL",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-freetype",
+        "version": "2.14.3-1",
+        "declaredLicense": "spdx:GPL-2.0-or-later OR FTL"
+      },
+      "matchingBinary": {
+        "profileHash": "6707259f147a2d24fd8358eef838fd925056f46d29683fc8e7756ef1ea858bbe",
+        "profileMatches": true,
+        "msys2Hash": "6707259f147a2d24fd8358eef838fd925056f46d29683fc8e7756ef1ea858bbe",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-freetype/freetype/FTL.TXT",
+        "MSYS2/mingw-w64-clang-aarch64-freetype/freetype/GPLv2.TXT"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libfribidi-0.dll",
+      "sha256": "4d7f2383d57fdc54bc7511027596c1450da6792027c42e9ec2432a05e4f18efd",
+      "package": "mingw-w64-clang-aarch64-fribidi",
+      "version": "1.0.16-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-fribidi",
+        "version": "1.0.16-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "4d7f2383d57fdc54bc7511027596c1450da6792027c42e9ec2432a05e4f18efd",
+        "profileMatches": true,
+        "msys2Hash": "4d7f2383d57fdc54bc7511027596c1450da6792027c42e9ec2432a05e4f18efd",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-fribidi/fribidi/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgdk_pixbuf-2.0-0.dll",
+      "sha256": "98dd9df498e4f51d22ffb2060b784a490d6b27a104a9cc3f1c1eb4633031b1dd",
+      "package": "mingw-w64-clang-aarch64-gdk-pixbuf2",
+      "version": "2.44.7-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gdk-pixbuf2",
+        "version": "2.44.7-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "98dd9df498e4f51d22ffb2060b784a490d6b27a104a9cc3f1c1eb4633031b1dd",
+        "profileMatches": true,
+        "msys2Hash": "98dd9df498e4f51d22ffb2060b784a490d6b27a104a9cc3f1c1eb4633031b1dd",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-gdk-pixbuf2/gdk-pixbuf2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgdk-3-0.dll",
+      "sha256": "eacca6f531bfd7d86834a6f2e33f97998dea3eb75d52ec690c2113bb0723e241",
+      "package": "mingw-w64-clang-aarch64-gtk3",
+      "version": "3.24.52-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gtk3",
+        "version": "3.24.52-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "eacca6f531bfd7d86834a6f2e33f97998dea3eb75d52ec690c2113bb0723e241",
+        "profileMatches": true,
+        "msys2Hash": "eacca6f531bfd7d86834a6f2e33f97998dea3eb75d52ec690c2113bb0723e241",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-gtk3/gtk3/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgio-2.0-0.dll",
+      "sha256": "bf0124c6c5288851e5abc5dd62cbffd283c7f09f75549d8a5ec26b78636c1e45",
+      "package": "mingw-w64-clang-aarch64-glib2",
+      "version": "2.88.2-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-glib2",
+        "version": "2.88.2-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "bf0124c6c5288851e5abc5dd62cbffd283c7f09f75549d8a5ec26b78636c1e45",
+        "profileMatches": true,
+        "msys2Hash": "bf0124c6c5288851e5abc5dd62cbffd283c7f09f75549d8a5ec26b78636c1e45",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-glib2/glib2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libGLESv2.dll",
+      "sha256": "8b459a2a3cc5197614af8b14a99bc8b5c851747f06157b6410cdcc30899161fc",
+      "package": "mingw-w64-clang-aarch64-angleproject",
+      "version": "2.1.r25748.890b5d8f-3",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-angleproject",
+        "version": "2.1.r25748.890b5d8f-3",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "8b459a2a3cc5197614af8b14a99bc8b5c851747f06157b6410cdcc30899161fc",
+        "profileMatches": true,
+        "msys2Hash": "8b459a2a3cc5197614af8b14a99bc8b5c851747f06157b6410cdcc30899161fc",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-angleproject/angleproject/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libglib-2.0-0.dll",
+      "sha256": "9d2db26387056b438833452f0d91f3d089685f7301219d4fb379327f65b02360",
+      "package": "mingw-w64-clang-aarch64-glib2",
+      "version": "2.88.2-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-glib2",
+        "version": "2.88.2-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "9d2db26387056b438833452f0d91f3d089685f7301219d4fb379327f65b02360",
+        "profileMatches": true,
+        "msys2Hash": "9d2db26387056b438833452f0d91f3d089685f7301219d4fb379327f65b02360",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-glib2/glib2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgmodule-2.0-0.dll",
+      "sha256": "dd21334f413466d9541e3c27e741e92bf1c1dfcd5bf34d76bf1a515249690647",
+      "package": "mingw-w64-clang-aarch64-glib2",
+      "version": "2.88.2-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-glib2",
+        "version": "2.88.2-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "dd21334f413466d9541e3c27e741e92bf1c1dfcd5bf34d76bf1a515249690647",
+        "profileMatches": true,
+        "msys2Hash": "dd21334f413466d9541e3c27e741e92bf1c1dfcd5bf34d76bf1a515249690647",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-glib2/glib2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgmp-10.dll",
+      "sha256": "bfc6046e374a27838b54bde5602851c7cc426ac9438cb65f019b9e67a961f47c",
+      "package": "mingw-w64-clang-aarch64-gmp",
+      "version": "6.3.0-2",
+      "declaredLicense": "LGPL3  GPL",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gmp",
+        "version": "6.3.0-2",
+        "declaredLicense": "LGPL3  GPL"
+      },
+      "matchingBinary": {
+        "profileHash": "bfc6046e374a27838b54bde5602851c7cc426ac9438cb65f019b9e67a961f47c",
+        "profileMatches": true,
+        "msys2Hash": "bfc6046e374a27838b54bde5602851c7cc426ac9438cb65f019b9e67a961f47c",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgnutls-30.dll",
+      "sha256": "c9454d1c4835a8944b452ab21b7821da15fd084246b753a0c398ab0b42f4ec27",
+      "package": "mingw-w64-clang-aarch64-gnutls",
+      "version": "3.8.13-3",
+      "declaredLicense": "spdx:GPL-3.0-or-later  spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gnutls",
+        "version": "3.8.13-3",
+        "declaredLicense": "spdx:GPL-3.0-or-later  spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "c9454d1c4835a8944b452ab21b7821da15fd084246b753a0c398ab0b42f4ec27",
+        "profileMatches": true,
+        "msys2Hash": "c9454d1c4835a8944b452ab21b7821da15fd084246b753a0c398ab0b42f4ec27",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgobject-2.0-0.dll",
+      "sha256": "cbe2d777c56965809cc55ca9d97822abf6eb22428b705a3c03aabc27eac5536d",
+      "package": "mingw-w64-clang-aarch64-glib2",
+      "version": "2.88.2-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-glib2",
+        "version": "2.88.2-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "cbe2d777c56965809cc55ca9d97822abf6eb22428b705a3c03aabc27eac5536d",
+        "profileMatches": true,
+        "msys2Hash": "cbe2d777c56965809cc55ca9d97822abf6eb22428b705a3c03aabc27eac5536d",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-glib2/glib2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgraphite2.dll",
+      "sha256": "a7ff3ca8cf8a41599a452d4229fe39b75b583dd7b2971ced082ecbe3bb36fd89",
+      "package": "mingw-w64-clang-aarch64-graphite2",
+      "version": "1.3.15-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-graphite2",
+        "version": "1.3.15-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "a7ff3ca8cf8a41599a452d4229fe39b75b583dd7b2971ced082ecbe3bb36fd89",
+        "profileMatches": true,
+        "msys2Hash": "a7ff3ca8cf8a41599a452d4229fe39b75b583dd7b2971ced082ecbe3bb36fd89",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-graphite2/graphite2/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-graphite2/graphite2/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgstapp-1.0-0.dll",
+      "sha256": "e0e094fec0ac7b2b7cf6193fdb00da0b71274e558d3ee038b3595cbc41bb31b3",
+      "package": "mingw-w64-clang-aarch64-gst-plugins-base",
+      "version": "1.28.5-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gst-plugins-base",
+        "version": "1.28.5-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "e0e094fec0ac7b2b7cf6193fdb00da0b71274e558d3ee038b3595cbc41bb31b3",
+        "profileMatches": true,
+        "msys2Hash": "e0e094fec0ac7b2b7cf6193fdb00da0b71274e558d3ee038b3595cbc41bb31b3",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgstbase-1.0-0.dll",
+      "sha256": "28193edb2c754b976f8c33b2cf157b9292434d7ed91c63647a3b14853d89b074",
+      "package": "mingw-w64-clang-aarch64-gstreamer",
+      "version": "1.28.5-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gstreamer",
+        "version": "1.28.5-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "28193edb2c754b976f8c33b2cf157b9292434d7ed91c63647a3b14853d89b074",
+        "profileMatches": true,
+        "msys2Hash": "28193edb2c754b976f8c33b2cf157b9292434d7ed91c63647a3b14853d89b074",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgstreamer-1.0-0.dll",
+      "sha256": "d99dabf7c5ca30cdd9d4be41e97808eb3499c154f83341e9cc98ad8ac6f75bf3",
+      "package": "mingw-w64-clang-aarch64-gstreamer",
+      "version": "1.28.5-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gstreamer",
+        "version": "1.28.5-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "d99dabf7c5ca30cdd9d4be41e97808eb3499c154f83341e9cc98ad8ac6f75bf3",
+        "profileMatches": true,
+        "msys2Hash": "d99dabf7c5ca30cdd9d4be41e97808eb3499c154f83341e9cc98ad8ac6f75bf3",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libgtk-3-0.dll",
+      "sha256": "d78df1e6204b4736042e1ad6703e3b640de1f22e76bb0d30bfb3d1ee2789336f",
+      "package": "mingw-w64-clang-aarch64-gtk3",
+      "version": "3.24.52-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gtk3",
+        "version": "3.24.52-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "d78df1e6204b4736042e1ad6703e3b640de1f22e76bb0d30bfb3d1ee2789336f",
+        "profileMatches": true,
+        "msys2Hash": "d78df1e6204b4736042e1ad6703e3b640de1f22e76bb0d30bfb3d1ee2789336f",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-gtk3/gtk3/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libharfbuzz-0.dll",
+      "sha256": "692b9e06a77fe34c51af6c60dbff172effac4f2c11c3219f4e9792aaf25594a4",
+      "package": "mingw-w64-clang-aarch64-harfbuzz",
+      "version": "14.2.1-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-harfbuzz",
+        "version": "14.2.1-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "692b9e06a77fe34c51af6c60dbff172effac4f2c11c3219f4e9792aaf25594a4",
+        "profileMatches": true,
+        "msys2Hash": "692b9e06a77fe34c51af6c60dbff172effac4f2c11c3219f4e9792aaf25594a4",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-harfbuzz/harfbuzz/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libhogweed-7.dll",
+      "sha256": "75d6cb61e58b896f06d2edf1c1467997405de307cd989fb21bc49f1f400f84a8",
+      "package": "mingw-w64-clang-aarch64-nettle",
+      "version": "4.0-1",
+      "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nettle",
+        "version": "4.0-1",
+        "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "75d6cb61e58b896f06d2edf1c1467997405de307cd989fb21bc49f1f400f84a8",
+        "profileMatches": true,
+        "msys2Hash": "75d6cb61e58b896f06d2edf1c1467997405de307cd989fb21bc49f1f400f84a8",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libiconv-2.dll",
+      "sha256": "5eb3e024adbeb40e990530b64498fa5305b4ebeaa34db971196f92317f70a35d",
+      "package": "mingw-w64-clang-aarch64-libiconv",
+      "version": "1.19-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later  documentation:spdx:GPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libiconv",
+        "version": "1.19-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later  documentation:spdx:GPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "5eb3e024adbeb40e990530b64498fa5305b4ebeaa34db971196f92317f70a35d",
+        "profileMatches": true,
+        "msys2Hash": "5eb3e024adbeb40e990530b64498fa5305b4ebeaa34db971196f92317f70a35d",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libiconv/libiconv/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-libiconv/libiconv/COPYING.LIB",
+        "MSYS2/mingw-w64-clang-aarch64-libiconv/libiconv/libcharset/COPYING.LIB"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libidn2-0.dll",
+      "sha256": "0e3d9e52a20dcd7a6941413932f938893f1ed791dd0e09613b870803971783e9",
+      "package": "mingw-w64-clang-aarch64-libidn2",
+      "version": "2.3.8-4",
+      "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libidn2",
+        "version": "2.3.8-4",
+        "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "0e3d9e52a20dcd7a6941413932f938893f1ed791dd0e09613b870803971783e9",
+        "profileMatches": true,
+        "msys2Hash": "0e3d9e52a20dcd7a6941413932f938893f1ed791dd0e09613b870803971783e9",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libintl-8.dll",
+      "sha256": "31db0d0e7780cf28dca1309a894cb775b2ab130c4ba777c546a206970ca47320",
+      "package": "mingw-w64-clang-aarch64-gettext-runtime",
+      "version": "1.0-1",
+      "declaredLicense": "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-gettext-runtime",
+        "version": "1.0-1",
+        "declaredLicense": "spdx:GPL-3.0-or-later AND LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "31db0d0e7780cf28dca1309a894cb775b2ab130c4ba777c546a206970ca47320",
+        "profileMatches": true,
+        "msys2Hash": "31db0d0e7780cf28dca1309a894cb775b2ab130c4ba777c546a206970ca47320",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-gettext-runtime/gettext-runtime/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-gettext-runtime/gettext-runtime/intl/COPYING.LIB",
+        "MSYS2/mingw-w64-clang-aarch64-gettext-runtime/gettext-runtime/libasprintf/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-gettext-runtime/gettext-runtime/libasprintf/COPYING.LIB"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libjack.dll",
+      "sha256": "ca85fe006b38149ebfefdff940ed7efeb17191b15a10b45134a8b0f512398bb3",
+      "package": "mingw-w64-clang-aarch64-jack2",
+      "version": "1.9.22-4",
+      "declaredLicense": "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-jack2",
+        "version": "1.9.22-4",
+        "declaredLicense": "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "ca85fe006b38149ebfefdff940ed7efeb17191b15a10b45134a8b0f512398bb3",
+        "profileMatches": true,
+        "msys2Hash": "ca85fe006b38149ebfefdff940ed7efeb17191b15a10b45134a8b0f512398bb3",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-jack2/jack2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libjbig-0.dll",
+      "sha256": "dfe48d7700c91d2fd41bd1090322a6cfb93515af712b34162ec51ea4e7657298",
+      "package": "mingw-w64-clang-aarch64-jbigkit",
+      "version": "2.1-5",
+      "declaredLicense": "spdx:GPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-jbigkit",
+        "version": "2.1-5",
+        "declaredLicense": "spdx:GPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "dfe48d7700c91d2fd41bd1090322a6cfb93515af712b34162ec51ea4e7657298",
+        "profileMatches": true,
+        "msys2Hash": "dfe48d7700c91d2fd41bd1090322a6cfb93515af712b34162ec51ea4e7657298",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-jbigkit/jbigkit/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libjpeg-8.dll",
+      "sha256": "4f8de459e5ad6d801a5d5274ab2a59ae54e1aa05990db987aa24fa2bdad5c978",
+      "package": "mingw-w64-clang-aarch64-libjpeg-turbo",
+      "version": "3.2.0-1",
+      "declaredLicense": "custom:BSD-like",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libjpeg-turbo",
+        "version": "3.2.0-1",
+        "declaredLicense": "custom:BSD-like"
+      },
+      "matchingBinary": {
+        "profileHash": "4f8de459e5ad6d801a5d5274ab2a59ae54e1aa05990db987aa24fa2bdad5c978",
+        "profileMatches": true,
+        "msys2Hash": "4f8de459e5ad6d801a5d5274ab2a59ae54e1aa05990db987aa24fa2bdad5c978",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libjpeg-turbo/libjpeg-turbo/LICENSE.md",
+        "MSYS2/mingw-w64-clang-aarch64-libjpeg-turbo/libjpeg-turbo/README.md"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libjxl_cms.dll",
+      "sha256": "15c476e26c81e60161a8a654cf597a424e27d4f1e17e5eae41115faee6c456a5",
+      "package": "mingw-w64-clang-aarch64-libjxl",
+      "version": "0.12.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libjxl",
+        "version": "0.12.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "15c476e26c81e60161a8a654cf597a424e27d4f1e17e5eae41115faee6c456a5",
+        "profileMatches": true,
+        "msys2Hash": "15c476e26c81e60161a8a654cf597a424e27d4f1e17e5eae41115faee6c456a5",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libjxl/libjxl/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libjxl.dll",
+      "sha256": "ae54675f7b962f4e7febc22f7a41397e14f2af85aa383f69332e56cf9e84c269",
+      "package": "mingw-w64-clang-aarch64-libjxl",
+      "version": "0.12.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libjxl",
+        "version": "0.12.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "ae54675f7b962f4e7febc22f7a41397e14f2af85aa383f69332e56cf9e84c269",
+        "profileMatches": true,
+        "msys2Hash": "ae54675f7b962f4e7febc22f7a41397e14f2af85aa383f69332e56cf9e84c269",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libjxl/libjxl/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "liblcms2-2.dll",
+      "sha256": "e30b3dba2d494f14a3105918c288f9d35c366a75f57c7469549d6278d9b30a7d",
+      "package": "mingw-w64-clang-aarch64-lcms2",
+      "version": "2.19.1-1",
+      "declaredLicense": "spdx:MIT AND GPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-lcms2",
+        "version": "2.19.1-1",
+        "declaredLicense": "spdx:MIT AND GPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "e30b3dba2d494f14a3105918c288f9d35c366a75f57c7469549d6278d9b30a7d",
+        "profileMatches": true,
+        "msys2Hash": "e30b3dba2d494f14a3105918c288f9d35c366a75f57c7469549d6278d9b30a7d",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-lcms2/lcms2/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libLerc.dll",
+      "sha256": "428206e8024f9f065c9ba89d7792fd186664c94cd40bf59319534396404195a4",
+      "package": "mingw-w64-clang-aarch64-lerc",
+      "version": "4.1.1-1",
+      "declaredLicense": "spdx:Apache-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-lerc",
+        "version": "4.1.1-1",
+        "declaredLicense": "spdx:Apache-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "428206e8024f9f065c9ba89d7792fd186664c94cd40bf59319534396404195a4",
+        "profileMatches": true,
+        "msys2Hash": "428206e8024f9f065c9ba89d7792fd186664c94cd40bf59319534396404195a4",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-lerc/lerc/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "liblz4.dll",
+      "sha256": "7c31d23b5a20d7aab73ca4908cf34263f9e4a6671ae88440c5986be9417985f2",
+      "package": "mingw-w64-clang-aarch64-lz4",
+      "version": "1.10.0-1",
+      "declaredLicense": "BSD  GPL2",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-lz4",
+        "version": "1.10.0-1",
+        "declaredLicense": "BSD  GPL2"
+      },
+      "matchingBinary": {
+        "profileHash": "7c31d23b5a20d7aab73ca4908cf34263f9e4a6671ae88440c5986be9417985f2",
+        "profileMatches": true,
+        "msys2Hash": "7c31d23b5a20d7aab73ca4908cf34263f9e4a6671ae88440c5986be9417985f2",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "liblzma-5.dll",
+      "sha256": "892422bdaffee8b7c89ac6082a1fb31a3409350e1ccb1b9f6e297a4de6e0630c",
+      "package": "mingw-w64-clang-aarch64-xz",
+      "version": "5.8.3-1",
+      "declaredLicense": "spdx:0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-xz",
+        "version": "5.8.3-1",
+        "declaredLicense": "spdx:0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "892422bdaffee8b7c89ac6082a1fb31a3409350e1ccb1b9f6e297a4de6e0630c",
+        "profileMatches": true,
+        "msys2Hash": "892422bdaffee8b7c89ac6082a1fb31a3409350e1ccb1b9f6e297a4de6e0630c",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-xz/xz/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-xz/xz/COPYING.0BSD",
+        "MSYS2/mingw-w64-clang-aarch64-xz/xz/COPYING.GPLv2",
+        "MSYS2/mingw-w64-clang-aarch64-xz/xz/COPYING.GPLv3",
+        "MSYS2/mingw-w64-clang-aarch64-xz/xz/COPYING.LGPLv2.1"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "liblzo2-2.dll",
+      "sha256": "eb6cb8683a98523e9e1d7a5e59c2484667c92942e9872f34f04fbe48bc82dc31",
+      "package": "mingw-w64-clang-aarch64-lzo2",
+      "version": "2.10-3",
+      "declaredLicense": "spdx:GPL-2.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-lzo2",
+        "version": "2.10-3",
+        "declaredLicense": "spdx:GPL-2.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "eb6cb8683a98523e9e1d7a5e59c2484667c92942e9872f34f04fbe48bc82dc31",
+        "profileMatches": true,
+        "msys2Hash": "eb6cb8683a98523e9e1d7a5e59c2484667c92942e9872f34f04fbe48bc82dc31",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-lzo2/lzo2/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libncursesw6.dll",
+      "sha256": "4f2d25c22d07dcb20696a20bb99379e701b0ca74ae015bd04f33521d85cbcb66",
+      "package": "mingw-w64-clang-aarch64-ncurses",
+      "version": "6.6-4",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-ncurses",
+        "version": "6.6-4",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "4f2d25c22d07dcb20696a20bb99379e701b0ca74ae015bd04f33521d85cbcb66",
+        "profileMatches": true,
+        "msys2Hash": "4f2d25c22d07dcb20696a20bb99379e701b0ca74ae015bd04f33521d85cbcb66",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-ncurses/ncurses/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libnettle-9.dll",
+      "sha256": "edf29fa2eab72831301ffc2d4d07d399c67a3b2ff4f7336224f4e177662383e9",
+      "package": "mingw-w64-clang-aarch64-nettle",
+      "version": "4.0-1",
+      "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nettle",
+        "version": "4.0-1",
+        "declaredLicense": "spdx:GPL-2.0-or-later  spdx:LGPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "edf29fa2eab72831301ffc2d4d07d399c67a3b2ff4f7336224f4e177662383e9",
+        "profileMatches": true,
+        "msys2Hash": "edf29fa2eab72831301ffc2d4d07d399c67a3b2ff4f7336224f4e177662383e9",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libnfs-16.dll",
+      "sha256": "e6a7bb3390701666531340611cd55c79c9188b6a16a5fdb062d2142edf4da85c",
+      "package": "mingw-w64-clang-aarch64-libnfs",
+      "version": "6.0.2-1",
+      "declaredLicense": "spdx:BSD-2-Clause AND LGPL-2.1-or-later AND GPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libnfs",
+        "version": "6.0.2-1",
+        "declaredLicense": "spdx:BSD-2-Clause AND LGPL-2.1-or-later AND GPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "e6a7bb3390701666531340611cd55c79c9188b6a16a5fdb062d2142edf4da85c",
+        "profileMatches": true,
+        "msys2Hash": "e6a7bb3390701666531340611cd55c79c9188b6a16a5fdb062d2142edf4da85c",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libnfs/libnfs/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-libnfs/libnfs/LICENCE-BSD.txt",
+        "MSYS2/mingw-w64-clang-aarch64-libnfs/libnfs/LICENCE-GPL-3.txt",
+        "MSYS2/mingw-w64-clang-aarch64-libnfs/libnfs/LICENCE-LGPL-2.1.txt"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libnghttp2-14.dll",
+      "sha256": "c5eaf7d618ba13e5f73000cda6c84901d4a3bd653bb6ac1d13b8e9dc93f5fcee",
+      "package": "mingw-w64-clang-aarch64-nghttp2",
+      "version": "1.69.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nghttp2",
+        "version": "1.69.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "c5eaf7d618ba13e5f73000cda6c84901d4a3bd653bb6ac1d13b8e9dc93f5fcee",
+        "profileMatches": true,
+        "msys2Hash": "c5eaf7d618ba13e5f73000cda6c84901d4a3bd653bb6ac1d13b8e9dc93f5fcee",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nghttp2/nghttp2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libnghttp3-9.dll",
+      "sha256": "6fb18fb6d9619d61d74129d7032f9db46d5220c51d9b9e84680dc5b0ad15d9fd",
+      "package": "mingw-w64-clang-aarch64-nghttp3",
+      "version": "1.17.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nghttp3",
+        "version": "1.17.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "6fb18fb6d9619d61d74129d7032f9db46d5220c51d9b9e84680dc5b0ad15d9fd",
+        "profileMatches": true,
+        "msys2Hash": "6fb18fb6d9619d61d74129d7032f9db46d5220c51d9b9e84680dc5b0ad15d9fd",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nghttp3/nghttp3/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libngtcp2_crypto_ossl-0.dll",
+      "sha256": "299e0a2ab925c2d7862d5ec42fd9af4bd2680340c9fb4a00d9cbc5b4336323bb",
+      "package": "mingw-w64-clang-aarch64-ngtcp2",
+      "version": "1.24.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-ngtcp2",
+        "version": "1.24.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "299e0a2ab925c2d7862d5ec42fd9af4bd2680340c9fb4a00d9cbc5b4336323bb",
+        "profileMatches": true,
+        "msys2Hash": "299e0a2ab925c2d7862d5ec42fd9af4bd2680340c9fb4a00d9cbc5b4336323bb",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-ngtcp2/ngtcp2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libngtcp2-16.dll",
+      "sha256": "daa662b3df95f83719aca48acae614b74f07ad8e513b24f4120019dd4b743ed6",
+      "package": "mingw-w64-clang-aarch64-ngtcp2",
+      "version": "1.24.0-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-ngtcp2",
+        "version": "1.24.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "daa662b3df95f83719aca48acae614b74f07ad8e513b24f4120019dd4b743ed6",
+        "profileMatches": true,
+        "msys2Hash": "daa662b3df95f83719aca48acae614b74f07ad8e513b24f4120019dd4b743ed6",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-ngtcp2/ngtcp2/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libnspr4.dll",
+      "sha256": "b5c2d0888e9e2a5e7ab06a8fabaa0315910226f6f434566cf8fabe8ca31d59ec",
+      "package": "mingw-w64-clang-aarch64-nspr",
+      "version": "4.39-1",
+      "declaredLicense": "spdx:MPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nspr",
+        "version": "4.39-1",
+        "declaredLicense": "spdx:MPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "b5c2d0888e9e2a5e7ab06a8fabaa0315910226f6f434566cf8fabe8ca31d59ec",
+        "profileMatches": true,
+        "msys2Hash": "b5c2d0888e9e2a5e7ab06a8fabaa0315910226f6f434566cf8fabe8ca31d59ec",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nspr/nspr/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libopus-0.dll",
+      "sha256": "d1a6cc9172098bb5ea3d67b1b5e055b70d5da56bc69edd131a7df63445b105c0",
+      "package": "mingw-w64-clang-aarch64-opus",
+      "version": "1.6.1-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-opus",
+        "version": "1.6.1-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "d1a6cc9172098bb5ea3d67b1b5e055b70d5da56bc69edd131a7df63445b105c0",
+        "profileMatches": true,
+        "msys2Hash": "d1a6cc9172098bb5ea3d67b1b5e055b70d5da56bc69edd131a7df63445b105c0",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-opus/opus/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "liborc-0.4-0.dll",
+      "sha256": "438bae8bf5669ff98f4d1e6472303b83a6731e16303d114970a7482116e66f8e",
+      "package": "mingw-w64-clang-aarch64-orc",
+      "version": "0.4.42-1",
+      "declaredLicense": "custom",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-orc",
+        "version": "0.4.42-1",
+        "declaredLicense": "custom"
+      },
+      "matchingBinary": {
+        "profileHash": "438bae8bf5669ff98f4d1e6472303b83a6731e16303d114970a7482116e66f8e",
+        "profileMatches": true,
+        "msys2Hash": "438bae8bf5669ff98f4d1e6472303b83a6731e16303d114970a7482116e66f8e",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-orc/orc/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libp11-kit-0.dll",
+      "sha256": "d6f838835d4ed4d49b372c8efe69ffbd26382ce544e5f3d6077908b45037844d",
+      "package": "mingw-w64-clang-aarch64-p11-kit",
+      "version": "0.26.4-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-p11-kit",
+        "version": "0.26.4-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "d6f838835d4ed4d49b372c8efe69ffbd26382ce544e5f3d6077908b45037844d",
+        "profileMatches": true,
+        "msys2Hash": "d6f838835d4ed4d49b372c8efe69ffbd26382ce544e5f3d6077908b45037844d",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpango-1.0-0.dll",
+      "sha256": "16aea2bca451027b04a8437993d4d4b43735ff6e13c825af251bf97f92663baa",
+      "package": "mingw-w64-clang-aarch64-pango",
+      "version": "1.58.0-1",
+      "declaredLicense": "spdx:LGPL-2.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pango",
+        "version": "1.58.0-1",
+        "declaredLicense": "spdx:LGPL-2.1"
+      },
+      "matchingBinary": {
+        "profileHash": "16aea2bca451027b04a8437993d4d4b43735ff6e13c825af251bf97f92663baa",
+        "profileMatches": true,
+        "msys2Hash": "16aea2bca451027b04a8437993d4d4b43735ff6e13c825af251bf97f92663baa",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pango/pango/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpangocairo-1.0-0.dll",
+      "sha256": "5b26a54517415bbf285a2203b247a95d6278910f8b1020828fdb1d5511cd178b",
+      "package": "mingw-w64-clang-aarch64-pango",
+      "version": "1.58.0-1",
+      "declaredLicense": "spdx:LGPL-2.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pango",
+        "version": "1.58.0-1",
+        "declaredLicense": "spdx:LGPL-2.1"
+      },
+      "matchingBinary": {
+        "profileHash": "5b26a54517415bbf285a2203b247a95d6278910f8b1020828fdb1d5511cd178b",
+        "profileMatches": true,
+        "msys2Hash": "5b26a54517415bbf285a2203b247a95d6278910f8b1020828fdb1d5511cd178b",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pango/pango/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpangoft2-1.0-0.dll",
+      "sha256": "77504a33b52ca5757186ccdd2988b24814756c707de66fc8f81d43c7c248c0ad",
+      "package": "mingw-w64-clang-aarch64-pango",
+      "version": "1.58.0-1",
+      "declaredLicense": "spdx:LGPL-2.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pango",
+        "version": "1.58.0-1",
+        "declaredLicense": "spdx:LGPL-2.1"
+      },
+      "matchingBinary": {
+        "profileHash": "77504a33b52ca5757186ccdd2988b24814756c707de66fc8f81d43c7c248c0ad",
+        "profileMatches": true,
+        "msys2Hash": "77504a33b52ca5757186ccdd2988b24814756c707de66fc8f81d43c7c248c0ad",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pango/pango/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpangowin32-1.0-0.dll",
+      "sha256": "b02fd1b9e31805beb2674ba8bdaab6ddd801d665048630fcb56e50f575752fac",
+      "package": "mingw-w64-clang-aarch64-pango",
+      "version": "1.58.0-1",
+      "declaredLicense": "spdx:LGPL-2.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pango",
+        "version": "1.58.0-1",
+        "declaredLicense": "spdx:LGPL-2.1"
+      },
+      "matchingBinary": {
+        "profileHash": "b02fd1b9e31805beb2674ba8bdaab6ddd801d665048630fcb56e50f575752fac",
+        "profileMatches": true,
+        "msys2Hash": "b02fd1b9e31805beb2674ba8bdaab6ddd801d665048630fcb56e50f575752fac",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pango/pango/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpcre2-8-0.dll",
+      "sha256": "15e209351c51815a39f1eae93152774234d1273d4378c4f5f4c95b152146ed9c",
+      "package": "mingw-w64-clang-aarch64-pcre2",
+      "version": "10.47-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pcre2",
+        "version": "10.47-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "15e209351c51815a39f1eae93152774234d1273d4378c4f5f4c95b152146ed9c",
+        "profileMatches": true,
+        "msys2Hash": "15e209351c51815a39f1eae93152774234d1273d4378c4f5f4c95b152146ed9c",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pcre2/pcre2/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-pcre2/pcre2/LICENCE.md"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpixman-1-0.dll",
+      "sha256": "46afdf089cc648d7523fa28c0b3679329a3e2dc4c26be9d1504dfc585966a172",
+      "package": "mingw-w64-clang-aarch64-pixman",
+      "version": "0.46.4-3",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-pixman",
+        "version": "0.46.4-3",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "46afdf089cc648d7523fa28c0b3679329a3e2dc4c26be9d1504dfc585966a172",
+        "profileMatches": true,
+        "msys2Hash": "46afdf089cc648d7523fa28c0b3679329a3e2dc4c26be9d1504dfc585966a172",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-pixman/pixman/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libplc4.dll",
+      "sha256": "6ba4e9259d65d62854ec30fdbd5efb0b21ed6fd8fcf088139c456a7994eb2348",
+      "package": "mingw-w64-clang-aarch64-nspr",
+      "version": "4.39-1",
+      "declaredLicense": "spdx:MPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nspr",
+        "version": "4.39-1",
+        "declaredLicense": "spdx:MPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "6ba4e9259d65d62854ec30fdbd5efb0b21ed6fd8fcf088139c456a7994eb2348",
+        "profileMatches": true,
+        "msys2Hash": "6ba4e9259d65d62854ec30fdbd5efb0b21ed6fd8fcf088139c456a7994eb2348",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nspr/nspr/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libplds4.dll",
+      "sha256": "4f41bc373e10727fa06f72d44b9a10bc211cfb2f9b9e0347309954db8d3134eb",
+      "package": "mingw-w64-clang-aarch64-nspr",
+      "version": "4.39-1",
+      "declaredLicense": "spdx:MPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nspr",
+        "version": "4.39-1",
+        "declaredLicense": "spdx:MPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "4f41bc373e10727fa06f72d44b9a10bc211cfb2f9b9e0347309954db8d3134eb",
+        "profileMatches": true,
+        "msys2Hash": "4f41bc373e10727fa06f72d44b9a10bc211cfb2f9b9e0347309954db8d3134eb",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nspr/nspr/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpng16-16.dll",
+      "sha256": "8c04ed57129278cf6fe00d8d03ebda7a3c22c0c745c7822d2394901dbe001acd",
+      "package": "mingw-w64-clang-aarch64-libpng",
+      "version": "1.6.58-1",
+      "declaredLicense": "custom",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libpng",
+        "version": "1.6.58-1",
+        "declaredLicense": "custom"
+      },
+      "matchingBinary": {
+        "profileHash": "8c04ed57129278cf6fe00d8d03ebda7a3c22c0c745c7822d2394901dbe001acd",
+        "profileMatches": true,
+        "msys2Hash": "8c04ed57129278cf6fe00d8d03ebda7a3c22c0c745c7822d2394901dbe001acd",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libpng/libpng/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libpsl-5.dll",
+      "sha256": "95f5a1cac819829e39e21eea8b3b95ab5aa14fb4fdab8cc95b963577adea411f",
+      "package": "mingw-w64-clang-aarch64-libpsl",
+      "version": "0.21.5-3",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libpsl",
+        "version": "0.21.5-3",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "95f5a1cac819829e39e21eea8b3b95ab5aa14fb4fdab8cc95b963577adea411f",
+        "profileMatches": true,
+        "msys2Hash": "95f5a1cac819829e39e21eea8b3b95ab5aa14fb4fdab8cc95b963577adea411f",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libpsl/libpsl/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "librav1e.dll",
+      "sha256": "003d811e2c49e53311ee64c04b976faea477f400124b6850546b16df1c2a0c2c",
+      "package": "mingw-w64-clang-aarch64-rav1e",
+      "version": "0.8.1-1",
+      "declaredLicense": "spdx:BSD-2-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-rav1e",
+        "version": "0.8.1-1",
+        "declaredLicense": "spdx:BSD-2-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "003d811e2c49e53311ee64c04b976faea477f400124b6850546b16df1c2a0c2c",
+        "profileMatches": true,
+        "msys2Hash": "003d811e2c49e53311ee64c04b976faea477f400124b6850546b16df1c2a0c2c",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-rav1e/rav1e/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libsasl2-3.dll",
+      "sha256": "775e4569f5f3749c7a1ddb34fde801359f813a82450c0760b7d77ab24766e4d7",
+      "package": "mingw-w64-clang-aarch64-cyrus-sasl",
+      "version": "2.1.28-5",
+      "declaredLicense": "custom",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-cyrus-sasl",
+        "version": "2.1.28-5",
+        "declaredLicense": "custom"
+      },
+      "matchingBinary": {
+        "profileHash": "775e4569f5f3749c7a1ddb34fde801359f813a82450c0760b7d77ab24766e4d7",
+        "profileMatches": true,
+        "msys2Hash": "775e4569f5f3749c7a1ddb34fde801359f813a82450c0760b7d77ab24766e4d7",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-cyrus-sasl/cyrus-sasl/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libsharpyuv-0.dll",
+      "sha256": "a34e3915282697bb1942fba5c38a08722a241779967761f6d42ac3de091a0f19",
+      "package": "mingw-w64-clang-aarch64-libwebp",
+      "version": "1.6.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libwebp",
+        "version": "1.6.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "a34e3915282697bb1942fba5c38a08722a241779967761f6d42ac3de091a0f19",
+        "profileMatches": true,
+        "msys2Hash": "a34e3915282697bb1942fba5c38a08722a241779967761f6d42ac3de091a0f19",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libwebp/libwebp/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libslirp-0.dll",
+      "sha256": "c374c509d19cd476ec8cb9ef010bc62543775711e2971e574134de2bd124c6a2",
+      "package": "mingw-w64-clang-aarch64-libslirp",
+      "version": "4.9.3-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libslirp",
+        "version": "4.9.3-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "c374c509d19cd476ec8cb9ef010bc62543775711e2971e574134de2bd124c6a2",
+        "profileMatches": true,
+        "msys2Hash": "c374c509d19cd476ec8cb9ef010bc62543775711e2971e574134de2bd124c6a2",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libslirp/libslirp/COPYRIGHT"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libsnappy.dll",
+      "sha256": "976d550c239977769d5cd770eb2f7b0e7d4a24404b7cb94c071bf83dff125188",
+      "package": "mingw-w64-clang-aarch64-snappy",
+      "version": "1.2.2-2",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-snappy",
+        "version": "1.2.2-2",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "976d550c239977769d5cd770eb2f7b0e7d4a24404b7cb94c071bf83dff125188",
+        "profileMatches": true,
+        "msys2Hash": "976d550c239977769d5cd770eb2f7b0e7d4a24404b7cb94c071bf83dff125188",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libspice-server-1.dll",
+      "sha256": "dab009673dc0b6e61fc4afb580ef6ccea62e181379b7e0c6464d8a8148edb1d9",
+      "package": "mingw-w64-clang-aarch64-spice",
+      "version": "0.16.0-4",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-spice",
+        "version": "0.16.0-4",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "dab009673dc0b6e61fc4afb580ef6ccea62e181379b7e0c6464d8a8148edb1d9",
+        "profileMatches": true,
+        "msys2Hash": "dab009673dc0b6e61fc4afb580ef6ccea62e181379b7e0c6464d8a8148edb1d9",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-spice/spice/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libssh.dll",
+      "sha256": "b582a6de63f9dd5547a54032d8af0baac1c2a06ac1e17cc3f1f4f31fb9930f51",
+      "package": "mingw-w64-clang-aarch64-libssh",
+      "version": "0.12.1-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libssh",
+        "version": "0.12.1-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "b582a6de63f9dd5547a54032d8af0baac1c2a06ac1e17cc3f1f4f31fb9930f51",
+        "profileMatches": true,
+        "msys2Hash": "b582a6de63f9dd5547a54032d8af0baac1c2a06ac1e17cc3f1f4f31fb9930f51",
+        "msys2Matches": true
+      },
+      "licenseFiles": [],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libssh2-1.dll",
+      "sha256": "660f5bfaea4efccb7f96fa609ac4978619f6fe114ef7fd88fcf9c386d2768c7f",
+      "package": "mingw-w64-clang-aarch64-libssh2",
+      "version": "1.11.1-2",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libssh2",
+        "version": "1.11.1-2",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "660f5bfaea4efccb7f96fa609ac4978619f6fe114ef7fd88fcf9c386d2768c7f",
+        "profileMatches": true,
+        "msys2Hash": "660f5bfaea4efccb7f96fa609ac4978619f6fe114ef7fd88fcf9c386d2768c7f",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libssh2/libssh2/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libssl-3-arm64.dll",
+      "sha256": "4860ca64d3fcd5377b707aaf77e816f2cfd88225ca7343494c72d62d14540b9b",
+      "package": "mingw-w64-clang-aarch64-openssl",
+      "version": "3.6.3-1",
+      "declaredLicense": "spdx:Apache-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-openssl",
+        "version": "3.6.3-1",
+        "declaredLicense": "spdx:Apache-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "4860ca64d3fcd5377b707aaf77e816f2cfd88225ca7343494c72d62d14540b9b",
+        "profileMatches": true,
+        "msys2Hash": "4860ca64d3fcd5377b707aaf77e816f2cfd88225ca7343494c72d62d14540b9b",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-openssl/openssl/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libSvtAv1Enc-4.dll",
+      "sha256": "a4b3fb7f36f5f63de0b4c7c1455cb0f11606f702a574bbedca0dee1aa94d0c35",
+      "package": "mingw-w64-clang-aarch64-svt-av1",
+      "version": "4.2.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause-Clear",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-svt-av1",
+        "version": "4.2.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause-Clear"
+      },
+      "matchingBinary": {
+        "profileHash": "a4b3fb7f36f5f63de0b4c7c1455cb0f11606f702a574bbedca0dee1aa94d0c35",
+        "profileMatches": true,
+        "msys2Hash": "a4b3fb7f36f5f63de0b4c7c1455cb0f11606f702a574bbedca0dee1aa94d0c35",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-svt-av1/svt-av1/LICENSE",
+        "MSYS2/mingw-w64-clang-aarch64-svt-av1/svt-av1/PATENTS.md"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libsystre-0.dll",
+      "sha256": "9d5f0638f7f8e12613250a426d2e48f24ac4fd5ba5b076be5bd0db111a499926",
+      "package": "mingw-w64-clang-aarch64-libsystre",
+      "version": "1.0.2-2",
+      "declaredLicense": "spdx:BSD-2-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libsystre",
+        "version": "1.0.2-2",
+        "declaredLicense": "spdx:BSD-2-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "9d5f0638f7f8e12613250a426d2e48f24ac4fd5ba5b076be5bd0db111a499926",
+        "profileMatches": true,
+        "msys2Hash": "9d5f0638f7f8e12613250a426d2e48f24ac4fd5ba5b076be5bd0db111a499926",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libsystre/libsystre/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libtasn1-6.dll",
+      "sha256": "cd99952aaa9000b8131dc6456a16d365490fba42bc1cf5012aeb7d235fdfc9dc",
+      "package": "mingw-w64-clang-aarch64-libtasn1",
+      "version": "4.21.0-1",
+      "declaredLicense": "GPL3, LGPL",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libtasn1",
+        "version": "4.21.0-1",
+        "declaredLicense": "GPL3, LGPL"
+      },
+      "matchingBinary": {
+        "profileHash": "cd99952aaa9000b8131dc6456a16d365490fba42bc1cf5012aeb7d235fdfc9dc",
+        "profileMatches": true,
+        "msys2Hash": "cd99952aaa9000b8131dc6456a16d365490fba42bc1cf5012aeb7d235fdfc9dc",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libtasn1/libtasn1/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-libtasn1/libtasn1/COPYING.LESSERv2"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libthai-0.dll",
+      "sha256": "2182b600b7f91a9ec6d4a6e4974c5e0c9bd8d0c6db1595ea8d5f65021f8cbd91",
+      "package": "mingw-w64-clang-aarch64-libthai",
+      "version": "0.1.30-1",
+      "declaredLicense": "spdx:LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libthai",
+        "version": "0.1.30-1",
+        "declaredLicense": "spdx:LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "2182b600b7f91a9ec6d4a6e4974c5e0c9bd8d0c6db1595ea8d5f65021f8cbd91",
+        "profileMatches": true,
+        "msys2Hash": "2182b600b7f91a9ec6d4a6e4974c5e0c9bd8d0c6db1595ea8d5f65021f8cbd91",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libthai/libthai/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libtiff-6.dll",
+      "sha256": "575dac0574d07c1665838f9aef165feb9be23ffc90ad10b99e1748e2ffbabf42",
+      "package": "mingw-w64-clang-aarch64-libtiff",
+      "version": "4.7.2-1",
+      "declaredLicense": "spdx:MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libtiff",
+        "version": "4.7.2-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": "575dac0574d07c1665838f9aef165feb9be23ffc90ad10b99e1748e2ffbabf42",
+        "profileMatches": true,
+        "msys2Hash": "575dac0574d07c1665838f9aef165feb9be23ffc90ad10b99e1748e2ffbabf42",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libtiff/libtiff/LICENSE.md"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libtre-5.dll",
+      "sha256": "3378161dad009857430e0c9167714ef78ee42e91dc24b8a999b52a39b9a9dc24",
+      "package": "mingw-w64-clang-aarch64-libtre",
+      "version": "0.9.0-2",
+      "declaredLicense": "BSD",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libtre",
+        "version": "0.9.0-2",
+        "declaredLicense": "BSD"
+      },
+      "matchingBinary": {
+        "profileHash": "3378161dad009857430e0c9167714ef78ee42e91dc24b8a999b52a39b9a9dc24",
+        "profileMatches": true,
+        "msys2Hash": "3378161dad009857430e0c9167714ef78ee42e91dc24b8a999b52a39b9a9dc24",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libtre/libtre/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libunistring-5.dll",
+      "sha256": "56582e9e43f657a3940920ad027761020bf09f6e171212fdecfd02257b2d44a1",
+      "package": "mingw-w64-clang-aarch64-libunistring",
+      "version": "1.4.2-1",
+      "declaredLicense": "spdx:LGPL-3.0-or-later OR GPL-3.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libunistring",
+        "version": "1.4.2-1",
+        "declaredLicense": "spdx:LGPL-3.0-or-later OR GPL-3.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "56582e9e43f657a3940920ad027761020bf09f6e171212fdecfd02257b2d44a1",
+        "profileMatches": true,
+        "msys2Hash": "56582e9e43f657a3940920ad027761020bf09f6e171212fdecfd02257b2d44a1",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libunistring/libunistring/LICENSE",
+        "MSYS2/mingw-w64-clang-aarch64-libunistring/libunistring/LICENSE.LIB"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libusb-1.0.dll",
+      "sha256": "2245afc3686034d1a8fa8d688714e582514429490f3c82274fc11a66aec3996b",
+      "package": "mingw-w64-clang-aarch64-libusb",
+      "version": "1.0.30-1",
+      "declaredLicense": "spdx:LGPL-2.1",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libusb",
+        "version": "1.0.30-1",
+        "declaredLicense": "spdx:LGPL-2.1"
+      },
+      "matchingBinary": {
+        "profileHash": "2245afc3686034d1a8fa8d688714e582514429490f3c82274fc11a66aec3996b",
+        "profileMatches": true,
+        "msys2Hash": "2245afc3686034d1a8fa8d688714e582514429490f3c82274fc11a66aec3996b",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libusb/libusb/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libusbredirparser-1.dll",
+      "sha256": "43d728bd02c3631761b10bc015da70844ff57c5386f5bbf1d1978a7d24e41a1a",
+      "package": "mingw-w64-clang-aarch64-usbredir",
+      "version": "0.15.0-1",
+      "declaredLicense": "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-usbredir",
+        "version": "0.15.0-1",
+        "declaredLicense": "spdx:GPL-2.0-or-later AND LGPL-2.1-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "43d728bd02c3631761b10bc015da70844ff57c5386f5bbf1d1978a7d24e41a1a",
+        "profileMatches": true,
+        "msys2Hash": "43d728bd02c3631761b10bc015da70844ff57c5386f5bbf1d1978a7d24e41a1a",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-usbredir/usbredir/COPYING",
+        "MSYS2/mingw-w64-clang-aarch64-usbredir/usbredir/COPYING.LIB"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libvirglrenderer-1.dll",
+      "sha256": "2aa9097d05b954ed6a509666c8bec31bde6426eab5224c0f441cdccc8328c091",
+      "package": "Habumi native renderer / pinned upstream e80354b8",
+      "version": "1.3.0 + native WSI patches",
+      "declaredLicense": "MIT",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-virglrenderer",
+        "version": "1.3.0-1",
+        "declaredLicense": "spdx:MIT"
+      },
+      "matchingBinary": {
+        "profileHash": null,
+        "profileMatches": false,
+        "msys2Hash": "bd0176a1572bed2291a411342fa6852fe5faf26b6bae458b7573b640e95a9710",
+        "msys2Matches": false
+      },
+      "licenseFiles": [
+        "VIRGLRENDERER-COPYING.txt"
+      ],
+      "status": "REBUILT - isolated pinned-source release build"
+    },
+    {
+      "filename": "libwebp-7.dll",
+      "sha256": "48a2b1e8e3c8cef078f207da282ced541ba63312a8c5413b57d6581ee8909a81",
+      "package": "mingw-w64-clang-aarch64-libwebp",
+      "version": "1.6.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libwebp",
+        "version": "1.6.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "48a2b1e8e3c8cef078f207da282ced541ba63312a8c5413b57d6581ee8909a81",
+        "profileMatches": true,
+        "msys2Hash": "48a2b1e8e3c8cef078f207da282ced541ba63312a8c5413b57d6581ee8909a81",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libwebp/libwebp/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libwebpdemux-2.dll",
+      "sha256": "4d5b01dda5eb8a0878f082134c88f423fd3af932351768a8c6a47fbbbb4505f3",
+      "package": "mingw-w64-clang-aarch64-libwebp",
+      "version": "1.6.0-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libwebp",
+        "version": "1.6.0-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "4d5b01dda5eb8a0878f082134c88f423fd3af932351768a8c6a47fbbbb4505f3",
+        "profileMatches": true,
+        "msys2Hash": "4d5b01dda5eb8a0878f082134c88f423fd3af932351768a8c6a47fbbbb4505f3",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libwebp/libwebp/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libwinpthread-1.dll",
+      "sha256": "4f1cf4078a1de4190428f80add559161d1d02e0a5321c70994b058dac7499e10",
+      "package": "mingw-w64-clang-aarch64-libwinpthread",
+      "version": "14.0.0.r220.gd999af622-1",
+      "declaredLicense": "spdx:MIT AND BSD-3-Clause-Clear",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libwinpthread",
+        "version": "14.0.0.r220.gd999af622-1",
+        "declaredLicense": "spdx:MIT AND BSD-3-Clause-Clear"
+      },
+      "matchingBinary": {
+        "profileHash": "4f1cf4078a1de4190428f80add559161d1d02e0a5321c70994b058dac7499e10",
+        "profileMatches": true,
+        "msys2Hash": "4f1cf4078a1de4190428f80add559161d1d02e0a5321c70994b058dac7499e10",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libwinpthread/libwinpthread/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libyuv.dll",
+      "sha256": "b604fa384dbd4f82e1372ba056e1aa63f1ccb33a4e406b17b1fb53ea74c05657",
+      "package": "mingw-w64-clang-aarch64-libyuv",
+      "version": "1924.r2921.644251f25-1",
+      "declaredLicense": "spdx:BSD-3-Clause",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-libyuv",
+        "version": "1924.r2921.644251f25-1",
+        "declaredLicense": "spdx:BSD-3-Clause"
+      },
+      "matchingBinary": {
+        "profileHash": "b604fa384dbd4f82e1372ba056e1aa63f1ccb33a4e406b17b1fb53ea74c05657",
+        "profileMatches": true,
+        "msys2Hash": "b604fa384dbd4f82e1372ba056e1aa63f1ccb33a4e406b17b1fb53ea74c05657",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-libyuv/libyuv/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "libzstd.dll",
+      "sha256": "87e871f3f06ee054cdac83f99a7ea260f306472c923a1615ef88000905bfb9f2",
+      "package": "mingw-w64-clang-aarch64-zstd",
+      "version": "1.5.7-2",
+      "declaredLicense": "spdx:BSD-3-Clause OR GPL-2.0-or-later",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-zstd",
+        "version": "1.5.7-2",
+        "declaredLicense": "spdx:BSD-3-Clause OR GPL-2.0-or-later"
+      },
+      "matchingBinary": {
+        "profileHash": "87e871f3f06ee054cdac83f99a7ea260f306472c923a1615ef88000905bfb9f2",
+        "profileMatches": true,
+        "msys2Hash": "87e871f3f06ee054cdac83f99a7ea260f306472c923a1615ef88000905bfb9f2",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-zstd/zstd/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "nss3.dll",
+      "sha256": "7a9e8c5d9b9a5eab90d2073dd5c09218839eb7bb57547e3e51624b1818302f7f",
+      "package": "mingw-w64-clang-aarch64-nss",
+      "version": "3.126-1",
+      "declaredLicense": "spdx:MPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nss",
+        "version": "3.126-1",
+        "declaredLicense": "spdx:MPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "7a9e8c5d9b9a5eab90d2073dd5c09218839eb7bb57547e3e51624b1818302f7f",
+        "profileMatches": true,
+        "msys2Hash": "7a9e8c5d9b9a5eab90d2073dd5c09218839eb7bb57547e3e51624b1818302f7f",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nss/nss/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "nssutil3.dll",
+      "sha256": "ca9918f9b73a9b7e92f71ee975219d01552966c2f03375eecae94ae848804753",
+      "package": "mingw-w64-clang-aarch64-nss",
+      "version": "3.126-1",
+      "declaredLicense": "spdx:MPL-2.0",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-nss",
+        "version": "3.126-1",
+        "declaredLicense": "spdx:MPL-2.0"
+      },
+      "matchingBinary": {
+        "profileHash": "ca9918f9b73a9b7e92f71ee975219d01552966c2f03375eecae94ae848804753",
+        "profileMatches": true,
+        "msys2Hash": "ca9918f9b73a9b7e92f71ee975219d01552966c2f03375eecae94ae848804753",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-nss/nss/COPYING"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "opengl32.dll",
+      "sha256": "36c6beacbd7059f088cb15fc05e460c61bf27a3981af59db1233a7e079ed8dea",
+      "package": "mmozeiko/build-mesa26.2.4",
+      "version": "26.2.4",
+      "declaredLicense": null,
+      "candidateMsys2": {
+        "package": null,
+        "version": null,
+        "declaredLicense": null
+      },
+      "matchingBinary": {
+        "profileHash": "36c6beacbd7059f088cb15fc05e460c61bf27a3981af59db1233a7e079ed8dea",
+        "profileMatches": true,
+        "msys2Hash": null,
+        "msys2Matches": false
+      },
+      "licenseFiles": [
+        "MESA-NOTA.txt"
+      ],
+      "status": "MAINTAINER-VERIFIED - release-profile Mesa attribution provided",
+      "profileAttribution": {
+        "package": "mmozeiko/build-mesa26.2.4",
+        "version": "26.2.4",
+        "maintainerProvided": true
+      }
+    },
+    {
+      "filename": "SDL2_image.dll",
+      "sha256": "9812cfe02b099955a809d8772a4fd630c87281012e4327948c5e1b26fe09cf40",
+      "package": "mingw-w64-clang-aarch64-SDL2_image",
+      "version": "2.8.12-1",
+      "declaredLicense": "spdx:Zlib",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-SDL2_image",
+        "version": "2.8.12-1",
+        "declaredLicense": "spdx:Zlib"
+      },
+      "matchingBinary": {
+        "profileHash": "9812cfe02b099955a809d8772a4fd630c87281012e4327948c5e1b26fe09cf40",
+        "profileMatches": true,
+        "msys2Hash": "9812cfe02b099955a809d8772a4fd630c87281012e4327948c5e1b26fe09cf40",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-SDL2_image/SDL2_image/LICENSE.txt"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "SDL2.dll",
+      "sha256": "fa9dd8b104d4b97371c89e8b29de0959351796bd8a878483c8cba27c19695fab",
+      "package": "mingw-w64-clang-aarch64-SDL2",
+      "version": "2.32.10-1",
+      "declaredLicense": "spdx:Zlib",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-SDL2",
+        "version": "2.32.10-1",
+        "declaredLicense": "spdx:Zlib"
+      },
+      "matchingBinary": {
+        "profileHash": "fa9dd8b104d4b97371c89e8b29de0959351796bd8a878483c8cba27c19695fab",
+        "profileMatches": true,
+        "msys2Hash": "fa9dd8b104d4b97371c89e8b29de0959351796bd8a878483c8cba27c19695fab",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-SDL2/SDL2/LICENSE.txt"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    },
+    {
+      "filename": "zlib1.dll",
+      "sha256": "fed18d2fda0a1b0252787fd59e7c01ed900f5c90eeb131f30a9992abb328c7ca",
+      "package": "mingw-w64-clang-aarch64-zlib",
+      "version": "1.3.2-2",
+      "declaredLicense": "spdx:Zlib",
+      "candidateMsys2": {
+        "package": "mingw-w64-clang-aarch64-zlib",
+        "version": "1.3.2-2",
+        "declaredLicense": "spdx:Zlib"
+      },
+      "matchingBinary": {
+        "profileHash": "fed18d2fda0a1b0252787fd59e7c01ed900f5c90eeb131f30a9992abb328c7ca",
+        "profileMatches": true,
+        "msys2Hash": "fed18d2fda0a1b0252787fd59e7c01ed900f5c90eeb131f30a9992abb328c7ca",
+        "msys2Matches": true
+      },
+      "licenseFiles": [
+        "MSYS2/mingw-w64-clang-aarch64-zlib/zlib/LICENSE"
+      ],
+      "status": "VERIFIED - identical to installed MSYS2 binary"
+    }
+  ]
+}

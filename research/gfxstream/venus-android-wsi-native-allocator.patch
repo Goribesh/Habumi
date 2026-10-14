@@ -1,0 +1,2028 @@
+diff --git a/server/render_protocol.h b/server/render_protocol.h
+index cae94a0..80c59ed 100644
+--- a/server/render_protocol.h
++++ b/server/render_protocol.h
+@@ -39,6 +39,7 @@ enum render_context_op {
+    RENDER_CONTEXT_OP_DESTROY_RESOURCE,
+    RENDER_CONTEXT_OP_SUBMIT_CMD,
+    RENDER_CONTEXT_OP_SUBMIT_FENCE,
++   RENDER_CONTEXT_OP_W32_BARRIER,
+ 
+    RENDER_CONTEXT_OP_COUNT,
+ };
+@@ -164,6 +165,7 @@ struct render_context_op_import_resource_request {
+    uint32_t res_id;
+    enum virgl_resource_fd_type fd_type;
+    uint64_t size;
++   struct virgl_resource_vulkan_info vulkan_info;
+    /* followed by 1 fd */
+ };
+ 
+diff --git a/server/render_state.c b/server/render_state.c
+index 715f85e..44f0735 100644
+--- a/server/render_state.c
++++ b/server/render_state.c
+@@ -238,7 +238,7 @@ render_state_import_resource(uint32_t ctx_id,
+                              uint64_t size)
+ {
+    SCOPE_LOCK_RENDERER();
+-   return vkr_renderer_import_resource(ctx_id, res_id, fd_type, fd, size);
++   return vkr_renderer_import_resource(ctx_id, res_id, fd_type, fd, size, NULL);
+ }
+ 
+ void
+diff --git a/src/meson.build b/src/meson.build
+index 8b43e2e..3351387 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -265,6 +265,7 @@ if with_video
+ endif
+ 
+ if with_host_windows
++  virgl_sources += ['vrend/vrend_win32_wsi.c']
+   virgl_sources += ['mman_win32.c']
+   virgl_depends += [meson.get_compiler('c').find_library('ws2_32')]
+   # winmm for timeBeginPeriod (system timer resolution control)
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index e44c424..7e143d7 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -23,6 +23,59 @@
+ #include "util/os_file.h"
+ 
+ #include "proxy_client.h"
++#ifdef _WIN32
++#include "pipe/p_state.h"
++#include "proxy_server.h"
++#endif
++
++#ifdef _WIN32
++static bool
++proxy_context_direct_requested(void)
++{
++   const char *enabled = getenv("WINQ_VENUS_DIRECT");
++   if (enabled && !strcmp(enabled,"1")) return true;
++   const char *path = getenv("WINQ_VENUS_DIRECT_FILE");
++   if (!path || !path[0]) return false;
++   FILE *file = fopen(path,"rb");
++   if (!file) return false;
++   int value = fgetc(file);
++   fclose(file);
++   return value == '1';
++}
++
++static bool
++proxy_context_direct_ready(struct proxy_context *ctx)
++{
++   if (!ctx->pending_worker_requests) return true;
++   const struct render_context_op_header request = {.op=RENDER_CONTEXT_OP_W32_BARRIER};
++   uint32_t reply=0;
++   if (!proxy_socket_send_request(&ctx->socket,&request,sizeof(request)) ||
++       !proxy_socket_receive_reply(&ctx->socket,&reply,sizeof(reply)) || reply!=1) return false;
++   ctx->pending_worker_requests=false;
++   return true;
++}
++#endif
++
++static void
++proxy_log_wsi_attach_failure(struct proxy_context *ctx, struct virgl_resource *res,
++                            enum virgl_resource_fd_type exported_type)
++{
++#ifdef _WIN32
++   const char *enabled = getenv("WINQ_ANDROID_WSI");
++   if (enabled && !strcmp(enabled, "1")) {
++      const struct pipe_resource *pipe = res->pipe_resource;
++      fprintf(stderr, "[venus-wsi] attach rejected ctx=%u res=%u fd_type=%d exported=%d "
++              "size=%" PRIu64 " width=%u height=%u format=%u bind=0x%x\n",
++              ctx->base.ctx_id, res->res_id, res->fd_type, exported_type, res->map_size,
++              pipe ? pipe->width0 : 0, pipe ? pipe->height0 : 0,
++              pipe ? pipe->format : 0, pipe ? pipe->bind : 0);
++   }
++#else
++   (void)ctx;
++   (void)res;
++   (void)exported_type;
++#endif
++}
+ 
+ struct proxy_fence {
+    uint32_t flags;
+@@ -136,7 +189,17 @@ proxy_context_retire_timeline_fences_locked(struct proxy_context *ctx,
+       if (!proxy_fence_is_signaled(fence, timeline->cur_seqno) && !force_retire_all)
+          return false;
+ 
++#ifdef _WIN32
++      uint64_t trace_retire = winq_trace_now(ctx->trace_enabled);
++      if (ctx->trace_enabled && fence->seqno == cur_seqno) {
++         uint64_t trace_signal = proxy_server_trace_retire_ticks(ctx->base.ctx_id, ring_idx, cur_seqno);
++         winq_trace_add(&ctx->trace_signal_to_proxy[ring_idx], trace_signal, trace_retire);
++      }
++#endif
+       ctx->base.fence_retire(&ctx->base, ring_idx, fence->fence_id);
++#ifdef _WIN32
++      winq_trace_add(&ctx->trace_proxy_callback[ring_idx], trace_retire, winq_trace_now(ctx->trace_enabled));
++#endif
+ 
+       list_del(&fence->head);
+       proxy_context_free_fence(ctx, fence);
+@@ -249,7 +312,15 @@ proxy_context_submit_fence(struct virgl_context *base,
+       .ring_index = ring_idx,
+       .seqno = fence->seqno,
+    };
+-   if (proxy_socket_send_request(&ctx->socket, &req, sizeof(req)))
++   bool submitted;
++#ifdef _WIN32
++   if (ctx->direct_transport)
++      submitted = proxy_context_direct_ready(ctx) &&
++                  proxy_server_submit_fence_direct(ctx->base.ctx_id,ring_idx,fence->seqno);
++   else
++#endif
++      submitted = proxy_socket_send_request(&ctx->socket, &req, sizeof(req));
++   if (submitted)
+       return 0;
+ 
+    /* recover timeline fences and busy_mask on submit_fence request failure */
+@@ -293,6 +364,12 @@ proxy_context_submit_cmd(struct virgl_context *base, const void *buffer, size_t
+    if (!size)
+       return 0;
+ 
++#ifdef _WIN32
++   if (ctx->direct_transport)
++      return proxy_context_direct_ready(ctx) &&
++             proxy_server_submit_cmd_direct(ctx->base.ctx_id,buffer,size) ? 0 : -1;
++#endif
++
+    struct render_context_op_submit_cmd_request req = {
+       .header.op = RENDER_CONTEXT_OP_SUBMIT_CMD,
+       .size = size,
+@@ -432,6 +509,11 @@ proxy_context_get_blob(struct virgl_context *base,
+ 
+    proxy_context_resource_add(ctx, res_id);
+ 
++#ifdef _WIN32
++   /* The synchronous CREATE_RESOURCE reply drains all earlier worker requests. */
++   ctx->pending_worker_requests=false;
++#endif
++
+    return 0;
+ }
+ 
+@@ -463,6 +545,9 @@ proxy_context_detach_resource(struct virgl_context *base, struct virgl_resource
+    };
+    if (!proxy_socket_send_request(&ctx->socket, &req, sizeof(req)))
+       proxy_log("failed to detach res %d", res_id);
++#ifdef _WIN32
++   ctx->pending_worker_requests=true;
++#endif
+ 
+    proxy_context_resource_remove(ctx, res_id);
+ }
+@@ -477,14 +562,23 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+    if (proxy_context_resource_find(ctx, res_id))
+       return;
+ 
++   bool native_opaque = false;
++#ifdef _WIN32
++   const char *native_enabled = getenv("WINQ_NATIVE_WSI_ALLOC");
++   native_opaque = native_enabled && !strcmp(native_enabled,"1") &&
++                   res->vulkan_info.allocation_size > 0;
++#endif
++
+    /* The current render protocol only supports importing dma-buf, shm or pipe resource
+     * that can be exported to dma-buf. A protocol change is needed when there exists use
+     * case for importing external Vulkan opaque resource.
+     */
+    if (res->fd_type != VIRGL_RESOURCE_FD_INVALID &&
+        res->fd_type != VIRGL_RESOURCE_FD_DMABUF &&
+-       res->fd_type != VIRGL_RESOURCE_FD_SHM) {
++       res->fd_type != VIRGL_RESOURCE_FD_SHM &&
++       !(native_opaque && res->fd_type == VIRGL_RESOURCE_FD_OPAQUE)) {
+       proxy_log("failed to attach res %d with fd_type %d", res_id, res->fd_type);
++      proxy_log_wsi_attach_failure(ctx, res, res->fd_type);
+       return;
+    }
+ 
+@@ -495,11 +589,13 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+    if (res_fd_type == VIRGL_RESOURCE_FD_INVALID) {
+       /* importable pipe resouce can only export as dma-buf */
+       res_fd_type = virgl_resource_export_fd(res, &res_fd);
+-      if (res_fd_type != VIRGL_RESOURCE_FD_DMABUF) {
++      if (res_fd_type != VIRGL_RESOURCE_FD_DMABUF &&
++          !(native_opaque && res_fd_type == VIRGL_RESOURCE_FD_OPAQUE)) {
+          /* close fd for unexpected fd type from succeeded export */
+          if (res_fd_type != VIRGL_RESOURCE_FD_INVALID)
+             os_close_fd(res_fd);
+          proxy_log("exported res %d to unexpected fd_type %d", res_id, res_fd_type);
++         proxy_log_wsi_attach_failure(ctx, res, res_fd_type);
+          return;
+       }
+ 
+@@ -507,7 +603,7 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+        * - pipe resource created by vrend has a zero map_size
+        * - blob resource created by vrend can have non-zero fake map_size
+        */
+-      res_size = lseek(res_fd, 0, SEEK_END);
++      res_size = native_opaque ? res->vulkan_info.allocation_size : (uint64_t)lseek(res_fd, 0, SEEK_END);
+ 
+       close_res_fd = true;
+    }
+@@ -518,14 +614,19 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+       .res_id = res_id,
+       .fd_type = res_fd_type,
+       .size = res_size,
++      .vulkan_info = res->vulkan_info,
+    };
+-   if (!proxy_socket_send_request_with_fds(&ctx->socket, &req, sizeof(req), &res_fd, 1))
++   const bool attached = proxy_socket_send_request_with_fds(&ctx->socket, &req, sizeof(req), &res_fd, 1);
++#ifdef _WIN32
++   if (attached) ctx->pending_worker_requests=true;
++#endif
++   if (!attached)
+       proxy_log("failed to attach res %d", res_id);
+ 
+    if (res_fd >= 0 && close_res_fd)
+       os_close_fd(res_fd);
+ 
+-   proxy_context_resource_add(ctx, res_id);
++   if (attached) proxy_context_resource_add(ctx, res_id);
+ }
+ 
+ static void
+@@ -569,6 +670,12 @@ proxy_context_destroy(struct virgl_context *base)
+ 
+    proxy_socket_fini(&ctx->socket);
+ 
++#ifdef _WIN32
++   for (uint32_t i = 0; i < PROXY_CONTEXT_TIMELINE_COUNT; i++) {
++      winq_trace_dump(ctx->base.ctx_id, i, "server_signal_to_proxy_retire", &ctx->trace_signal_to_proxy[i]);
++      winq_trace_dump(ctx->base.ctx_id, i, "proxy_to_qemu_callback", &ctx->trace_proxy_callback[i]);
++   }
++#endif
+    free(ctx);
+ }
+ 
+@@ -704,6 +811,10 @@ proxy_context_init(struct proxy_context *ctx, uint32_t ctx_flags)
+       return false;
+    }
+ 
++#ifdef _WIN32
++   ctx->pending_worker_requests=true;
++#endif
++
+    return true;
+ }
+ 
+@@ -731,6 +842,12 @@ proxy_context_create(uint32_t ctx_id,
+    proxy_context_init_base(ctx);
+    ctx->client = client;
+    proxy_socket_init(&ctx->socket, ctx_fd);
++#ifdef _WIN32
++   ctx->direct_transport=proxy_context_direct_requested();
++   ctx->trace_enabled=winq_trace_enabled();
++   if (ctx->direct_transport)
++      fprintf(stderr,"[venus-direct] context %u uses in-process control and fence submission\n",ctx_id);
++#endif
+    ctx->shmem.fd = -1;
+    mtx_init(&ctx->timeline_mutex, mtx_plain);
+    mtx_init(&ctx->free_fences_mutex, mtx_plain);
+diff --git a/src/proxy/proxy_context.h b/src/proxy/proxy_context.h
+index ce29eca..c6b339f 100644
+--- a/src/proxy/proxy_context.h
++++ b/src/proxy/proxy_context.h
+@@ -10,6 +10,7 @@
+ 
+ #include "c11/threads.h"
+ #include "virgl_context.h"
++#include "winq_venus_trace.h"
+ 
+ /* matches virtio-gpu */
+ #define PROXY_CONTEXT_TIMELINE_COUNT 64
+@@ -29,6 +30,13 @@ struct proxy_context {
+ 
+    struct proxy_client *client;
+    struct proxy_socket socket;
++#ifdef _WIN32
++   bool direct_transport;
++   bool pending_worker_requests;
++   bool trace_enabled;
++   struct winq_trace_metric trace_signal_to_proxy[PROXY_CONTEXT_TIMELINE_COUNT];
++   struct winq_trace_metric trace_proxy_callback[PROXY_CONTEXT_TIMELINE_COUNT];
++#endif
+ 
+    /* this tracks resources early attached in get_blob */
+    struct hash_table *resource_table;
+diff --git a/src/proxy/proxy_server.c b/src/proxy/proxy_server.c
+index c97d8cb..ac47091 100644
+--- a/src/proxy/proxy_server.c
++++ b/src/proxy/proxy_server.c
+@@ -6,6 +6,8 @@
+ #include "proxy_server.h"
+ 
+ #ifdef _WIN32
++#include "util/os_file.h"
++
+ #include <windows.h>
+ #include <errno.h>
+ #include <io.h>
+@@ -68,9 +70,11 @@ proxy_server_destroy(struct proxy_server *srv)
+ #include "c11/threads.h"
+ #include "vkr_renderer.h"
+ #include "virgl_util.h"
++#include "winq_venus_trace.h"
+ 
+ /* matches PROXY_CONTEXT_TIMELINE_COUNT in proxy_context.h */
+ #define SERVER_TIMELINE_COUNT 64
++#define SERVER_MAX_FD_COUNT 8
+ 
+ struct server_context_worker {
+    uint32_t ctx_id;
+@@ -85,6 +89,9 @@ struct server_context_worker {
+    atomic_uint *timeline_seqnos;
+    int timeline_count;
+    int fence_eventfd;
++   bool trace_enabled;
++   uint64_t trace_signal_ticks[SERVER_TIMELINE_COUNT];
++   uint32_t trace_signal_seqnos[SERVER_TIMELINE_COUNT];
+ 
+    thrd_t thread;
+    struct list_head head;
+@@ -104,6 +111,47 @@ struct server_thread_state {
+ /* global state for the retire_fence callback */
+ static struct server_thread_state *g_server_state;
+ 
++bool
++proxy_server_submit_cmd_direct(uint32_t ctx_id, const void *buffer, size_t size)
++{
++   struct server_thread_state *state = g_server_state;
++   if (!state || size > UINT32_MAX || (size && !buffer))
++      return false;
++
++   char stack_cmd[512];
++   void *cmd = stack_cmd;
++   if (size > sizeof(stack_cmd)) {
++      cmd = malloc(size);
++      if (!cmd)
++         return false;
++   }
++   if (size)
++      memcpy(cmd, buffer, size);
++
++   mtx_lock(&state->renderer_mutex);
++   bool ok = vkr_renderer_submit_cmd(ctx_id, cmd, (uint32_t)size);
++   mtx_unlock(&state->renderer_mutex);
++
++   if (cmd != stack_cmd)
++      free(cmd);
++   return ok;
++}
++
++bool
++proxy_server_submit_fence_direct(uint32_t ctx_id, uint32_t ring, uint32_t seqno)
++{
++   struct server_thread_state *state = g_server_state;
++   if (!state)
++      return false;
++
++   mtx_lock(&state->renderer_mutex);
++   bool ok = vkr_renderer_submit_fence(ctx_id,
++                                       VIRGL_RENDERER_FENCE_FLAG_MERGEABLE,
++                                       ring, seqno);
++   mtx_unlock(&state->renderer_mutex);
++   return ok;
++}
++
+ static bool
+ server_recv_all(int fd, void *data, size_t len)
+ {
+@@ -167,18 +215,42 @@ static bool
+ server_send_reply_with_fds(int fd, const void *data, size_t size,
+                            const int *fds, int fd_count)
+ {
+-   if (!server_send_all(fd, data, size))
++   if (fd_count < 0 || fd_count > SERVER_MAX_FD_COUNT || (fd_count && !fds))
+       return false;
+ 
++   int dup_fds[SERVER_MAX_FD_COUNT];
++   bool duplicated[SERVER_MAX_FD_COUNT] = { false };
++   for (int i = 0; i < fd_count; i++) {
++      int type;
++      int type_len = sizeof(type);
++      bool is_socket = getsockopt((SOCKET)(uintptr_t)(unsigned int)fds[i],
++                                  SOL_SOCKET, SO_TYPE, (char *)&type,
++                                  &type_len) == 0;
++      dup_fds[i] = is_socket ? fds[i] : os_dupfd_cloexec(fds[i]);
++      duplicated[i] = !is_socket && dup_fds[i] >= 0;
++      if (dup_fds[i] < 0) {
++         for (int j = 0; j < i; j++)
++            if (duplicated[j])
++               os_close_fd(dup_fds[j]);
++         return false;
++      }
++   }
++
++   bool sent = server_send_all(fd, data, size);
++
+    uint32_t count = (uint32_t)fd_count;
+-   if (!server_send_all(fd, &count, sizeof(count)))
+-      return false;
++   if (sent)
++      sent = server_send_all(fd, &count, sizeof(count));
+ 
+-   if (fd_count > 0) {
+-      if (!server_send_all(fd, fds, sizeof(int) * fd_count))
+-         return false;
++   if (sent && fd_count > 0)
++      sent = server_send_all(fd, dup_fds, sizeof(int) * fd_count);
++
++   if (!sent || fd_count == 0) {
++      for (int i = 0; i < fd_count; i++)
++         if (duplicated[i])
++            os_close_fd(dup_fds[i]);
+    }
+-   return true;
++   return sent;
+ }
+ 
+ static struct server_context_worker *
+@@ -208,6 +280,10 @@ server_retire_fence_cb(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id)
+    struct server_context_worker *w = server_find_worker(state, ctx_id);
+    if (w && w->timeline_seqnos && (int)ring_idx < w->timeline_count) {
+       uint32_t seqno = (uint32_t)fence_id;
++      if (w->trace_enabled) {
++         w->trace_signal_ticks[ring_idx] = winq_trace_now(true);
++         w->trace_signal_seqnos[ring_idx] = seqno;
++      }
+       atomic_store(&w->timeline_seqnos[ring_idx], seqno);
+       if (w->fence_eventfd >= 0)
+          write_eventfd(w->fence_eventfd, 1);
+@@ -215,6 +291,23 @@ server_retire_fence_cb(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id)
+    mtx_unlock(&state->workers_mutex);
+ }
+ 
++/* Diagnostic correlation only; no change to timeline signaling or retirement.
++ * A later/coalesced signal is rejected rather than attributed to an older fence. */
++uint64_t
++proxy_server_trace_retire_ticks(uint32_t ctx_id, uint32_t ring, uint32_t seqno)
++{
++   struct server_thread_state *state = g_server_state;
++   if (!state || ring >= SERVER_TIMELINE_COUNT)
++      return 0;
++   uint64_t ticks = 0;
++   mtx_lock(&state->workers_mutex);
++   struct server_context_worker *w = server_find_worker(state, ctx_id);
++   if (w && w->trace_enabled && w->trace_signal_seqnos[ring] == seqno)
++      ticks = w->trace_signal_ticks[ring];
++   mtx_unlock(&state->workers_mutex);
++   return ticks;
++}
++
+ static void
+ server_cb_debug_logger(UNUSED enum virgl_log_level_flags log_level,
+                        const char *message,
+@@ -388,6 +481,13 @@ server_context_worker_thread(void *arg)
+          break;
+       }
+ 
++      case RENDER_CONTEXT_OP_W32_BARRIER: {
++         const uint32_t reply = 1;
++         if (!server_send_reply(w->socket_fd, &reply, sizeof(reply)))
++            goto done;
++         break;
++      }
++
+       case RENDER_CONTEXT_OP_CREATE_RESOURCE: {
+          /* Read fields individually to avoid struct padding between
+           * uint32_t res_id and uint64_t blob_id (4 bytes padding on 64-bit).
+@@ -421,20 +521,19 @@ server_context_worker_thread(void *arg)
+          } else {
+             server_send_reply_with_fds(w->socket_fd, &reply, sizeof(reply),
+                                        &res_fd, 1);
++            os_close_fd(res_fd);
+          }
+          break;
+       }
+ 
+       case RENDER_CONTEXT_OP_IMPORT_RESOURCE: {
+-         struct {
+-            uint32_t res_id;
+-            enum virgl_resource_fd_type fd_type;
+-            uint64_t size;
+-         } imp_body;
++         struct render_context_op_import_resource_request req = { 0 };
+ 
+          int fds[1];
+          int fd_count;
+-         if (!server_recv_with_fds(w->socket_fd, &imp_body, sizeof(imp_body),
++         if (!server_recv_with_fds(w->socket_fd,
++                                   (char *)&req + sizeof(req.header),
++                                   sizeof(req) - sizeof(req.header),
+                                    fds, 1, &fd_count))
+             goto done;
+ 
+@@ -444,8 +543,10 @@ server_context_worker_thread(void *arg)
+          }
+ 
+          mtx_lock(&state->renderer_mutex);
+-         vkr_renderer_import_resource(w->ctx_id, imp_body.res_id,
+-                                      imp_body.fd_type, fds[0], imp_body.size);
++         vkr_renderer_import_resource(w->ctx_id, req.res_id,
++                                      req.fd_type, fds[0], req.size,
++                                      req.vulkan_info.allocation_size > 0 ?
++                                         &req.vulkan_info : NULL);
+          mtx_unlock(&state->renderer_mutex);
+          break;
+       }
+@@ -553,6 +654,7 @@ server_main_thread(void *arg)
+          }
+ 
+          w->ctx_id = ctx_body.ctx_id;
++         w->trace_enabled = winq_trace_enabled();
+          w->name_len = (uint32_t)strnlen(ctx_body.ctx_name,
+                                          sizeof(ctx_body.ctx_name) - 1);
+          memcpy(w->name, ctx_body.ctx_name, w->name_len);
+diff --git a/src/proxy/proxy_server.h b/src/proxy/proxy_server.h
+index b70da2b..87e6742 100644
+--- a/src/proxy/proxy_server.h
++++ b/src/proxy/proxy_server.h
+@@ -32,4 +32,15 @@ proxy_server_destroy(struct proxy_server *srv);
+ int
+ proxy_server_connect(struct proxy_server *srv);
+ 
++#ifdef _WIN32
++bool
++proxy_server_submit_cmd_direct(uint32_t ctx_id, const void *buffer, size_t size);
++
++bool
++proxy_server_submit_fence_direct(uint32_t ctx_id, uint32_t ring, uint32_t seqno);
++
++uint64_t
++proxy_server_trace_retire_ticks(uint32_t ctx_id, uint32_t ring, uint32_t seqno);
++#endif
++
+ #endif /* PROXY_SERVER_H */
+diff --git a/src/proxy/proxy_socket.c b/src/proxy/proxy_socket.c
+index 63c5082..42aa309 100644
+--- a/src/proxy/proxy_socket.c
++++ b/src/proxy/proxy_socket.c
+@@ -7,6 +7,8 @@
+ #include "server/render_protocol.h"
+ 
+ #ifdef _WIN32
++#include "util/os_file.h"
++
+ #include <windows.h>
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+@@ -191,20 +193,55 @@ proxy_socket_send_request_with_fds(struct proxy_socket *socket,
+                                    const int *fds,
+                                    int fd_count)
+ {
+-   if (!send_all((SOCKET)socket->fd, data, size))
++   if (fd_count < 0 || fd_count > PROXY_SOCKET_MAX_FD_COUNT || (fd_count && !fds))
+       return false;
+ 
++   const struct render_context_op_header *header = data;
++   const bool import_resource = size >= sizeof(*header) &&
++      header->op == RENDER_CONTEXT_OP_IMPORT_RESOURCE;
++   int dup_fds[PROXY_SOCKET_MAX_FD_COUNT];
++   bool duplicated[PROXY_SOCKET_MAX_FD_COUNT] = { false };
++   for (int i = 0; i < fd_count; i++) {
++      /* INIT descriptors are borrowed from their synthetic counter registry;
++       * only imported resource descriptors need an owned duplicate.
++       */
++      if (!import_resource) {
++         dup_fds[i] = fds[i];
++         continue;
++      }
++
++      int type;
++      int type_len = sizeof(type);
++      bool is_socket = getsockopt((SOCKET)(uintptr_t)(unsigned int)fds[i],
++                                  SOL_SOCKET, SO_TYPE, (char *)&type,
++                                  &type_len) == 0;
++      dup_fds[i] = is_socket ? fds[i] : os_dupfd_cloexec(fds[i]);
++      duplicated[i] = !is_socket && dup_fds[i] >= 0;
++      if (dup_fds[i] < 0) {
++         for (int j = 0; j < i; j++)
++            if (duplicated[j])
++               os_close_fd(dup_fds[j]);
++         return false;
++      }
++   }
++
++   bool sent = send_all((SOCKET)socket->fd, data, size);
++
+    /* Send fds inline (threads share fd table, no SCM_RIGHTS needed) */
+    uint32_t count = (uint32_t)fd_count;
+-   if (!send_all((SOCKET)socket->fd, &count, sizeof(count)))
+-      return false;
++   if (sent)
++      sent = send_all((SOCKET)socket->fd, &count, sizeof(count));
+ 
+-   if (fd_count > 0) {
+-      if (!send_all((SOCKET)socket->fd, fds, sizeof(int) * fd_count))
+-         return false;
++   if (sent && fd_count > 0)
++      sent = send_all((SOCKET)socket->fd, dup_fds, sizeof(int) * fd_count);
++
++   if (!sent || fd_count == 0) {
++      for (int i = 0; i < fd_count; i++)
++         if (duplicated[i])
++            os_close_fd(dup_fds[i]);
+    }
+ 
+-   return true;
++   return sent;
+ }
+ 
+ #else /* !_WIN32 */
+diff --git a/src/venus/vkr_command_buffer.c b/src/venus/vkr_command_buffer.c
+index dc42c5a..4c9bc31 100644
+--- a/src/venus/vkr_command_buffer.c
++++ b/src/venus/vkr_command_buffer.c
+@@ -6,6 +6,20 @@
+ #include "vkr_command_buffer.h"
+ 
+ #include "vkr_command_buffer_gen.h"
++#include "vkr_physical_device.h"
++#include "vkr_win32_foreign.h"
++
++static bool
++vkr_command_uses_win32_foreign(VkCommandBuffer handle)
++{
++#ifdef _WIN32
++   struct vkr_command_buffer *cmd = vkr_command_buffer_from_handle(handle);
++   return cmd->device->physical_device->EXT_queue_family_foreign_synthesized;
++#else
++   (void)handle;
++   return false;
++#endif
++}
+ 
+ #ifdef __clang__
+ #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+@@ -434,6 +448,9 @@ static void
+ vkr_dispatch_vkCmdWaitEvents(UNUSED struct vn_dispatch_context *dispatch,
+                              struct vn_command_vkCmdWaitEvents *args)
+ {
++   vkr_win32_foreign_barriers(vkr_command_uses_win32_foreign(args->commandBuffer),
++                              args->bufferMemoryBarrierCount, args->pBufferMemoryBarriers,
++                              args->imageMemoryBarrierCount, args->pImageMemoryBarriers);
+    VKR_CMD_CALL(CmdWaitEvents, args, args->eventCount, args->pEvents, args->srcStageMask,
+                 args->dstStageMask, args->memoryBarrierCount, args->pMemoryBarriers,
+                 args->bufferMemoryBarrierCount, args->pBufferMemoryBarriers,
+@@ -444,6 +461,9 @@ static void
+ vkr_dispatch_vkCmdPipelineBarrier(UNUSED struct vn_dispatch_context *dispatch,
+                                   struct vn_command_vkCmdPipelineBarrier *args)
+ {
++   vkr_win32_foreign_barriers(vkr_command_uses_win32_foreign(args->commandBuffer),
++                              args->bufferMemoryBarrierCount, args->pBufferMemoryBarriers,
++                              args->imageMemoryBarrierCount, args->pImageMemoryBarriers);
+    VKR_CMD_CALL(CmdPipelineBarrier, args, args->srcStageMask, args->dstStageMask,
+                 args->dependencyFlags, args->memoryBarrierCount, args->pMemoryBarriers,
+                 args->bufferMemoryBarrierCount, args->pBufferMemoryBarriers,
+@@ -811,6 +831,8 @@ static void
+ vkr_dispatch_vkCmdPipelineBarrier2(UNUSED struct vn_dispatch_context *ctx,
+                                    struct vn_command_vkCmdPipelineBarrier2 *args)
+ {
++   vkr_win32_foreign_dependencies(vkr_command_uses_win32_foreign(args->commandBuffer),
++                                  1, args->pDependencyInfo);
+    VKR_CMD_CALL(CmdPipelineBarrier2, args, args->pDependencyInfo);
+ }
+ 
+@@ -825,13 +847,17 @@ static void
+ vkr_dispatch_vkCmdSetEvent2(UNUSED struct vn_dispatch_context *ctx,
+                             struct vn_command_vkCmdSetEvent2 *args)
+ {
++   vkr_win32_foreign_dependencies(vkr_command_uses_win32_foreign(args->commandBuffer),
++                                  1, args->pDependencyInfo);
+    VKR_CMD_CALL(CmdSetEvent2, args, args->event, args->pDependencyInfo);
+ }
+ 
+ static void
+ vkr_dispatch_vkCmdWaitEvents2(UNUSED struct vn_dispatch_context *ctx,
+-                              struct vn_command_vkCmdWaitEvents2 *args)
++                             struct vn_command_vkCmdWaitEvents2 *args)
+ {
++   vkr_win32_foreign_dependencies(vkr_command_uses_win32_foreign(args->commandBuffer),
++                                  args->eventCount, args->pDependencyInfos);
+    VKR_CMD_CALL(CmdWaitEvents2, args, args->eventCount, args->pEvents,
+                 args->pDependencyInfos);
+ }
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index a79fe2f..be87e08 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -158,11 +158,19 @@ vkr_context_submit_fence(struct vkr_context *ctx,
+       vkr_log("submit_fence: invalid ring_idx %u", ring_idx);
+       return false;
+    }
++   if (ctx->batch_seqno_pending && ctx->batch_seqno_queue &&
++       ctx->sync_queues[ring_idx] != ctx->batch_seqno_queue) {
++      vkr_log("compound control fence belongs to another native queue");
++      vkr_context_set_fatal(ctx);
++      return false;
++   }
+ 
+    /* always merge fences */
+    assert(!(flags & ~VIRGL_RENDERER_FENCE_FLAG_MERGEABLE));
+    flags = VIRGL_RENDERER_FENCE_FLAG_MERGEABLE;
+    bool ok = vkr_queue_sync_submit(ctx->sync_queues[ring_idx], flags, ring_idx, fence_id);
++   if (ok && ctx->batch_seqno_pending)
++      ok = vkr_context_complete_batch_seqno(ctx);
+ 
+    return ok;
+ }
+@@ -176,6 +184,15 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
+       return false;
+    }
+ 
++   if (ctx->batch_seqno_pending) {
++      vkr_log("batch sync control arrived before its GPU fence");
++      vkr_context_set_fatal(ctx);
++      return false;
++   }
++   ctx->batch_sync_dispatch = ctx->batch_sync_enabled;
++   ctx->batch_waited_ring = 0;
++   ctx->batch_control_queue = NULL;
++
+    vkr_cs_decoder_set_buffer_stream(&ctx->decoder, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(&ctx->decoder)) {
+@@ -184,11 +201,15 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
+          vkr_log("submit_cmd: vn_dispatch_command failed");
+ 
+          vkr_cs_decoder_reset(&ctx->decoder);
++         ctx->batch_sync_dispatch = false;
+          return false;
+       }
+    }
+ 
+    vkr_cs_decoder_reset(&ctx->decoder);
++   ctx->batch_sync_dispatch = false;
++   ctx->batch_waited_ring = 0;
++   ctx->batch_control_queue = NULL;
+    return true;
+ }
+ 
+@@ -237,7 +258,7 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+ {
+    assert(!vkr_context_get_resource(ctx, res_id));
+ 
+-   struct vkr_resource *res = malloc(sizeof(*res));
++   struct vkr_resource *res = calloc(1, sizeof(*res));
+    if (!res)
+       return false;
+ 
+@@ -387,12 +408,24 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size)
++                            uint64_t size,
++                            const struct virgl_resource_vulkan_info *vulkan_info)
+ {
++   bool imported;
+    if (fd_type == VIRGL_RESOURCE_FD_SHM)
+-      return vkr_context_import_resource_from_shm(ctx, res_id, size, fd);
++      imported = vkr_context_import_resource_from_shm(ctx, res_id, size, fd);
++   else
++      imported = vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL);
++
++   if (imported && vulkan_info) {
++      mtx_lock(&ctx->resource_mutex);
++      const struct hash_entry *entry = _mesa_hash_table_search(ctx->resource_table, &res_id);
++      if (entry)
++         ((struct vkr_resource *)entry->data)->vulkan_info = *vulkan_info;
++      mtx_unlock(&ctx->resource_mutex);
++   }
+ 
+-   return vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL);
++   return imported;
+ }
+ 
+ void
+@@ -469,6 +502,7 @@ vkr_context_wait_ring_seqno(struct vkr_context *ctx,
+ 
+    bool ok = true;
+ 
++   uint64_t trace_begin = winq_trace_now(ctx->trace_enabled);
+    mtx_lock(&ctx->wait_ring.mutex);
+    ctx->wait_ring.id = ring->id;
+    ctx->wait_ring.seqno = ring_seqno;
+@@ -477,6 +511,7 @@ vkr_context_wait_ring_seqno(struct vkr_context *ctx,
+       ok = cnd_wait(&ctx->wait_ring.cond, &ctx->wait_ring.mutex) == thrd_success;
+    }
+    ctx->wait_ring.id = 0;
++   winq_trace_add(&ctx->trace_ring_wait, trace_begin, winq_trace_now(ctx->trace_enabled));
+    mtx_unlock(&ctx->wait_ring.mutex);
+ 
+    return ok;
+@@ -630,6 +665,7 @@ vkr_context_destroy(struct vkr_context *ctx)
+    }
+    mtx_destroy(&ctx->ring_mutex);
+ 
++   winq_trace_dump(ctx->ctx_id, 0, "control_wait_ring_seqno", &ctx->trace_ring_wait);
+    vkr_context_wait_ring_fini(ctx);
+ 
+    if (ctx->ring_monitor.started)
+@@ -693,6 +729,11 @@ vkr_context_create(uint32_t ctx_id,
+    }
+ 
+    ctx->ctx_id = ctx_id;
++   ctx->trace_enabled = winq_trace_enabled();
++#ifdef _WIN32
++   const char *batch_sync = getenv("WINQ_VENUS_BATCH_SYNC");
++   ctx->batch_sync_enabled = batch_sync && !strcmp(batch_sync, "1");
++#endif
+    ctx->retire_fence = cb;
+    ctx->debug_name = malloc(debug_len + 1);
+    if (!ctx->debug_name)
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 12541a7..01d0ee3 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -14,6 +14,7 @@
+ #include "virgl_resource.h"
+ 
+ #include "vkr_cs.h"
++#include "winq_venus_trace.h"
+ 
+ /*
+  * When vkr_context_create_resource or vkr_context_import_resource is called, a
+@@ -32,6 +33,7 @@ struct vkr_resource {
+    } u;
+ 
+    size_t size;
++   struct virgl_resource_vulkan_info vulkan_info;
+ };
+ 
+ enum vkr_context_validate_level {
+@@ -45,6 +47,18 @@ enum vkr_context_validate_level {
+ 
+ struct vkr_context {
+    uint32_t ctx_id;
++   bool trace_enabled;
++   struct winq_trace_metric trace_ring_wait;
++   /* Experimental compound control packet: its virtqueue acknowledgement
++    * becomes visible only after the following GPU fence has been queued. */
++   bool batch_sync_enabled;
++   bool batch_sync_dispatch;
++   uint64_t batch_waited_ring;
++   struct vkr_queue *batch_control_queue;
++   bool batch_seqno_pending;
++   struct vkr_queue *batch_seqno_queue;
++   uint64_t batch_seqno_ring;
++   uint64_t batch_seqno;
+    vkr_renderer_retire_fence_callback_type retire_fence;
+ 
+    char *debug_name;
+@@ -139,7 +153,8 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size);
++                            uint64_t size,
++                            const struct virgl_resource_vulkan_info *vulkan_info);
+ 
+ void
+ vkr_context_destroy_resource(struct vkr_context *ctx, uint32_t res_id);
+@@ -155,10 +170,18 @@ vkr_context_get_resource(struct vkr_context *ctx, uint32_t res_id)
+ }
+ 
+ static inline void
+-vkr_context_set_fatal(struct vkr_context *ctx)
++vkr_context_set_fatal_at(struct vkr_context *ctx, const char *function, int line)
+ {
++#ifdef _WIN32
++   if (!ctx->cs_fatal_error && getenv("WINQ_ANDROID_WSI"))
++      fprintf(stderr, "[venus-wsi] fatal context at %s:%d\n", function, line);
++#else
++   (void)function;
++   (void)line;
++#endif
+    ctx->cs_fatal_error = true;
+ }
++#define vkr_context_set_fatal(ctx) vkr_context_set_fatal_at((ctx), __func__, __LINE__)
+ 
+ static inline bool
+ vkr_context_get_fatal(struct vkr_context *ctx)
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index e5d603d..e9670b2 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -51,6 +51,9 @@ vkr_device_map_guest_ext_to_host(const struct vkr_physical_device *physical_dev,
+    if (!strcmp(name, "VK_EXT_image_drm_format_modifier") &&
+        physical_dev->EXT_image_drm_format_modifier_synthesized)
+       return NULL;
++   if (!strcmp(name, "VK_EXT_queue_family_foreign") &&
++       physical_dev->EXT_queue_family_foreign_synthesized)
++      return NULL;
+ #endif
+ 
+    return name;
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index 7c168fb..a08921d 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -490,6 +490,13 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+ #endif
+ 
+    struct vkr_device_memory *mem = vkr_device_memory_create_and_add(ctx, args);
++#ifdef _WIN32
++   /* NT imports retain the payload but do not take ownership of our duplicate. */
++   if (local_import_win32_info.handle && local_import_win32_info.handle != INVALID_HANDLE_VALUE) {
++      CloseHandle(local_import_win32_info.handle);
++      local_import_win32_info.handle = NULL;
++   }
++#endif
+    if (!mem) {
+       if (local_import_info.fd >= 0)
+          os_close_fd(local_import_info.fd);
+@@ -563,11 +570,39 @@ vkr_dispatch_vkGetMemoryResourcePropertiesMESA(
+    struct vkr_resource *res = vkr_context_get_resource(ctx, args->resourceId);
+    if (!res) {
+       vkr_log("failed to query resource props: invalid res_id %u", args->resourceId);
++#ifdef _WIN32
++      const char *enabled = getenv("WINQ_ANDROID_WSI");
++      if (enabled && !strcmp(enabled, "1"))
++         fprintf(stderr, "[venus-wsi] missing memory-properties resource ctx=%u res=%u\n",
++                 ctx->ctx_id, args->resourceId);
++#endif
+       vkr_context_set_fatal(ctx);
+       return;
+    }
+ 
+    vn_replace_vkGetMemoryResourcePropertiesMESA_args_handle(args);
++#ifdef _WIN32
++   if (res->fd_type == VIRGL_RESOURCE_FD_OPAQUE && res->vulkan_info.allocation_size) {
++      const struct virgl_resource_vulkan_info *info = &res->vulkan_info;
++      const struct vkr_physical_device *physical = dev->physical_device;
++      if (info->memory_type_index >= physical->memory_properties.memoryTypeCount ||
++          info->allocation_size != res->size ||
++          memcmp(info->device_uuid,physical->id_properties.deviceUUID,VK_UUID_SIZE) ||
++          memcmp(info->driver_uuid,physical->id_properties.driverUUID,VK_UUID_SIZE)) {
++         args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
++         return;
++      }
++      args->pMemoryResourceProperties->memoryTypeBits = 1u << info->memory_type_index;
++      VkMemoryResourceAllocationSizePropertiesMESA *size_info =
++         vkr_find_struct(args->pMemoryResourceProperties->pNext,
++                        VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_MESA);
++      if (size_info) size_info->allocationSize = info->allocation_size;
++      args->ret = VK_SUCCESS;
++      fprintf(stderr,"[venus-wsi] shared memory props res=%u bytes=%llu type=%u\n",
++              res->res_id,(unsigned long long)info->allocation_size,info->memory_type_index);
++      return;
++   }
++#endif
+    if (res->fd_type == VIRGL_RESOURCE_FD_DMABUF) {
+       static const VkExternalMemoryHandleTypeFlagBits handle_type =
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index ac4477b..f113d67 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -310,7 +310,7 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+       return;
+ 
+    /* 4 slots for existing Win32 external fd shims, +2 for dma-buf + modifier */
+-   const uint32_t extra_guest_exts = 6;
++   const uint32_t extra_guest_exts = 7;
+    exts = calloc(count + extra_guest_exts, sizeof(*exts));
+    if (!exts)
+       return;
+@@ -454,6 +454,20 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+       physical_dev->EXT_image_drm_format_modifier_synthesized = !had_modifier_from_host;
+ 
+       physical_dev->dma_buf_shim_active = true;
++      /* This is an opt-in bridge-owned Win32 resource domain, not support
++       * for importing arbitrary foreign adapters or driver allocations. */
++      if (getenv("WINQ_ANDROID_WSI") &&
++          !strcmp(getenv("WINQ_ANDROID_WSI"), "1") &&
++          !vkr_physical_device_has_extension(exts, advertised_count,
++                                             "VK_EXT_queue_family_foreign")) {
++         if (!vkr_physical_device_append_extension(exts, count + extra_guest_exts,
++                                                    &advertised_count,
++                                                    "VK_EXT_queue_family_foreign")) {
++            free(exts);
++            return;
++         }
++         physical_dev->EXT_queue_family_foreign_synthesized = true;
++      }
+    }
+ #endif
+ 
+diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
+index 5cefd3f..338c9fb 100644
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -48,6 +48,7 @@ struct vkr_physical_device {
+     */
+    bool EXT_external_memory_dma_buf_synthesized;
+    bool EXT_image_drm_format_modifier_synthesized;
++   bool EXT_queue_family_foreign_synthesized;
+ 
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    VkPhysicalDeviceIDProperties id_properties;
+diff --git a/src/venus/vkr_queue.c b/src/venus/vkr_queue.c
+index e111881..4363c55 100644
+--- a/src/venus/vkr_queue.c
++++ b/src/venus/vkr_queue.c
+@@ -145,13 +145,20 @@ vkr_queue_sync_submit(struct vkr_queue *queue,
+    struct vkr_device *dev = queue->device;
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   uint64_t trace_begin = winq_trace_now(queue->trace_enabled);
+    struct vkr_queue_sync *sync =
+       vkr_device_alloc_queue_sync(dev, flags, ring_idx, fence_id);
++   uint64_t trace_allocated = winq_trace_now(queue->trace_enabled);
++   winq_trace_add(&queue->trace_sync_alloc, trace_begin, trace_allocated);
+    if (!sync)
+       return false;
+ 
+    mtx_lock(&queue->vk_mutex);
++   uint64_t trace_locked = winq_trace_now(queue->trace_enabled);
+    VkResult result = vk->QueueSubmit(queue->base.handle.queue, 0, NULL, sync->fence);
++   uint64_t trace_submitted = winq_trace_now(queue->trace_enabled);
++   winq_trace_add(&queue->trace_sync_lock, trace_allocated, trace_locked);
++   winq_trace_add(&queue->trace_sync_submit, trace_locked, trace_submitted);
+    mtx_unlock(&queue->vk_mutex);
+ 
+    if (result == VK_ERROR_DEVICE_LOST) {
+@@ -164,6 +171,7 @@ vkr_queue_sync_submit(struct vkr_queue *queue,
+    }
+ 
+    mtx_lock(&queue->sync_thread.mutex);
++   sync->trace_enqueued = winq_trace_now(queue->trace_enabled);
+    list_addtail(&sync->head, &queue->sync_thread.syncs);
+    cnd_signal(&queue->sync_thread.cond);
+    mtx_unlock(&queue->sync_thread.mutex);
+@@ -194,6 +202,15 @@ vkr_queue_destroy(struct vkr_context *ctx, struct vkr_queue *queue)
+ {
+    vkr_queue_sync_thread_fini(queue);
+ 
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "workload_queue_lock", &queue->trace_workload_lock);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "workload_driver_submit", &queue->trace_workload_submit);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_alloc_reset", &queue->trace_sync_alloc);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_queue_lock", &queue->trace_sync_lock);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_empty_driver_submit", &queue->trace_sync_submit);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_enqueue_to_wait", &queue->trace_sync_schedule);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_gpu_wait", &queue->trace_gpu_wait);
++   winq_trace_dump(ctx->ctx_id, queue->ring_idx, "sync_retire_callback", &queue->trace_retire);
++
+    list_del(&queue->base.track_head);
+ 
+    mtx_destroy(&queue->vk_mutex);
+@@ -255,6 +272,9 @@ vkr_queue_thread(void *arg)
+ 
+       mtx_unlock(&queue->sync_thread.mutex);
+ 
++      uint64_t trace_wait_begin = winq_trace_now(queue->trace_enabled);
++      winq_trace_add(&queue->trace_sync_schedule, sync->trace_enqueued, trace_wait_begin);
++      sync->trace_enqueued = 0; /* A timeout retries the wait, not the enqueue. */
+       VkResult result;
+       if (sync->device_lost) {
+          result = VK_ERROR_DEVICE_LOST;
+@@ -263,6 +283,8 @@ vkr_queue_thread(void *arg)
+                                     ns_per_sec * 3);
+       }
+ 
++      uint64_t trace_wait_end = winq_trace_now(queue->trace_enabled);
++      winq_trace_add(&queue->trace_gpu_wait, trace_wait_begin, trace_wait_end);
+       mtx_lock(&queue->sync_thread.mutex);
+ 
+       if (result == VK_TIMEOUT)
+@@ -270,7 +292,9 @@ vkr_queue_thread(void *arg)
+ 
+       list_del(&sync->head);
+ 
++      uint64_t trace_retire_begin = winq_trace_now(queue->trace_enabled);
+       vkr_queue_sync_retire(queue, sync);
++      winq_trace_add(&queue->trace_retire, trace_retire_begin, winq_trace_now(queue->trace_enabled));
+    }
+    mtx_unlock(&queue->sync_thread.mutex);
+ 
+@@ -321,6 +345,7 @@ vkr_queue_create(struct vkr_context *ctx,
+    queue->base.handle.queue = handle;
+ 
+    queue->context = ctx;
++   queue->trace_enabled = winq_trace_enabled();
+    queue->device = dev;
+    queue->flags = flags;
+    queue->family = family;
+@@ -448,19 +473,38 @@ vkr_dispatch_vkGetDeviceQueue(struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkQueueSubmit(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkQueueSubmit(struct vn_dispatch_context *dispatch,
+                            struct vn_command_vkQueueSubmit *args)
+ {
+    TRACE_FUNC();
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
++   struct vkr_context *ctx = dispatch->data;
++   /* Only read these context-thread fields from context dispatch, never from
++    * the independently running ring thread. A packet has one native queue. */
++   const bool control = dispatch == &ctx->dispatch && ctx->batch_sync_dispatch;
++   if (control && ctx->batch_control_queue && ctx->batch_control_queue != queue) {
++      vkr_context_set_fatal(ctx);
++      return;
++   }
+ 
+    vn_replace_vkQueueSubmit_args_handle(args);
+ 
++   uint64_t trace_begin = winq_trace_now(queue->trace_enabled);
+    mtx_lock(&queue->vk_mutex);
++   uint64_t trace_locked = winq_trace_now(queue->trace_enabled);
+    args->ret =
+       vk->QueueSubmit(args->queue, args->submitCount, args->pSubmits, args->fence);
++   uint64_t trace_end = winq_trace_now(queue->trace_enabled);
++   winq_trace_add(&queue->trace_workload_lock, trace_begin, trace_locked);
++   winq_trace_add(&queue->trace_workload_submit, trace_locked, trace_end);
+    mtx_unlock(&queue->vk_mutex);
++   if (control) {
++      if (args->ret == VK_SUCCESS)
++         ctx->batch_control_queue = queue;
++      else
++         vkr_context_set_fatal(ctx);
++   }
+ }
+ 
+ static void
+@@ -498,9 +542,14 @@ vkr_dispatch_vkQueueSubmit2(UNUSED struct vn_dispatch_context *dispatch,
+ 
+    vn_replace_vkQueueSubmit2_args_handle(args);
+ 
++   uint64_t trace_begin = winq_trace_now(queue->trace_enabled);
+    mtx_lock(&queue->vk_mutex);
++   uint64_t trace_locked = winq_trace_now(queue->trace_enabled);
+    args->ret =
+       vk->QueueSubmit2(args->queue, args->submitCount, args->pSubmits, args->fence);
++   uint64_t trace_end = winq_trace_now(queue->trace_enabled);
++   winq_trace_add(&queue->trace_workload_lock, trace_begin, trace_locked);
++   winq_trace_add(&queue->trace_workload_submit, trace_locked, trace_end);
+    mtx_unlock(&queue->vk_mutex);
+ }
+ 
+diff --git a/src/venus/vkr_queue.h b/src/venus/vkr_queue.h
+index 6a3a909..3958e71 100644
+--- a/src/venus/vkr_queue.h
++++ b/src/venus/vkr_queue.h
+@@ -7,6 +7,7 @@
+ #define VKR_QUEUE_H
+ 
+ #include "vkr_common.h"
++#include "winq_venus_trace.h"
+ 
+ struct vkr_queue_sync {
+    VkFence fence;
+@@ -15,6 +16,7 @@ struct vkr_queue_sync {
+    uint32_t flags;
+    uint32_t ring_idx;
+    uint64_t fence_id;
++   uint64_t trace_enqueued;
+ 
+    struct list_head head;
+ };
+@@ -32,6 +34,11 @@ struct vkr_queue {
+    /* only used when client driver uses multiple timelines */
+    uint32_t ring_idx;
+ 
++   bool trace_enabled;
++   struct winq_trace_metric trace_workload_lock, trace_workload_submit;
++   struct winq_trace_metric trace_sync_alloc, trace_sync_lock, trace_sync_submit;
++   struct winq_trace_metric trace_sync_schedule, trace_gpu_wait, trace_retire;
++
+    /* Ensure host access to VkQueue being externally synchronized between renderer main
+     * thread and ring thread.
+     */
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index c43a96e..d4b3949 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -213,7 +213,8 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size)
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info)
+ {
+    TRACE_FUNC();
+ 
+@@ -226,7 +227,7 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+    if (!ctx)
+       return false;
+ 
+-   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size);
++   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size, vulkan_info);
+ }
+ 
+ void
+diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
+index be3ae04..e05e70e 100644
+--- a/src/venus/vkr_renderer.h
++++ b/src/venus/vkr_renderer.h
+@@ -69,7 +69,8 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+                              uint32_t res_id,
+                              enum virgl_resource_fd_type fd_type,
+                              int fd,
+-                             uint64_t size);
++                             uint64_t size,
++                             const struct virgl_resource_vulkan_info *vulkan_info);
+ 
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index e03e51b..62a1a1d 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -269,8 +269,15 @@ vkr_ring_submit_cmd(struct vkr_ring *ring,
+    vkr_cs_decoder_set_buffer_stream(dec, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(dec)) {
++      uint32_t opcode = UINT32_MAX;
++      if ((size_t)(dec->end - dec->cur) >= sizeof(opcode))
++         memcpy(&opcode, dec->cur, sizeof(opcode));
+       vn_dispatch_command(&ring->dispatch);
+       if (vkr_cs_decoder_get_fatal(dec)) {
++#ifdef _WIN32
++         if (getenv("WINQ_ANDROID_WSI"))
++            fprintf(stderr, "[venus-wsi] fatal ring command %u\n", opcode);
++#endif
+          vkr_log("ring_submit_cmd: vn_dispatch_command failed");
+ 
+          vkr_cs_decoder_reset(dec);
+diff --git a/src/venus/vkr_transport.c b/src/venus/vkr_transport.c
+index 85c0294..a0c4d0c 100644
+--- a/src/venus/vkr_transport.c
++++ b/src/venus/vkr_transport.c
+@@ -347,9 +347,37 @@ vkr_dispatch_vkSubmitVirtqueueSeqnoMESA(struct vn_dispatch_context *dispatch,
+       return;
+    }
+ 
++   if (ctx->batch_sync_dispatch &&
++       (ctx->batch_waited_ring == args->ring || ctx->batch_control_queue)) {
++      if (ctx->batch_seqno_pending) {
++         vkr_context_set_fatal(ctx);
++         return;
++      }
++      ctx->batch_seqno_pending = true;
++      ctx->batch_seqno_ring = args->ring;
++      ctx->batch_seqno = args->seqno;
++      ctx->batch_seqno_queue = ctx->batch_control_queue;
++      return;
++   }
+    vkr_ring_submit_virtqueue_seqno(ring, args->seqno);
+ }
+ 
++bool
++vkr_context_complete_batch_seqno(struct vkr_context *ctx)
++{
++   struct vkr_ring *ring = lookup_ring(ctx, ctx->batch_seqno_ring);
++   if (!ring) {
++      vkr_context_set_fatal(ctx);
++      return false;
++   }
++   /* Called only after successful vkr_queue_sync_submit, never by CPU-ring
++    * retirement. Preserve the old fence-before-roundtrip ordering. */
++   vkr_ring_submit_virtqueue_seqno(ring, ctx->batch_seqno);
++   ctx->batch_seqno_pending = false;
++   ctx->batch_seqno_queue = NULL;
++   return true;
++}
++
+ static void
+ vkr_dispatch_vkWaitVirtqueueSeqnoMESA(struct vn_dispatch_context *dispatch,
+                                       struct vn_command_vkWaitVirtqueueSeqnoMESA *args)
+@@ -393,6 +421,8 @@ vkr_dispatch_vkWaitRingSeqnoMESA(struct vn_dispatch_context *dispatch,
+ 
+    if (!vkr_context_wait_ring_seqno(ctx, ring, args->seqno))
+       vkr_context_set_fatal(ctx);
++   else if (ctx->batch_sync_dispatch)
++      ctx->batch_waited_ring = args->ring;
+ }
+ 
+ void
+diff --git a/src/venus/vkr_transport.h b/src/venus/vkr_transport.h
+index 7a3e0fd..9551204 100644
+--- a/src/venus/vkr_transport.h
++++ b/src/venus/vkr_transport.h
+@@ -11,4 +11,7 @@
+ void
+ vkr_context_init_transport_dispatch(struct vkr_context *ctx);
+ 
++bool
++vkr_context_complete_batch_seqno(struct vkr_context *ctx);
++
+ #endif /* VKR_TRANSPORT_H */
+diff --git a/src/virgl_resource.c b/src/virgl_resource.c
+index f46700d..396ca04 100644
+--- a/src/virgl_resource.c
++++ b/src/virgl_resource.c
+@@ -124,6 +124,14 @@ virgl_resource_create_from_pipe(uint32_t res_id,
+    /* take ownership */
+    res->pipe_resource = pres;
+ 
++   if (pipe_callbacks.get_vulkan_info) {
++      struct virgl_resource_vulkan_info vulkan_info = { 0 };
++      if (pipe_callbacks.get_vulkan_info(pres, &vulkan_info, pipe_callbacks.data)) {
++         res->vulkan_info = vulkan_info;
++         res->map_size = vulkan_info.allocation_size;
++      }
++   }
++
+    res->iov = iov;
+    res->iov_count = iov_count;
+ 
+diff --git a/src/virgl_resource.h b/src/virgl_resource.h
+index 8eb770e..df84131 100644
+--- a/src/virgl_resource.h
++++ b/src/virgl_resource.h
+@@ -119,6 +119,10 @@ struct virgl_resource_pipe_callbacks {
+                       void *data);
+    void (*detach_iov)(struct pipe_resource *pres, void *data);
+ 
++   bool (*get_vulkan_info)(struct pipe_resource *pres,
++                           struct virgl_resource_vulkan_info *vulkan_info,
++                           void *data);
++
+    enum virgl_resource_fd_type (*export_fd)(struct pipe_resource *pres,
+                                             int *fd,
+                                             void *data);
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index bcc8dc9..e7473ed 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -67,6 +67,7 @@
+ 
+ #ifdef _WIN32
+ #include <windows.h>
++#include "vrend_win32_wsi.h"
+ #endif
+ #include "virgl_fence.h"
+ #include "virtgpu_drm.h"
+@@ -7612,6 +7613,13 @@ static enum virgl_resource_fd_type vrend_pipe_resource_export_fd(UNUSED struct p
+                                                                  UNUSED int *fd,
+                                                                  UNUSED void *data)
+ {
++#ifdef _WIN32
++   struct vrend_resource *native = (struct vrend_resource *)pres;
++   if (native->native_wsi) {
++      *fd = vrend_win32_wsi_export(native->native_wsi);
++      return *fd >= 0 ? VIRGL_RESOURCE_FD_OPAQUE : VIRGL_RESOURCE_FD_INVALID;
++   }
++#endif
+ #if defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION)
+    struct vrend_resource *res = (struct vrend_resource *)pres;
+ 
+@@ -7650,6 +7658,20 @@ bool vrend_check_no_error(struct vrend_context *ctx)
+ #endif
+ }
+ 
++static bool
++vrend_pipe_resource_get_vulkan_info(struct pipe_resource *pres,
++                                   struct virgl_resource_vulkan_info *info,
++                                   UNUSED void *data)
++{
++#ifdef _WIN32
++   return vrend_win32_wsi_info(((struct vrend_resource *)pres)->native_wsi, info);
++#else
++   (void)pres;
++   (void)info;
++   return false;
++#endif
++}
++
+ const struct virgl_resource_pipe_callbacks *
+ vrend_renderer_get_pipe_callbacks(void)
+ {
+@@ -7658,6 +7680,7 @@ vrend_renderer_get_pipe_callbacks(void)
+       .attach_iov = vrend_pipe_resource_attach_iov,
+       .detach_iov = vrend_pipe_resource_detach_iov,
+       .export_fd = vrend_pipe_resource_export_fd,
++      .get_vulkan_info = vrend_pipe_resource_get_vulkan_info,
+    };
+ 
+    return &callbacks;
+@@ -7918,6 +7941,9 @@ vrend_renderer_fini(void)
+    vrend_state.current_hw_ctx = NULL;
+ 
+    vrend_state.finishing = false;
++#ifdef _WIN32
++   vrend_win32_wsi_fini();
++#endif
+ }
+ 
+ static void vrend_destroy_sub_context(struct vrend_sub_context *sub)
+@@ -8032,6 +8058,33 @@ static void vrend_destroy_sub_context(struct vrend_sub_context *sub)
+    vrend_object_fini_ctx_table(sub->object_hash);
+    vrend_clicbs->destroy_gl_context(sub->gl_context);
+ 
++   /* winq: CANCELLATO UN CONTESTO GL, LA CONTABILITA' NON PUO' PIU' DIRE "CI
++    * SIAMO GIA'".
++    *
++    * IL DISALLINEAMENTO. current_hw_ctx tiene un vrend_context, ma cio' che e'
++    * corrente davvero all'API grafica e' il contesto GL di un SUB. Qui un
++    * contesto GL muore e current_hw_ctx non se ne accorge: continua a
++    * nominare un vrend_context vivo. La scorciatoia di
++    * vrend_finish_context_switch() ("if (current_hw_ctx == ctx) return
++    * false;") crede quindi che il contesto giusto sia gia' corrente, salta la
++    * make_current, e su WGL non e' corrente NIENTE -- cancellare un contesto
++    * lo toglie al thread senza dirlo a nessuno. Da li' in poi ogni comando di
++    * quel contesto gira nel vuoto, e non si riprende da solo: nemmeno la
++    * force_ctx_0() alla fine di vrend_destroy_context lo rimedia, perche'
++    * anche lei passa da quella scorciatoia.
++    *
++    * MISURATO il 12/08/2026, ed e' cio' che restava dopo la make_current per
++    * sub aggiunta nel ciclo di vrend_destroy_context: 97 chiamate "without a
++    * rendering context" e DUE contesti guest uccisi nello stesso momento (5
++    * "RenderThread" e 2 "surfaceflinger"), cioe' lo stato senza contesto era
++    * sopravvissuto a piu' submit di applicazioni diverse -- la firma di una
++    * make_current saltata, non di una fallita (falliti=0 su tutti i campioni).
++    *
++    * COSTA una make_current in piu' per contesto distrutto. A 2663
++    * commutazioni al secondo sotto carico, una in piu' ogni volta che
++    * un'applicazione del guest se ne va non si misura. */
++   vrend_state.current_hw_ctx = NULL;
++
+    list_del(&sub->head);
+    FREE(sub);
+ 
+@@ -8053,6 +8106,47 @@ void vrend_destroy_context(struct vrend_context *ctx)
+       vrend_state.current_hw_ctx = NULL;
+    }
+ 
++   /* winq: current_hw_ctx VA AZZERATO ANCHE QUANDO switch_0 E' FALSO, e il
++    * puntatore che resta senza questa riga e' liberato.
++    *
++    * COSA FA IL CODICE DI SERIE. Azzera current_hw_ctx solo se il contesto che
++    * muore e' anche current_ctx, cioe' quello LOGICO. Ma current_hw_ctx tiene
++    * il contesto reso corrente per ULTIMO all'API grafica, e i due divergono di
++    * continuo: SUBMIT_3D commuta al contesto dell'applicazione e lo lascia in
++    * current_hw_ctx, mentre current_ctx torna a ctx0. Sotto, FREE(ctx) libera
++    * la struttura. Da quel momento current_hw_ctx e' un puntatore a memoria
++    * liberata.
++    *
++    * PERCHE' FA DANNO. La scorciatoia di vrend_finish_context_switch()
++    * confronta PUNTATORI: "if (vrend_state.current_hw_ctx == ctx) return
++    * false;" -- niente make_current, "ci siamo gia'". Quando l'allocatore
++    * riusa quell'indirizzo per un vrend_context NUOVO, il confronto dice si' a
++    * un contesto che non e' mai stato reso corrente. Da li' in poi ogni
++    * chiamata GL di quel contesto gira SENZA contesto corrente.
++    *
++    * MISURATO il 12/08/2026, con MESA_DEBUG=1 e la diagnostica
++    * WINQ_MAKECURRENT_DIAG di winq-wgl.c accese insieme: 86 righe "GL User
++    * Error: gl... called without a rendering context" in una sessione, la
++    * prima a 22 s, e la make-current lato host NON fallisce mai -- ok=40/s,
++    * falliti=0, stacchi=0 su 237 campioni. Non veniva chiamata, ed e' questa
++    * riga che mancava. La glFenceSync senza contesto torna NULL ("Failed to
++    * create fence sync object"), l'errore GL resta pendente, e il primo
++    * TRANSFER3D che passa lo paga: vrend_check_no_error() lo trasforma in
++    * EINVAL, il contesto va in errore e virglrenderer smette di eseguire i suoi
++    * buffer. A schermo: l'applicazione che disegnava con quel contesto perde la
++    * grafica -- il launcher senza icone, o glmark2 che esce.
++    *
++    * PERCHE' NON SI VEDEVA SU ANGLE. Il riuso dell'indirizzo da malloc rende
++    * il difetto intermittente (~2 sessioni su 8 qui), e su EGL la finestra e'
++    * piu' stretta: eglDestroyContext su un contesto corrente RINVIA la
++    * distruzione, quindi il thread conserva un contesto valido e le chiamate
++    * successive non finiscono nel vuoto. wglDeleteContext no: cancella subito
++    * e lascia il thread senza contesto. Vedi la riga gemella in
++    * winq_wgl_ctx_destroy(). */
++   if (vrend_state.current_hw_ctx == ctx) {
++      vrend_state.current_hw_ctx = NULL;
++   }
++
+    vrend_clicbs->make_current(ctx->sub->gl_context);
+    /* reset references on framebuffers */
+    vrend_set_framebuffer_state(ctx, 0, NULL, 0);
+@@ -8068,8 +8162,44 @@ void vrend_destroy_context(struct vrend_context *ctx)
+ 
+    vrend_set_index_buffer(ctx, 0, 0, 0);
+ 
++   /* winq: OGNI SUB-CONTESTO VUOLE IL SUO CONTESTO GL CORRENTE, e la
++    * make_current di sopra ne copre uno solo.
++    *
++    * COSA FA IL CODICE DI SERIE. Sopra rende corrente ctx->sub->gl_context --
++    * il sub attivo in quel momento, uno -- e poi questo ciclo distrugge TUTTI i
++    * sub. Ogni sub ha un contesto GL proprio, e vrend_destroy_sub_context()
++    * fa due cose in quest'ordine: vrend_object_fini_ctx_table(), che cancella
++    * gli oggetti del sub con glDelete*, e destroy_gl_context(sub->gl_context).
++    * Al primo giro il contesto reso corrente sopra viene cancellato; su WGL
++    * cancellare il contesto corrente lascia il thread SENZA contesto. Dal
++    * secondo giro in poi, quindi, tutte le glDelete* girano nel vuoto.
++    *
++    * MISURATO il 12/08/2026, ed e' come si e' arrivati qui: 70-86 righe "GL
++    * User Error: glDeleteTextures/glDeleteBuffers called without a rendering
++    * context" in raffica, la prima subito dopo la morte di un processo del
++    * guest ("binder: undelivered transaction, process died" nel registro del
++    * guest 1,3 s prima), e la make-current lato host che non fallisce mai --
++    * ok=2664/s, falliti=0 -- perche' su questo percorso nessuno la chiama. La
++    * conseguenza non si ferma alle cancellazioni: l'errore GL resta pendente e
++    * il primo TRANSFER3D che passa lo paga, vrend_check_no_error() lo
++    * trasforma in EINVAL, e il contesto di UN'ALTRA applicazione muore.
++    *
++    * PERCHE' SU EGL NON SI VEDE. eglDestroyContext su un contesto corrente
++    * rinvia la distruzione, quindi il thread conserva un contesto valido e i
++    * giri successivi del ciclo cancellano gli oggetti nel contesto sbagliato
++    * ma esistente: nessun errore, nessun sintomo. Su WGL il contesto sparisce
++    * subito. Questo codice non e' mai girato su WGL prima di questo albero.
++    *
++    * PERCHE' LE ALTRE DUE RIGHE NOSTRE NON BASTAVANO. L'azzeramento di
++    * current_hw_ctx qui sopra serve a far ripartire davvero la force_ctx_0()
++    * che segue il ciclo (altrimenti la scorciatoia la salta fidandosi di un
++    * puntatore liberato), e lo stacco esplicito in winq_wgl_ctx_destroy()
++    * rende visibile lo stato invece di lasciarlo implicito. Nessuna delle due
++    * pero' rimette un contesto corrente DENTRO il ciclo: quello lo fa questa
++    * riga, ed e' l'unica delle tre che tocca la causa. */
+    list_for_each_entry_safe_rev(struct vrend_sub_context, sub, &ctx->sub_ctxs, head) {
+       ctx->sub = sub;
++      vrend_clicbs->make_current(sub->gl_context);
+       vrend_destroy_sub_context(sub);
+    }
+    ctx->sub = NULL;
+@@ -8858,6 +8988,70 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+          return EINVAL;
+       }
+ 
++#ifdef _WIN32
++      const char *native_enabled = getenv("WINQ_NATIVE_WSI_ALLOC");
++      if (native_enabled && !strcmp(native_enabled, "1") &&
++          (pr->bind & VIRGL_BIND_SCANOUT) && format == VIRGL_FORMAT_R8G8B8A8_UNORM &&
++          gr->target == GL_TEXTURE_2D && pr->nr_samples <= 1 && !pr->last_level &&
++          pr->depth0 == 1 && pr->array_size == 1) {
++         const char *renderer = (const char *)glGetString(GL_RENDERER);
++         if (!renderer || !strstr(renderer,"zink") || !strstr(renderer,"Qualcomm") ||
++             !has_feature(feat_memory_object_win32)) return EINVAL;
++         bool unsupported_layout=false;
++         gr->native_wsi = vrend_win32_wsi_create(pr->width0, pr->height0, &unsupported_layout);
++         if (!gr->native_wsi) {
++            if (unsupported_layout) goto standard_texture_storage;
++            return EINVAL;
++         }
++         struct virgl_resource_vulkan_info info;
++         vrend_win32_wsi_info(gr->native_wsi, &info);
++         int fd = vrend_win32_wsi_export(gr->native_wsi);
++         if (fd < 0) goto native_fail;
++         HANDLE handle = os_get_win32_handle_from_fd(fd);
++         GLenum prior_error = GL_NO_ERROR;
++         for (unsigned i=0;i<16;i++) {
++            prior_error = glGetError();
++            if (prior_error == GL_NO_ERROR) break;
++            fprintf(stderr,"[venus-wsi] prior GL error before shared storage: 0x%x\n",prior_error);
++         }
++         if (prior_error != GL_NO_ERROR) { os_close_fd(fd); goto native_fail; }
++         glCreateMemoryObjectsEXT(1, &gr->memobj);
++         const GLint dedicated = GL_TRUE;
++         glMemoryObjectParameterivEXT(gr->memobj, GL_DEDICATED_MEMORY_OBJECT_EXT, &dedicated);
++         glImportMemoryWin32HandleEXT(gr->memobj, info.allocation_size,
++                                     GL_HANDLE_TYPE_OPAQUE_WIN32_EXT, handle);
++         os_close_fd(fd);
++         GLenum import_error = glGetError();
++         if (import_error != GL_NO_ERROR) {
++            fprintf(stderr,"[venus-wsi] GL memory import failed %ux%u error=0x%x\n",
++                    pr->width0,pr->height0,import_error);
++            goto native_fail;
++         }
++         glTexParameteri(gr->target, GL_TEXTURE_TILING_EXT, GL_LINEAR_TILING_EXT);
++         glTexStorageMem2DEXT(gr->target, 1, internalformat, pr->width0, pr->height0, gr->memobj, 0);
++         GLenum storage_error = glGetError();
++         if (storage_error != GL_NO_ERROR) {
++            fprintf(stderr,"[venus-wsi] GL shared texture storage failed %ux%u error=0x%x format=0x%x\n",
++                    pr->width0,pr->height0,storage_error,internalformat);
++            goto native_fail;
++         }
++         gr->size = info.allocation_size;
++         gr->storage_bits |= VREND_STORAGE_GL_MEMOBJ | VREND_STORAGE_GL_IMMUTABLE;
++         goto native_ready;
++native_fail:
++         if (gr->memobj) glDeleteMemoryObjectsEXT(1, &gr->memobj);
++         gr->memobj = 0;
++         vrend_win32_wsi_destroy(gr->native_wsi);
++         gr->native_wsi = NULL;
++         glDeleteTextures(1, &gr->gl_id);
++         gr->gl_id = 0;
++         glBindTexture(gr->target, 0);
++         return EINVAL;
++      }
++#endif
++#ifdef _WIN32
++standard_texture_storage:
++#endif
+       if (pr->nr_samples > 1) {
+          if (format_can_texture_storage) {
+             if (gr->target == GL_TEXTURE_2D_MULTISAMPLE) {
+@@ -8941,6 +9135,9 @@ static int vrend_resource_alloc_texture(struct vrend_resource *gr,
+       }
+    }
+ 
++#ifdef _WIN32
++native_ready:
++#endif
+    if (!format_can_texture_storage) {
+       glTexParameteri(gr->target, GL_TEXTURE_BASE_LEVEL, 0);
+       glTexParameteri(gr->target, GL_TEXTURE_MAX_LEVEL, pr->last_level);
+@@ -9040,6 +9237,9 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
+    if (has_bit(res->storage_bits, VREND_STORAGE_GL_MEMOBJ)) {
+       glDeleteMemoryObjectsEXT(1, &res->memobj);
+    }
++#ifdef _WIN32
++   vrend_win32_wsi_destroy(res->native_wsi);
++#endif
+ 
+ #ifdef ENABLE_GBM
+    if (res->egl_image) {
+diff --git a/src/vrend/vrend_renderer.h b/src/vrend/vrend_renderer.h
+index 51cdcaa..a8d5a7e 100644
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -111,6 +111,7 @@ struct vrend_resource {
+    uint64_t size;
+    GLbitfield buffer_storage_flags;
+    GLuint memobj;
++   struct vrend_win32_wsi *native_wsi;
+ 
+    uint32_t blob_id;
+    struct list_head head;
+diff --git a/src/venus/vkr_win32_foreign.h b/src/venus/vkr_win32_foreign.h
+new file mode 100644
+--- /dev/null
++++ b/src/venus/vkr_win32_foreign.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef VKR_WIN32_FOREIGN_H
++#define VKR_WIN32_FOREIGN_H
++
++#include <stdbool.h>
++#include "venus-protocol/vulkan_core.h"
++
++/* The experimental Win32 dma-buf domain exports only bridge-owned resources
++ * on the same adapter/driver. The host therefore uses EXTERNAL ownership.
++ * Do not use this translation for arbitrary foreign devices or drivers. */
++static inline uint32_t
++vkr_win32_foreign_index(uint32_t index)
++{
++   return index == VK_QUEUE_FAMILY_FOREIGN_EXT ? VK_QUEUE_FAMILY_EXTERNAL : index;
++}
++
++static inline void
++vkr_win32_foreign_barriers(bool enabled, uint32_t buffer_count,
++                           const VkBufferMemoryBarrier *buffers,
++                           uint32_t image_count, const VkImageMemoryBarrier *images)
++{
++   if (!enabled)
++      return;
++   for (uint32_t i = 0; i < buffer_count; i++) {
++      VkBufferMemoryBarrier *barrier = (VkBufferMemoryBarrier *)&buffers[i];
++      barrier->srcQueueFamilyIndex = vkr_win32_foreign_index(barrier->srcQueueFamilyIndex);
++      barrier->dstQueueFamilyIndex = vkr_win32_foreign_index(barrier->dstQueueFamilyIndex);
++   }
++   for (uint32_t i = 0; i < image_count; i++) {
++      VkImageMemoryBarrier *barrier = (VkImageMemoryBarrier *)&images[i];
++      barrier->srcQueueFamilyIndex = vkr_win32_foreign_index(barrier->srcQueueFamilyIndex);
++      barrier->dstQueueFamilyIndex = vkr_win32_foreign_index(barrier->dstQueueFamilyIndex);
++   }
++}
++
++static inline void
++vkr_win32_foreign_dependencies(bool enabled, uint32_t count,
++                               const VkDependencyInfo *dependencies)
++{
++   if (!enabled)
++      return;
++   for (uint32_t d = 0; d < count; d++) {
++      const VkDependencyInfo *info = &dependencies[d];
++      for (uint32_t i = 0; i < info->bufferMemoryBarrierCount; i++) {
++         VkBufferMemoryBarrier2 *barrier = (VkBufferMemoryBarrier2 *)&info->pBufferMemoryBarriers[i];
++         barrier->srcQueueFamilyIndex = vkr_win32_foreign_index(barrier->srcQueueFamilyIndex);
++         barrier->dstQueueFamilyIndex = vkr_win32_foreign_index(barrier->dstQueueFamilyIndex);
++      }
++      for (uint32_t i = 0; i < info->imageMemoryBarrierCount; i++) {
++         VkImageMemoryBarrier2 *barrier = (VkImageMemoryBarrier2 *)&info->pImageMemoryBarriers[i];
++         barrier->srcQueueFamilyIndex = vkr_win32_foreign_index(barrier->srcQueueFamilyIndex);
++         barrier->dstQueueFamilyIndex = vkr_win32_foreign_index(barrier->dstQueueFamilyIndex);
++      }
++   }
++}
++#endif
+diff --git a/src/vrend/vrend_win32_wsi.c b/src/vrend/vrend_win32_wsi.c
+new file mode 100644
+--- /dev/null
++++ b/src/vrend/vrend_win32_wsi.c
+@@ -0,0 +1,206 @@
++/* SPDX-License-Identifier: MIT */
++/* Opt-in RGBA8 linear storage shared by native Qualcomm Vulkan and Zink. */
++#define VK_NO_PROTOTYPES
++#define VK_USE_PLATFORM_WIN32_KHR
++#include <windows.h>
++#include <vulkan/vulkan.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "util/os_file.h"
++#include "vrend_win32_wsi.h"
++
++struct vrend_win32_wsi {
++   VkImage image;
++   VkDeviceMemory memory;
++   HANDLE handle;
++   struct virgl_resource_vulkan_info info;
++};
++static struct {
++   HMODULE loader;
++   VkInstance instance;
++   VkPhysicalDevice physical;
++   VkDevice device;
++   VkPhysicalDeviceMemoryProperties memory;
++   VkPhysicalDeviceIDProperties identity;
++   uint32_t live;
++   PFN_vkDestroyInstance DestroyInstance;
++   PFN_vkDestroyDevice DestroyDevice;
++   PFN_vkCreateImage CreateImage;
++   PFN_vkDestroyImage DestroyImage;
++   PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements;
++   PFN_vkGetImageSubresourceLayout GetImageSubresourceLayout;
++   PFN_vkAllocateMemory AllocateMemory;
++   PFN_vkFreeMemory FreeMemory;
++   PFN_vkBindImageMemory BindImageMemory;
++   PFN_vkGetMemoryWin32HandleKHR GetMemoryWin32HandleKHR;
++} wsi;
++
++void vrend_win32_wsi_fini(void)
++{
++   /* Destroyed textures release their allocation first. Never invalidate live imports. */
++   if (wsi.live) return;
++   if (wsi.device && wsi.DestroyDevice) wsi.DestroyDevice(wsi.device, NULL);
++   if (wsi.instance && wsi.DestroyInstance) wsi.DestroyInstance(wsi.instance, NULL);
++   if (wsi.loader) FreeLibrary(wsi.loader);
++   memset(&wsi, 0, sizeof(wsi));
++}
++
++static bool vrend_win32_wsi_init(void)
++{
++   if (wsi.device) return true;
++   wsi.loader = LoadLibraryExW(L"vulkan-1.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++   if (!wsi.loader) return false;
++   PFN_vkGetInstanceProcAddr get_instance =
++      (PFN_vkGetInstanceProcAddr)(void *)GetProcAddress(wsi.loader, "vkGetInstanceProcAddr");
++   if (!get_instance) goto fail;
++   PFN_vkCreateInstance create_instance = (PFN_vkCreateInstance)get_instance(NULL, "vkCreateInstance");
++   if (!create_instance) goto fail;
++   const VkApplicationInfo app = {.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO,
++      .pApplicationName="Habumi shared screen storage", .apiVersion=VK_API_VERSION_1_1};
++   const VkInstanceCreateInfo ici = {.sType=VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,.pApplicationInfo=&app};
++   if (create_instance(&ici, NULL, &wsi.instance) != VK_SUCCESS) goto fail;
++#define INSTANCE(name) (PFN_vk##name)get_instance(wsi.instance, "vk" #name)
++   wsi.DestroyInstance = INSTANCE(DestroyInstance);
++   PFN_vkEnumeratePhysicalDevices enumerate = INSTANCE(EnumeratePhysicalDevices);
++   PFN_vkGetPhysicalDeviceProperties properties = INSTANCE(GetPhysicalDeviceProperties);
++   PFN_vkGetPhysicalDeviceProperties2 properties2 = INSTANCE(GetPhysicalDeviceProperties2);
++   PFN_vkGetPhysicalDeviceMemoryProperties memory = INSTANCE(GetPhysicalDeviceMemoryProperties);
++   PFN_vkGetPhysicalDeviceQueueFamilyProperties queues = INSTANCE(GetPhysicalDeviceQueueFamilyProperties);
++   PFN_vkGetPhysicalDeviceImageFormatProperties2 image_properties = INSTANCE(GetPhysicalDeviceImageFormatProperties2);
++   PFN_vkCreateDevice create_device = INSTANCE(CreateDevice);
++   PFN_vkGetDeviceProcAddr get_device = INSTANCE(GetDeviceProcAddr);
++   if (!wsi.DestroyInstance || !enumerate || !properties || !properties2 || !memory ||
++       !queues || !create_device || !get_device || !image_properties) goto fail;
++   VkPhysicalDevice devices[16]; uint32_t count=16;
++   if (enumerate(wsi.instance, &count, devices) != VK_SUCCESS) goto fail;
++   for (uint32_t i=0;i<count;i++) {
++      VkPhysicalDeviceProperties props;
++      properties(devices[i], &props);
++      if (props.vendorID == 0x5143 && props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
++         wsi.physical = devices[i]; break;
++      }
++   }
++   if (!wsi.physical) goto fail;
++   const VkPhysicalDeviceExternalImageFormatInfo external = {
++      .sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
++      .handleType=VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
++   const VkPhysicalDeviceImageFormatInfo2 image = {
++      .sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,.pNext=&external,
++      .format=VK_FORMAT_R8G8B8A8_UNORM,.type=VK_IMAGE_TYPE_2D,.tiling=VK_IMAGE_TILING_LINEAR,
++      .usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|
++             VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT};
++   VkExternalImageFormatProperties ep = {.sType=VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
++   VkImageFormatProperties2 ip = {.sType=VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,.pNext=&ep};
++   if (image_properties(wsi.physical,&image,&ip) != VK_SUCCESS ||
++       !(ep.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) goto fail;
++   VkQueueFamilyProperties families[32]; uint32_t num=32, family=UINT32_MAX;
++   queues(wsi.physical,&num,families);
++   for(uint32_t i=0;i<num;i++) if(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {family=i;break;}
++   if(family==UINT32_MAX) goto fail;
++   wsi.identity.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
++   VkPhysicalDeviceProperties2 id={.sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,.pNext=&wsi.identity};
++   properties2(wsi.physical,&id);
++   memory(wsi.physical,&wsi.memory);
++   const float priority=1;
++   const VkDeviceQueueCreateInfo qci={.sType=VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
++      .queueFamilyIndex=family,.queueCount=1,.pQueuePriorities=&priority};
++   const char *extensions[]={VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME};
++   const VkDeviceCreateInfo dci={.sType=VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,.queueCreateInfoCount=1,
++      .pQueueCreateInfos=&qci,.enabledExtensionCount=1,.ppEnabledExtensionNames=extensions};
++   if(create_device(wsi.physical,&dci,NULL,&wsi.device)!=VK_SUCCESS) goto fail;
++#define DEVICE(name) do { wsi.name=(PFN_vk##name)get_device(wsi.device,"vk" #name); if(!wsi.name) goto fail; } while(0)
++   DEVICE(DestroyDevice); DEVICE(CreateImage); DEVICE(DestroyImage); DEVICE(GetImageMemoryRequirements);
++   DEVICE(GetImageSubresourceLayout); DEVICE(AllocateMemory); DEVICE(FreeMemory);
++   DEVICE(BindImageMemory); DEVICE(GetMemoryWin32HandleKHR);
++   return true;
++fail:
++   vrend_win32_wsi_fini();
++   return false;
++}
++
++struct vrend_win32_wsi *vrend_win32_wsi_create(uint32_t width, uint32_t height,
++                                             bool *unsupported_layout)
++{
++   *unsupported_layout=false;
++   if (!width || !height || !vrend_win32_wsi_init()) return NULL;
++   struct vrend_win32_wsi *allocation=calloc(1,sizeof(*allocation));
++   if (!allocation) return NULL;
++   wsi.live++;
++   const VkExternalMemoryImageCreateInfo external={.sType=VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
++      .handleTypes=VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
++   const VkImageCreateInfo image={.sType=VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,.pNext=&external,
++      .imageType=VK_IMAGE_TYPE_2D,.format=VK_FORMAT_R8G8B8A8_UNORM,.extent={width,height,1},
++      .mipLevels=1,.arrayLayers=1,.samples=VK_SAMPLE_COUNT_1_BIT,.tiling=VK_IMAGE_TILING_LINEAR,
++      .usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT|
++             VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,
++      .sharingMode=VK_SHARING_MODE_EXCLUSIVE,.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED};
++   if(wsi.CreateImage(wsi.device,&image,NULL,&allocation->image)!=VK_SUCCESS) goto fail;
++   VkMemoryRequirements req;
++   wsi.GetImageMemoryRequirements(wsi.device,allocation->image,&req);
++   uint32_t type=UINT32_MAX;
++   for(uint32_t i=0;i<wsi.memory.memoryTypeCount;i++)
++      if((req.memoryTypeBits & (1u<<i)) &&
++         (wsi.memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {type=i;break;}
++   if(type==UINT32_MAX) goto fail;
++   const VkMemoryDedicatedAllocateInfo dedicated={.sType=VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
++      .image=allocation->image};
++   const VkExportMemoryAllocateInfo export={.sType=VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
++      .pNext=&dedicated,.handleTypes=VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
++   const VkMemoryAllocateInfo alloc={.sType=VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,.pNext=&export,
++      .allocationSize=req.size,.memoryTypeIndex=type};
++   if(wsi.AllocateMemory(wsi.device,&alloc,NULL,&allocation->memory)!=VK_SUCCESS ||
++      wsi.BindImageMemory(wsi.device,allocation->image,allocation->memory,0)!=VK_SUCCESS) goto fail;
++   const VkImageSubresource sub={.aspectMask=VK_IMAGE_ASPECT_COLOR_BIT};
++   VkSubresourceLayout layout;
++   wsi.GetImageSubresourceLayout(wsi.device,allocation->image,&sub,&layout);
++   /* Guest GBM assumes tightly packed LINEAR RGBA8 at offset zero. */
++   if(layout.offset || layout.rowPitch != (uint64_t)width*4) {
++      fprintf(stderr,"[venus-wsi] native layout unavailable %ux%u offset=%llu pitch=%llu expected=%llu\n",
++              width,height,(unsigned long long)layout.offset,(unsigned long long)layout.rowPitch,
++              (unsigned long long)width*4);
++      *unsupported_layout=true;
++      goto fail;
++   }
++   const VkMemoryGetWin32HandleInfoKHR get_handle={.sType=VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
++      .memory=allocation->memory,.handleType=VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT};
++   if(wsi.GetMemoryWin32HandleKHR(wsi.device,&get_handle,&allocation->handle)!=VK_SUCCESS) goto fail;
++   memcpy(allocation->info.device_uuid,wsi.identity.deviceUUID,VK_UUID_SIZE);
++   memcpy(allocation->info.driver_uuid,wsi.identity.driverUUID,VK_UUID_SIZE);
++   allocation->info.allocation_size=req.size;
++   allocation->info.memory_type_index=type;
++   fprintf(stderr,"[venus-wsi] allocated native RGBA8 %ux%u bytes=%llu type=%u\n",
++      width,height,(unsigned long long)req.size,type);
++   return allocation;
++fail:
++   vrend_win32_wsi_destroy(allocation);
++   return NULL;
++}
++
++void vrend_win32_wsi_destroy(struct vrend_win32_wsi *allocation)
++{
++   if(!allocation) return;
++   if(allocation->handle) CloseHandle(allocation->handle);
++   if(allocation->image) wsi.DestroyImage(wsi.device,allocation->image,NULL);
++   if(allocation->memory) wsi.FreeMemory(wsi.device,allocation->memory,NULL);
++   free(allocation);
++   wsi.live--;
++}
++
++int vrend_win32_wsi_export(struct vrend_win32_wsi *allocation)
++{
++   HANDLE handle=NULL;
++   if(!allocation || !DuplicateHandle(GetCurrentProcess(),allocation->handle,
++       GetCurrentProcess(),&handle,0,FALSE,DUPLICATE_SAME_ACCESS)) return -1;
++   int fd=os_wrap_win32_handle(handle);
++   if(fd<0) CloseHandle(handle);
++   return fd;
++}
++
++bool vrend_win32_wsi_info(struct vrend_win32_wsi *allocation,
++                         struct virgl_resource_vulkan_info *info)
++{
++   if(!allocation) return false;
++   *info=allocation->info;
++   return true;
++}
+diff --git a/src/vrend/vrend_win32_wsi.h b/src/vrend/vrend_win32_wsi.h
+new file mode 100644
+--- /dev/null
++++ b/src/vrend/vrend_win32_wsi.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef VREND_WIN32_WSI_H
++#define VREND_WIN32_WSI_H
++#include "virgl_resource.h"
++struct vrend_win32_wsi;
++struct vrend_win32_wsi *vrend_win32_wsi_create(uint32_t width, uint32_t height,
++                                             bool *unsupported_layout);
++void vrend_win32_wsi_destroy(struct vrend_win32_wsi *allocation);
++int vrend_win32_wsi_export(struct vrend_win32_wsi *allocation);
++bool vrend_win32_wsi_info(struct vrend_win32_wsi *allocation,
++                          struct virgl_resource_vulkan_info *info);
++void vrend_win32_wsi_fini(void);
++#endif
+diff --git a/src/winq_venus_trace.h b/src/winq_venus_trace.h
+new file mode 100644
+--- /dev/null
++++ b/src/winq_venus_trace.h
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef WINQ_VENUS_TRACE_H
++#define WINQ_VENUS_TRACE_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <inttypes.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#ifdef _WIN32
++#include <windows.h>
++#endif
++
++/* Diagnostic only. Each metric has one writer or an existing owning lock.
++ * Dump after its writers have stopped. No per-frame I/O or new timer thread. */
++struct winq_trace_metric {
++   uint64_t count, ticks, max_ticks;
++};
++
++static inline bool
++winq_trace_enabled(void)
++{
++#ifdef _WIN32
++   const char *enabled = getenv("WINQ_VENUS_TRACE");
++   if (enabled && !strcmp(enabled, "1"))
++      return true;
++   const char *path = getenv("WINQ_VENUS_TRACE_FILE");
++   if (!path || !path[0])
++      return false;
++   FILE *file = fopen(path, "rb");
++   if (!file)
++      return false;
++   int value = fgetc(file);
++   fclose(file);
++   return value == '1';
++#else
++   return false;
++#endif
++}
++
++static inline uint64_t
++winq_trace_now(bool enabled)
++{
++#ifdef _WIN32
++   LARGE_INTEGER value;
++   if (enabled && QueryPerformanceCounter(&value))
++      return (uint64_t)value.QuadPart;
++#else
++   (void)enabled;
++#endif
++   return 0;
++}
++
++static inline void
++winq_trace_add(struct winq_trace_metric *metric, uint64_t begin, uint64_t end)
++{
++   if (!begin || end < begin)
++      return;
++   uint64_t delta = end - begin;
++   metric->count++;
++   metric->ticks += delta;
++   if (delta > metric->max_ticks)
++      metric->max_ticks = delta;
++}
++
++static inline void
++winq_trace_dump(uint32_t ctx, uint32_t ring, const char *name,
++                const struct winq_trace_metric *metric)
++{
++#ifdef _WIN32
++   LARGE_INTEGER frequency;
++   if (!metric->count || !QueryPerformanceFrequency(&frequency))
++      return;
++   double us_per_tick = 1000000.0 / (double)frequency.QuadPart;
++   fprintf(stderr, "[venus-trace] ctx=%u ring=%u stage=%s count=%" PRIu64
++           " mean_us=%.3f max_us=%.3f\n", ctx, ring, name, metric->count,
++           (double)metric->ticks * us_per_tick / (double)metric->count,
++           (double)metric->max_ticks * us_per_tick);
++#else
++   (void)ctx; (void)ring; (void)name; (void)metric;
++#endif
++}
++#endif

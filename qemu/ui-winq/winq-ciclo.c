@@ -21,9 +21,10 @@
  *                     principale, quindi puo' prendere il BQL e chiamare dpy_*.
  *
  * PERCHE' LA DIVISIONE. Un ciclo modale di Windows fermava la macchina
- * virtuale -- 23.848 ms MISURATI tenendo il bordo, contro zero
+ * virtuale -- 23.848 ms MISURATI il 04/08/2026 tenendo il bordo, contro zero
  * buchi a riposo -- perche' la pompa dei messaggi viveva dentro un timer del
- * ciclo principale.
+ * ciclo principale. Vedi
+ * docs/superpowers/specs/2026-08-04-finestra-thread-proprio-design.md.
  *
  * QUESTO COMMIT NON CAMBIA NIENTE, SPOSTA SOLTANTO: il thread arriva nel commit
  * successivo. Separarli serve a poter leggere il diff dello scorporo senza che
@@ -40,6 +41,24 @@
 #include "ui/console.h"
 #include "winq.h"
 #include "winq-coda.h"
+#include "winq-risparmio.h"
+
+/* Tutto questo stato appartiene al ciclo principale, mai al wndproc. */
+static QEMUTimer *winq_battito;
+static int winq_periodo_ms;
+static bool winq_adattivo;
+static bool winq_a_riposo;
+static bool winq_riposo_diag;
+static int64_t winq_ultima_attivita_ms;
+
+void winq_segnala_attivita(void)
+{
+    winq_ultima_attivita_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    if (winq_battito && winq_a_riposo) {
+        winq_a_riposo = false;
+        timer_mod(winq_battito, winq_ultima_attivita_ms + winq_periodo_ms);
+    }
+}
 
 /* I TRE NUMERI DEL TOCCO DEVONO COMBACIARE.
  *
@@ -204,6 +223,7 @@ static void winq_tubo_passo(void)
     if (!disponibili) {
         return;
     }
+    winq_segnala_attivita();
     if (!ReadFile(winq_tubo, pezzo, sizeof(pezzo), &letti, NULL) || !letti) {
         if (GetLastError() == ERROR_BROKEN_PIPE) {
             winq_tubo_riarma();
@@ -246,6 +266,7 @@ static void winq_coda_drena(void)
     WinqRec r;
 
     while (winq_coda_prendi(&r)) {
+        winq_segnala_attivita();
         switch (r.tipo) {
         case WINQ_REC_PUNTATORE:
             /* pos_valida falsa: le coordinate sono ignorate da
@@ -359,7 +380,7 @@ void winq_sveglia(void)
  * tenere conto del dito. Con l'ordine precedente il dito veniva sempre letto un
  * frame dopo l'immagine che lo mostra.
  *
- * Nessun effetto negativo misurato (la verifica di allora): l'ordine non
+ * Nessun effetto negativo misurato (vedi il rapporto del Task 5): l'ordine non
  * introduce ricorsione, perche' winq_pump_messages non chiama ne'
  * graphic_hw_update ne' winq_present_frame -- WM_SIZE e WM_PAINT alzano solo un
  * flag. */
@@ -405,10 +426,13 @@ void winq_sveglia(void)
  * Il periodo si regola con WINQ_PERIODO_MS per poter MISURARE l'effetto invece di
  * sceglierlo a intuito. Il valore preso da 1 a 30 ms; il default 5 sta sotto il
  * periodo del digitalizzatore a 120 Hz (8,3 ms) senza scendere a un valore dove il
- * lavoro del timer stesso diventa il costo dominante. */
-static QEMUTimer *winq_battito;
-static int winq_periodo_ms;
-
+ * lavoro del timer stesso diventa il costo dominante.
+ *
+ * A riposo il battito passa a 30 ms dopo 250 ms senza attivita'. La bottom
+ * half consegna comunque subito i record e riporta il battito alla cadenza
+ * attiva. Anche i frame GL/2D lo riattivano. Il tubo resta in polling: il
+ * primo comando dopo una pausa puo' attendere fino a 30 ms, poi riattiva
+ * anch'esso il battito. Una WINQ_PERIODO_MS esplicita disabilita l'adattamento. */
 static int winq_leggi_periodo(void)
 {
     const char *v = getenv("WINQ_PERIODO_MS");
@@ -486,10 +510,11 @@ static int winq_leggi_periodo(void)
  * sceglie COSA presentare, sceglie solo QUANDO provarci. Un aggiornamento non
  * consumato resta pendente e viene preso al primo tentativo utile, al
  * massimo winq_presenta_intervallo_ms dopo -- non piu' tardi, perche'
- * winq_tick continua a provare a ogni winq_periodo_ms (5 ms di default),
+ * durante l'attivita' winq_tick prova a ogni winq_periodo_ms (5 ms di default),
  * molto piu' spesso dell'intervallo che si vuole imporre. Un expose o un
  * ridimensionamento restano quindi appesi al massimo un intervallo, mai di
- * piu'.
+ * piu'. Un evento durante il riposo passa dalla bottom half e ripristina
+ * questa cadenza prima di aspettare il timer di sicurezza.
  *
  * DUE CHIAMANTI, UN SOLO CANCELLO. winq_present_frame() era chiamata sia da
  * winq_tick sia da winq_display_refresh: bastava lasciarne una senza il
@@ -632,11 +657,16 @@ static void winq_traccia_avvio(const char *dove)
         return;
     }
     giri++;
-    info_report("winq-traccia: %s", dove);
+    info_report("winq-trace: %s", dove);
 }
 
 static void winq_tick(void *opaque)
 {
+    int64_t ora;
+    int periodo;
+    static int64_t diag_inizio;
+    static unsigned diag_rapidi, diag_lenti;
+
     /* Il drenaggio c'e' anche qui, oltre alla bottom half: e' la rete di
      * sicurezza se una sveglia si perdesse, e costa un confronto quando la coda
      * e' vuota.
@@ -646,15 +676,33 @@ static void winq_tick(void *opaque)
      * era l'unica cosa che girasse spesso. Non ha mai avuto bisogno della
      * finestra, e dal thread della finestra non potrebbe girare -- il comando
      * che porta finisce in dpy_set_ui_info, che vuole il BQL. */
-    winq_traccia_avvio("battito: entrato");
+    winq_traccia_avvio("tick: entered");
     winq_coda_drena();
-    winq_traccia_avvio("battito: coda drenata");
+    winq_traccia_avvio("tick: queue drained");
     winq_tubo_passo();
-    winq_traccia_avvio("battito: tubo passato");
+    winq_traccia_avvio("tick: command pipe processed");
     winq_presenta_a_cadenza();
-    winq_traccia_avvio("battito: presentato");
-    timer_mod(winq_battito,
-              qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + winq_periodo_ms);
+    winq_traccia_avvio("tick: presented");
+    ora = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    periodo = winq_risparmio_periodo(ora, winq_ultima_attivita_ms,
+                                    winq_periodo_ms, winq_adattivo);
+    winq_a_riposo = periodo > winq_periodo_ms;
+    if (winq_riposo_diag) {
+        if (winq_a_riposo) {
+            diag_lenti++;
+        } else {
+            diag_rapidi++;
+        }
+        if (!diag_inizio) {
+            diag_inizio = ora;
+        } else if (ora - diag_inizio >= 1000) {
+            info_report("winq-idle: window=%" PRId64 " ms active=%u idle=%u",
+                        ora - diag_inizio, diag_rapidi, diag_lenti);
+            diag_inizio = ora;
+            diag_rapidi = diag_lenti = 0;
+        }
+    }
+    timer_mod(winq_battito, ora + periodo);
 }
 /* DIRE AL GUEST A CHE FREQUENZA VA IL PANNELLO DELL'HOST.
  *
@@ -728,7 +776,8 @@ static void winq_tick(void *opaque)
  * darebbe piu' fluidita' quando il pannello e' a 120 e lavoro buttato quando
  * scende a 60. Quale dei due convenga e' una misura, non un'opinione, e questa
  * variabile e' il modo di farla:
- *     WINQ_HZ=120 -> una misura di fluidita' sul guest
+ *     WINQ_HZ=120 -> qemu/scripts/misura-prestazioni.sh
+ * Il confronto sta in qemu/PRESTAZIONI.md.
  *
  * Ritorna -1 se GetDC sulla finestra fallisce (causa: la finestra, non il
  * pannello), 0 o 1 se GetDeviceCaps(VREFRESH) risponde cosi' (causa: il
@@ -857,7 +906,7 @@ void winq_imposta_risoluzione(int w, int h)
 
     if (dpy_set_ui_info(winq.dcl.con, &info, false) != 0) {
         info_report("winq: the device does not accept QemuUIInfo, resolution "
-                    "invariata");
+                    "unchanged");
         return;
     }
     info_report("winq: guest resolution -> %dx%d at %d Hz", w, h, hz);
@@ -942,8 +991,8 @@ static void winq_display_refresh(DisplayChangeListener *dcl)
         if (!winq_inizio) {
             winq_inizio = t0;
         } else if (t0 - winq_inizio >= 1000000) {
-            error_report("winq-schermo/s: giri=%lu drenaggio=%lu us disegno=%lu us "
-                         "presenta=%lu us (totale %lu ms al secondo)",
+            error_report("winq-screen/s: ticks=%lu drain=%lu us draw=%lu us "
+                         "present=%lu us (total %lu ms per second)",
                          winq_giri, winq_drena / winq_giri,
                          winq_disegno / winq_giri, winq_presenta / winq_giri,
                          (winq_drena + winq_disegno + winq_presenta) / 1000);
@@ -963,7 +1012,7 @@ static void winq_display_refresh(DisplayChangeListener *dcl)
  * percorso 2D alternativo come ui/sdl2.c (dcl_2d_ops), perche' senza GL non ha
  * proprio modo di disegnare -- e' EGL che porta i pixel sulla finestra. Per
  * questo winq_early_init rifiuta gl=off invece di registrare ops mutilate.
- * I nomi dei campi e le firme vengono dai sorgenti di QEMU. */
+ * I nomi dei campi e le firme vengono da qemu/API-QEMU.md sezione 2. */
 const DisplayChangeListenerOps winq_dcl_ops = {
     .dpy_name             = "winq",
     .dpy_refresh          = winq_display_refresh,
@@ -990,7 +1039,7 @@ const DisplayChangeListenerOps winq_dcl_ops = {
  * Qui NON si alza il flag a mano: lo fa egl_init dentro
  * winq_present_early_init (ui/egl-helpers.c:733), dopo aver davvero
  * inizializzato EGL. La differenza non e' di stile: alzare il flag senza avere
- * un contesto GL vero e' esattamente cio' che una misura ha misurato, e porta a
+ * un contesto GL vero e' esattamente cio' che il Task 3 ha misurato, e porta a
  * "assertion failed: (con->gl)" in ui/console.c:985 a poche righe di avvio del
  * guest, perche' virglrenderer chiede subito un contesto con dpy_gl_ctx_create
  * (hw/display/virtio-gpu-virgl.c:1315-1327). Il flag e le quattro
@@ -1112,10 +1161,27 @@ static void winq_init(DisplayState *ds, DisplayOptions *o)
     /* Il battito rapido dell'input, armato per ultimo: prima di questa riga non
      * esistono ne' la console ne' il contesto, e presentare non avrebbe senso. */
     winq_periodo_ms = winq_leggi_periodo();
+    /* Una cadenza forzata resta fissa per conservare le vecchie prove A/B.
+     * WINQ_IDLE_ADAPTIVE=0 permette il confronto a parita' di ogni altra leva. */
+    {
+        const char *forzato = getenv("WINQ_PERIODO_MS");
+        const char *adattivo = getenv("WINQ_IDLE_ADAPTIVE");
+
+        winq_adattivo = !(forzato && *forzato) &&
+                        !(adattivo && !strcmp(adattivo, "0"));
+        winq_riposo_diag = getenv("WINQ_IDLE_DIAG") != NULL;
+    }
+    winq_segnala_attivita();
     winq_battito = timer_new_ms(QEMU_CLOCK_REALTIME, winq_tick, NULL);
     timer_mod(winq_battito, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
     info_report("winq: input heartbeat every %d ms "
                 "(WINQ_PERIODO_MS to change it)", winq_periodo_ms);
+    if (winq_adattivo) {
+        info_report("winq: idle safety heartbeat 30 ms after 250 ms without "
+                    "input, commands or frames; input wakeups remain immediate");
+    } else {
+        info_report("winq: idle safety heartbeat fixed at %d ms", winq_periodo_ms);
+    }
 
     /* Letta una volta sola, come winq_periodo_ms qui sopra: vedi il commento
      * su winq_presenta_leggi_forzato_ms per il perche'. Se non forzata,

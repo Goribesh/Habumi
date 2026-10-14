@@ -115,11 +115,10 @@ bool rilascio_prepara(HDROP h, Piano *p)
                  * quanto abbiamo contato, quindi il dialogo dichiarerebbe meno
                  * del vero e la scadenza sarebbe calcolata su un lavoro piu'
                  * piccolo di quello reale. */
-                registro_riga(REG_GUSCIO, "drop: the folder could not be "
-                              "counted in full (too deep, or a "
-                              "subfolder cannot be read): the WHOLE drop "
-                              "WHOLE, because copying part of it while announcing the "
-                              "resto sarebbe peggio");
+                registro_riga(REG_GUSCIO, "drop: cannot count all files "
+                              "(folder too deep or unreadable). The entire "
+                              "drop is refused: copying only part would "
+                              "not match the confirmation dialog");
                 return false;
             }
             p->file_totali += dentro;
@@ -479,7 +478,8 @@ int rilascio_taglia(char *dest, int max, long long byte)
         byte = 0;
     }
     if (byte < 1024) {
-        n = snprintf(dest, (size_t)max, "%lld byte", byte);
+        n = snprintf(dest, (size_t)max, "%lld %s", byte,
+                     byte == 1 ? "byte" : "bytes");
         if (n < 0 || n >= max) {
             dest[0] = '\0';
             return 0;
@@ -494,7 +494,7 @@ int rilascio_taglia(char *dest, int max, long long byte)
         }
         soglia *= 1024;
     }
-    n = snprintf(dest, (size_t)max, "%lld,%lld %s", byte / soglia,
+    n = snprintf(dest, (size_t)max, "%lld.%lld %s", byte / soglia,
                  (byte % soglia) * 10 / soglia, unita[i]);
     if (n < 0 || n >= max) {
         dest[0] = '\0';
@@ -518,24 +518,24 @@ int rilascio_messaggio(char *dest, int max, const Piano *p)
     }
     rilascio_taglia(taglia, sizeof(taglia), p->byte);
 
-    /* "file" in italiano non cambia al plurale, e non e' una dimenticanza: chi
-     * passasse a "files" scriverebbe in inglese in un prodotto che parla
-     * italiano. Solo "applicazione" ha il plurale. */
+    /* Il dialogo distingue singolare e plurale per entrambe le azioni. */
     if (p->file_totali == 0) {
-        n = snprintf(dest, (size_t)max, "Installare %d %s in Android?",
+        n = snprintf(dest, (size_t)max, "Install %d %s in Android?",
                      p->voci_apk,
-                     p->voci_apk == 1 ? "applicazione" : "applicazioni");
+                     p->voci_apk == 1 ? "app" : "apps");
     } else if (p->voci_apk == 0) {
         n = snprintf(dest, (size_t)max,
-                     "Copiare %d file (%s) in /sdcard/Download?\n\n%s",
-                     p->file_totali, taglia, RIL_AVVISO);
+                     "Copy %d %s (%s) to /sdcard/Download?\n\n%s",
+                     p->file_totali, p->file_totali == 1 ? "file" : "files",
+                     taglia, RIL_AVVISO);
     } else {
         n = snprintf(dest, (size_t)max,
-                     "Installare %d %s e copiare %d file (%s) in Android?"
+                     "Install %d %s and copy %d %s (%s) to Android?"
                      "\n\n%s",
                      p->voci_apk,
-                     p->voci_apk == 1 ? "applicazione" : "applicazioni",
-                     p->file_totali, taglia, RIL_AVVISO);
+                     p->voci_apk == 1 ? "app" : "apps",
+                     p->file_totali, p->file_totali == 1 ? "file" : "files",
+                     taglia, RIL_AVVISO);
     }
     if (n < 0 || n >= max) {
         /* Un messaggio troncato chiederebbe il permesso per meno di quello che

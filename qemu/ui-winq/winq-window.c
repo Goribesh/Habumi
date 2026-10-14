@@ -135,7 +135,7 @@ void winq_dpi_dichiara(void)
     if (!imposta) {
         info_report("winq: SetProcessDpiAwarenessContext is not there (needs "
                     "Windows 10 1703): continuing without DPI "
-                    "DPI, the window stays usable and blurry as before");
+                    "awareness; the window stays usable but blurry");
         return;
     }
     if (imposta(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
@@ -511,7 +511,7 @@ static void winq_mappa_gestisci_impara(HWND h, char *arg)
     const char *percorso;
 
     if (!spazio) {
-        error_report("winq: comando \"mappa impara\" malformed: %s", arg);
+        error_report("winq: malformed key-map learn command: %s", arg);
         g_free(arg);
         return;
     }
@@ -523,7 +523,7 @@ static void winq_mappa_gestisci_impara(HWND h, char *arg)
     } else if (!strcmp(arg, "joystick")) {
         tipo = MAPPA_IMPARA_JOYSTICK;
     } else {
-        error_report("winq: type \"%s\" unknown in \"mappa impara\"", arg);
+        error_report("winq: unknown key-map learn type \"%s\"", arg);
         g_free(arg);
         return;
     }
@@ -1016,8 +1016,8 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                  * messaggio. Quale dei due manchi lo sa questo file, che
                  * conosce il tipo; il modulo no. */
                 if (winq_mappa_impara_tipo == MAPPA_IMPARA_TOCCO) {
-                    info_report("winq: learn mode: press the key to assign FIRST, "
-                                "assign, then click the point");
+        info_report("winq: learn mode: press the key to assign FIRST, "
+                    "then click the point");
                 } else {
                     info_report("winq: learn mode: centre taken, now "
                                 "click a point on the edge of the stick");
@@ -1039,7 +1039,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                                  "edge, or two clicks on the same point)");
                 } else {
                     error_report("winq: learn mode not finished: the map already has "
-                                 "already %d touches, the maximum",
+                    "%d touch mappings, the maximum",
                                  MAPPA_TOCCHI_MAX);
                 }
                 winq_mappa_impara_azzera();
@@ -1314,7 +1314,7 @@ static void winq_traccia_finestra(const char *dove)
         acceso = (v && *v == '1') ? 1 : 0;
     }
     if (acceso) {
-        info_report("winq-traccia finestra: %s", dove);
+        info_report("winq-window-trace: %s", dove);
     }
 }
 
@@ -1323,10 +1323,10 @@ static void *winq_thread_corpo(void *opaque)
     MSG m;
     BOOL r;
 
-    winq_traccia_finestra("thread partito");
+    winq_traccia_finestra("thread started");
     winq_finestra_creata = winq_create_window(winq_iniziale_w, winq_iniziale_h);
-    winq_traccia_finestra(winq_finestra_creata ? "finestra creata"
-                                               : "finestra NON creata");
+    winq_traccia_finestra(winq_finestra_creata ? "window created"
+                                               : "window NOT created");
     qemu_sem_post(&winq_pronta);
     if (!winq_finestra_creata) {
         return NULL;
@@ -1335,11 +1335,11 @@ static void *winq_thread_corpo(void *opaque)
     /* GetMessage e non PeekMessage, ed e' la differenza che rende questo thread
      * quasi gratuito: dorme finche' un messaggio non arriva, invece di girare a
      * vuoto ogni cinque millisecondi come faceva la pompa dentro il battito. */
-    winq_traccia_finestra("entro nel ciclo dei messaggi");
+    winq_traccia_finestra("entering the message loop");
     while ((r = GetMessage(&m, NULL, 0, 0)) != 0) {
         if (r == -1) {
             error_report("winq: GetMessage failed (%lu), the window "
-                         "window exits", GetLastError());
+                     "thread exits", GetLastError());
             break;
         }
         TranslateMessage(&m);
@@ -1350,8 +1350,8 @@ static void *winq_thread_corpo(void *opaque)
      * GetMessage. Distinguerli e' il punto della diagnosi: hanno cause
      * opposte, e da fuori si vedono uguali -- QEMU che sparisce in silenzio. */
     winq_traccia_finestra(r == 0
-                          ? "ciclo finito: WM_QUIT, chiusura chiesta"
-                          : "ciclo finito: GetMessage in errore");
+                          ? "message loop ended: WM_QUIT, close requested"
+                          : "message loop ended: GetMessage failed");
 
     /* SI ARRIVA QUI SOLO PER GUASTO, e va detto forte. Una macchina virtuale
      * viva senza finestra e' il guasto peggiore: QEMU invisibile, chiudibile
@@ -1390,4 +1390,3 @@ bool winq_avvia_thread(int w, int h)
     qemu_sem_wait(&winq_pronta);
     return winq_finestra_creata;
 }
-

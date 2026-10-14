@@ -67,6 +67,9 @@ bool winq_avvia_thread(int w, int h);
  * e non prende il BQL (include/qemu/aio.h). */
 void winq_sveglia(void);
 
+/* Sul ciclo principale: input, comandi e frame riattivano il battito rapido. */
+void winq_segnala_attivita(void);
+
 /* Il messaggio con cui il ciclo principale chiede alla finestra di
  * ridimensionarsi. wParam = larghezza, lParam = altezza dell'area CLIENTE.
  *
@@ -233,7 +236,7 @@ bool winq_present_in_scanout(void);
  *
  * Esiste perche' misurato: con ANGLE il guest ottiene ES 2.0 e la mediana per frame e'
  * 34 ms; con un contesto desktop -- che e' cio' che -display sdl ottiene via WGL -- il
- * guest ottiene ES 3.1 e la mediana e' 7 ms.
+ * guest ottiene ES 3.1 e la mediana e' 7 ms. Vedi qemu/WGL.md e qemu/PRESTAZIONI.md.
  *
  * WGL e' il DEFAULT; si torna ad ANGLE con WINQ_GL=angle, e il ripiego
  * e' anche automatico se il contesto desktop non si ottiene. */

@@ -74,6 +74,80 @@ bool var_da_testo(const char *s, VarNome *fuori)
     return false;
 }
 
+size_t var_config_riscrivi(const char *testo, VarNome v,
+                          char *fuori, size_t max)
+{
+    const char *p;
+    size_t usati = 0;
+    bool trovata = false;
+
+    if (!testo || !fuori || max == 0) {
+        return 0;
+    }
+    for (p = testo; *p; ) {
+        const char *fine = strchr(p, '\n');
+        size_t n = fine ? (size_t)(fine - p) + 1 : strlen(p);
+        const char *q = p;
+        const char *limite = p + n;
+        size_t chiave = 0;
+
+        while (q < limite && (*q == ' ' || *q == '\t')) {
+            q++;
+        }
+        if ((size_t)(limite - q) >= 8 && !strncmp(q, "variante", 8)) {
+            chiave = 8;
+        } else if ((size_t)(limite - q) >= strlen(VAR_CONFIG_CHIAVE) &&
+                   !strncmp(q, VAR_CONFIG_CHIAVE, strlen(VAR_CONFIG_CHIAVE))) {
+            chiave = strlen(VAR_CONFIG_CHIAVE);
+        }
+        if (chiave) {
+            q += chiave;
+            while (q < limite && (*q == ' ' || *q == '\t')) {
+                q++;
+            }
+            if (q == limite || *q != '=') {
+                chiave = 0;
+            }
+        }
+        if (chiave) {
+            if (!trovata) {
+                int scritti = snprintf(fuori + usati, max - usati,
+                                       VAR_CONFIG_CHIAVE "=%s\n", var_testo(v));
+                if (scritti < 0 || (size_t)scritti >= max - usati) {
+                    return 0;
+                }
+                usati += (size_t)scritti;
+                trovata = true;
+            }
+        } else {
+            if (n >= max - usati) {
+                return 0;
+            }
+            memcpy(fuori + usati, p, n);
+            usati += n;
+        }
+        p += n;
+    }
+    if (!trovata) {
+        int scritti;
+
+        if (usati && fuori[usati - 1] != '\n') {
+            if (max - usati <= 1) {
+                return 0;
+            }
+            fuori[usati++] = '\n';
+        }
+        scritti = snprintf(fuori + usati, max - usati,
+                           VAR_CONFIG_CHIAVE "=%s\n", var_testo(v));
+        if (scritti < 0 || (size_t)scritti >= max - usati) {
+            return 0;
+        }
+        usati += (size_t)scritti;
+    }
+    fuori[usati] = '\0';
+    return usati;
+}
+
 void var_percorsi(VarNome v, const char **immagine, const char **dati)
 {
     int i = (v == VAR_GAPPS) ? VAR_GAPPS : VAR_VANILLA;
@@ -197,7 +271,7 @@ bool var_stato_leggi(VarStato *s, const char *percorso,
             if (prossimo != EOF) {
                 ungetc(prossimo, f);
                 snprintf(errore, errore_n,
-                        "riga troppo lunga (oltre %d caratteri)",
+                        "Line too long (more than %d characters)",
                         (int)sizeof(linea) - 1);
                 goto male;
             }
@@ -215,12 +289,12 @@ bool var_stato_leggi(VarStato *s, const char *percorso,
             !prossima_parola(&p, sha_s, sizeof(sha_s)) ||
             !prossima_parola(&p, byte_s, sizeof(byte_s))) {
             snprintf(errore, errore_n,
-                    "riga malformata: mancano campi, o un campo e' troppo "
-                    "lungo (attesi variante nomefile sha256 byte)");
+                    "Malformed line: missing fields, or a field is too "
+                    "long (expected: variant filename sha256 bytes)");
             goto male;
         }
         if (!resto_vuoto(p)) {
-            snprintf(errore, errore_n, "campi in piu' dopo i quattro attesi");
+            snprintf(errore, errore_n, "Extra fields after the four expected fields");
             goto male;
         }
 
@@ -230,17 +304,17 @@ bool var_stato_leggi(VarStato *s, const char *percorso,
          * che altrimenti la rifiuterebbe come "variante sconosciuta". */
         e_vendor = strcmp(variante_s, "vendor") == 0;
         if (!e_vendor && !var_da_testo(variante_s, &v)) {
-            snprintf(errore, errore_n, "variante sconosciuta: %s", variante_s);
+            snprintf(errore, errore_n, "Unknown variant: %s", variante_s);
             goto male;
         }
         if (strlen(sha_s) != VAR_SHA256_CIFRE) {
             snprintf(errore, errore_n,
-                    "sha256 di %d cifre invece di %d", (int)strlen(sha_s),
+                    "sha256 has %d digits instead of %d", (int)strlen(sha_s),
                     VAR_SHA256_CIFRE);
             goto male;
         }
         if (!leggi_byte(byte_s, &byte)) {
-            snprintf(errore, errore_n, "byte non numerico: %s", byte_s);
+            snprintf(errore, errore_n, "Non-numeric byte count: %s", byte_s);
             goto male;
         }
 
@@ -278,7 +352,7 @@ bool var_stato_scrivi(const VarStato *s, const char *percorso,
      * trame degli appunti se ne guardano. */
     f = fopen(percorso, "wb");
     if (f == NULL) {
-        snprintf(errore, errore_n, "non riesco a scrivere %s", percorso);
+        snprintf(errore, errore_n, "Cannot write %s", percorso);
         return false;
     }
 
@@ -292,7 +366,7 @@ bool var_stato_scrivi(const VarStato *s, const char *percorso,
         }
         if (fprintf(f, "%s %s %s %llu\n", var_testo((VarNome)i), voce->file,
                     voce->sha256, (unsigned long long)voce->byte) < 0) {
-            snprintf(errore, errore_n, "scrittura fallita su %s", percorso);
+            snprintf(errore, errore_n, "Write failed for %s", percorso);
             fclose(f);
             return false;
         }
@@ -303,14 +377,14 @@ bool var_stato_scrivi(const VarStato *s, const char *percorso,
     if (s->vendor.file[0] != '\0') {
         if (fprintf(f, "vendor %s %s %llu\n", s->vendor.file, s->vendor.sha256,
                     (unsigned long long)s->vendor.byte) < 0) {
-            snprintf(errore, errore_n, "scrittura fallita su %s", percorso);
+            snprintf(errore, errore_n, "Write failed for %s", percorso);
             fclose(f);
             return false;
         }
     }
 
     if (fclose(f) != 0) {
-        snprintf(errore, errore_n, "chiusura fallita su %s", percorso);
+        snprintf(errore, errore_n, "Close failed for %s", percorso);
         return false;
     }
     return true;
@@ -556,7 +630,7 @@ bool var_manifesto_piu_recente(const char *json, size_t n, VarVoce *fuori,
     memset(&migliore, 0, sizeof(migliore));
 
     if (n == 0) {
-        snprintf(errore, errore_n, "manifesto vuoto");
+        snprintf(errore, errore_n, "Empty manifest");
         return false;
     }
     fine = json + n;
@@ -589,35 +663,35 @@ bool var_manifesto_piu_recente(const char *json, size_t n, VarVoce *fuori,
         oggetto_fine = manifesto_trova(p, fine, "}");
         if (oggetto_fine == NULL) {
             snprintf(errore, errore_n,
-                    "manifesto troncato: una voce non si chiude entro il "
-                    "buffer ricevuto");
+                    "Truncated manifest: an entry does not close within the "
+                    "received buffer");
             return false;
         }
 
         if (!manifesto_numero(p, oggetto_fine, "\"datetime\":", &datetime)) {
             snprintf(errore, errore_n,
-                    "voce senza datetime, o datetime non numerico");
+                    "Entry has no datetime, or datetime is not numeric");
             return false;
         }
         if (!manifesto_stringa(p, oggetto_fine, "\"filename\":", nome_file,
                                sizeof(nome_file))) {
             snprintf(errore, errore_n,
-                    "voce senza filename, o filename di %d caratteri o piu'",
+                    "Entry has no filename, or filename has %d or more characters",
                     VAR_NOME_MAX);
             return false;
         }
         if (!manifesto_stringa(p, oggetto_fine, "\"id\":", id,
                                sizeof(id))) {
-            snprintf(errore, errore_n, "voce senza id, o id troppo lungo");
+            snprintf(errore, errore_n, "Entry has no id, or id is too long");
             return false;
         }
         if (strlen(id) != VAR_SHA256_CIFRE) {
-            snprintf(errore, errore_n, "id di %d cifre invece di %d",
+            snprintf(errore, errore_n, "id has %d digits instead of %d",
                     (int)strlen(id), VAR_SHA256_CIFRE);
             return false;
         }
         if (!manifesto_numero(p, oggetto_fine, "\"size\":", &byte)) {
-            snprintf(errore, errore_n, "voce senza size, o size non numerico");
+            snprintf(errore, errore_n, "Entry has no size, or size is not numeric");
             return false;
         }
         /* "url": il campo che var_manifesto_piu_recente non leggeva prima di
@@ -628,7 +702,7 @@ bool var_manifesto_piu_recente(const char *json, size_t n, VarVoce *fuori,
         if (!manifesto_stringa(p, oggetto_fine, "\"url\":", url,
                                sizeof(url))) {
             snprintf(errore, errore_n,
-                    "voce senza url, o url di %d caratteri o piu'",
+                    "Entry has no url, or url has %d or more characters",
                     VAR_URL_MAX);
             return false;
         }
@@ -647,7 +721,7 @@ bool var_manifesto_piu_recente(const char *json, size_t n, VarVoce *fuori,
     }
 
     if (!trovata) {
-        snprintf(errore, errore_n, "nessuna voce nel manifesto");
+        snprintf(errore, errore_n, "No entries in the manifest");
         return false;
     }
 
@@ -685,8 +759,8 @@ bool var_vendor_build_avviso(uint64_t datetime, char *avviso, size_t avviso_n)
         return false;
     }
     snprintf(avviso, avviso_n,
-            "il vendor scelto ha build %llu, diversa da quella attesa %llu: "
-            "l'HAL audio nell'initramfs potrebbe non corrispondere",
+            "Selected vendor build %llu differs from expected build %llu: "
+            "the audio HAL in the initramfs may not match",
             (unsigned long long)datetime,
             (unsigned long long)VENDOR_BUILD_ATTESA);
     return true;

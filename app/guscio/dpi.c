@@ -108,9 +108,9 @@ void dpi_dichiara(void)
      * una compatibilita' che non e'. */
     if (imposta(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE)) {
         snprintf(dpi_riga, sizeof(dpi_riga),
-                 "DPI: per-monitor-v2 rifiutato, dichiarato system-aware come "
-                 "ripiego: i pixel sono veri, ma un passaggio su uno schermo con "
-                 "scala diversa non sara' seguito");
+                 "DPI: per-monitor-v2 refused; using system-aware as a "
+                 "fallback: pixels are physical, but moving to a screen with "
+                 "a different scale will not update the DPI");
         return;
     }
     {

@@ -1074,6 +1074,45 @@ static void prova_manifesto_json_compatto_continua_a_passare(void)
           (unsigned long long)voce.byte);
 }
 
+static void prova_config_migra_duplicati_e_conserva_le_altre_righe(void)
+{
+    char fuori[256];
+    const char *testo = "# variante=gapps\nwidth=800\nvariant=vanilla\n"
+                        " variante = gapps\nvariant = vanilla\nheight=1280\n";
+    const char *atteso = "# variante=gapps\nwidth=800\nvariant=gapps\n"
+                        "height=1280\n";
+
+    CHECK(var_config_riscrivi(testo, VAR_GAPPS, fuori, sizeof(fuori)) ==
+          strlen(atteso), "lunghezza della configurazione migrata");
+    CHECK(!strcmp(fuori, atteso), "chiave unica e valori estranei conservati");
+    CHECK(var_config_riscrivi(fuori, VAR_VANILLA, fuori + 128, 128) > 0,
+          "si puo' tornare alla vanilla");
+    CHECK(strstr(fuori + 128, "variant=vanilla\n") != NULL,
+          "ritorno alla chiave canonica vanilla");
+}
+
+static void prova_config_newline_e_limiti_del_buffer(void)
+{
+    char fuori[128];
+    const char *atteso = "audio=on\nvariant=gapps\n";
+
+    CHECK(var_config_riscrivi("audio=on", VAR_GAPPS, fuori, sizeof(fuori)) ==
+          strlen(atteso), "aggiunta dopo riga senza newline");
+    CHECK(!strcmp(fuori, atteso), "la nuova chiave non si incolla ad audio");
+    CHECK(var_config_riscrivi("", VAR_GAPPS, fuori,
+          strlen("variant=gapps\n") + 1) > 0, "buffer esatto con NUL");
+    CHECK(var_config_riscrivi("", VAR_GAPPS, fuori,
+          strlen("variant=gapps\n")) == 0, "senza spazio per NUL non si salva");
+    CHECK(var_config_riscrivi(NULL, VAR_GAPPS, fuori, sizeof(fuori)) == 0,
+          "testo NULL rifiutato");
+    CHECK(var_config_riscrivi("", VAR_GAPPS, NULL, sizeof(fuori)) == 0,
+          "destinazione NULL rifiutata");
+    CHECK(var_config_riscrivi("variant_extra=1\n", VAR_GAPPS,
+          fuori, sizeof(fuori)) > 0, "chiave con prefisso simile conservata");
+    CHECK(!strcmp(fuori, "variant_extra=1\nvariant=gapps\n"),
+          "solo le due chiavi esatte identificano la selezione");
+}
+
 int main(void)
 {
     prova_testo_e_da_testo();
@@ -1105,6 +1144,8 @@ int main(void)
     prova_manifesto_spaziatura_vera();
     prova_manifesto_spaziatura_esagerata();
     prova_manifesto_json_compatto_continua_a_passare();
+    prova_config_migra_duplicati_e_conserva_le_altre_righe();
+    prova_config_newline_e_limiti_del_buffer();
 
     printf("test-varianti: %d su %d passati\n", passati, passati + falliti);
     return falliti ? 1 : 0;

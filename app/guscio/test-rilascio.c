@@ -42,43 +42,45 @@ static void il_tetto_e_provato_sui_confini(void)
     CHECK(!rilascio_tetto_superato(0, 0));
 }
 
-static void scrive_la_taglia_in_italiano(void)
+static void scrive_la_taglia_in_inglese(void)
 {
     char t[32];
 
     CHECK(rilascio_taglia(t, sizeof(t), 0) > 0);
-    CHECK(strcmp(t, "0 byte") == 0);
+    CHECK(strcmp(t, "0 bytes") == 0);
+    CHECK(rilascio_taglia(t, sizeof(t), 1) > 0);
+    CHECK(strcmp(t, "1 byte") == 0);
     CHECK(rilascio_taglia(t, sizeof(t), 1023) > 0);
-    CHECK(strcmp(t, "1023 byte") == 0);
+    CHECK(strcmp(t, "1023 bytes") == 0);
     CHECK(rilascio_taglia(t, sizeof(t), 1024) > 0);
-    CHECK(strcmp(t, "1,0 KB") == 0);
+    CHECK(strcmp(t, "1.0 KB") == 0);
     CHECK(rilascio_taglia(t, sizeof(t), 1536) > 0);
-    CHECK(strcmp(t, "1,5 KB") == 0);
+    CHECK(strcmp(t, "1.5 KB") == 0);
     CHECK(rilascio_taglia(t, sizeof(t), 1048576) > 0);
-    CHECK(strcmp(t, "1,0 MB") == 0);
-    /* 1,3 GB: il numero che sta nell'esempio della spec. 1,3 GiB esatti sono
+    CHECK(strcmp(t, "1.0 MB") == 0);
+    /* 1.3 GB: il numero che sta nell'esempio della spec. 1,3 GiB esatti sono
      * 1395864371,2 byte, quindi il primo intero che li raggiunge e' ...72. */
     CHECK(rilascio_taglia(t, sizeof(t), 1395864372LL) > 0);
-    CHECK(strcmp(t, "1,3 GB") == 0);
+    CHECK(strcmp(t, "1.3 GB") == 0);
     /* UN BYTE SOTTO, e la risposta cambia: la taglia TRONCA, non arrotonda.
      * Questo caso esiste perche' il piano aveva sbagliato proprio qui, e senza
      * di esso qualcuno passerebbe all'arrotondamento credendo di correggere un
-     * difetto. Troncare e' la scelta: "1,2 GB" non promette mai piu' spazio di
+     * difetto. Troncare e' la scelta: "1.2 GB" non promette mai piu' spazio di
      * quello che serve. */
     CHECK(rilascio_taglia(t, sizeof(t), 1395864371LL) > 0);
-    CHECK(strcmp(t, "1,2 GB") == 0);
+    CHECK(strcmp(t, "1.2 GB") == 0);
     /* Il confine fra KB e MB: 1048575 byte sono un byte sotto 1 MiB e devono
      * restare KB, o il salto di unita' avviene un byte troppo presto. */
     CHECK(rilascio_taglia(t, sizeof(t), 1048575) > 0);
-    CHECK(strcmp(t, "1023,9 KB") == 0);
+    CHECK(strcmp(t, "1023.9 KB") == 0);
     /* Il ramo TB, l'ultima unita' dell'array: senza questo caso un errore
      * nell'indice ci arriverebbe senza che nessuna prova lo veda. */
     CHECK(rilascio_taglia(t, sizeof(t), 2199023255552LL) > 0);
-    CHECK(strcmp(t, "2,0 TB") == 0);
+    CHECK(strcmp(t, "2.0 TB") == 0);
     /* Una dimensione negativa non esiste: si scrive zero, non un numero
      * assurdo. */
     CHECK(rilascio_taglia(t, sizeof(t), -1) > 0);
-    CHECK(strcmp(t, "0 byte") == 0);
+    CHECK(strcmp(t, "0 bytes") == 0);
 }
 
 static void il_messaggio_dei_soli_apk(void)
@@ -89,14 +91,14 @@ static void il_messaggio_dei_soli_apk(void)
     memset(&p, 0, sizeof(p));
     p.voci_apk = 1;
     CHECK(rilascio_messaggio(m, sizeof(m), &p) > 0);
-    CHECK(strcmp(m, "Installare 1 applicazione in Android?") == 0);
+    CHECK(strcmp(m, "Install 1 app in Android?") == 0);
     /* Nessun avviso sulla sostituzione: non si sta copiando niente, e
      * adb install -r conserva i dati. Dirlo sarebbe falso. */
-    CHECK(strstr(m, "sostituiti") == NULL);
+    CHECK(strstr(m, "removed") == NULL);
 
     p.voci_apk = 3;
     CHECK(rilascio_messaggio(m, sizeof(m), &p) > 0);
-    CHECK(strcmp(m, "Installare 3 applicazioni in Android?") == 0);
+    CHECK(strcmp(m, "Install 3 apps in Android?") == 0);
 }
 
 static void il_messaggio_dei_soli_file(void)
@@ -109,7 +111,7 @@ static void il_messaggio_dei_soli_file(void)
     p.file_totali = 1;
     p.byte = 1048576;
     CHECK(rilascio_messaggio(m, sizeof(m), &p) > 0);
-    CHECK(strstr(m, "Copiare 1 file (1,0 MB) in /sdcard/Download?") == m);
+    CHECK(strstr(m, "Copy 1 file (1.0 MB) to /sdcard/Download?") == m);
     /* L'avviso c'e' SEMPRE quando si copia: nessuna sostituzione deve avvenire
      * senza che l'utente l'abbia letto. */
     CHECK(strstr(m, RIL_AVVISO) != NULL);
@@ -117,7 +119,7 @@ static void il_messaggio_dei_soli_file(void)
     p.file_totali = 214;
     p.byte = 1395864372LL;
     CHECK(rilascio_messaggio(m, sizeof(m), &p) > 0);
-    CHECK(strstr(m, "Copiare 214 file (1,3 GB)") == m);
+    CHECK(strstr(m, "Copy 214 files (1.3 GB)") == m);
     CHECK(strstr(m, RIL_AVVISO) != NULL);
 }
 
@@ -135,13 +137,13 @@ static void il_messaggio_del_rilascio_misto(void)
     /* Le DUE azioni dichiarate in UN solo dialogo: e' la decisione dell'utente
      *, e serve a non avere il caso "ne ha fatta una parte e
      * sull'altra ha taciuto". */
-    CHECK(strstr(m, "Installare 1 applicazione") == m);
-    CHECK(strstr(m, "copiare 214 file (1,3 GB)") != NULL);
+    CHECK(strstr(m, "Install 1 app") == m);
+    CHECK(strstr(m, "copy 214 files (1.3 GB)") != NULL);
     CHECK(strstr(m, RIL_AVVISO) != NULL);
 
     p.voci_apk = 2;
     CHECK(rilascio_messaggio(m, sizeof(m), &p) > 0);
-    CHECK(strstr(m, "Installare 2 applicazioni") == m);
+    CHECK(strstr(m, "Install 2 apps") == m);
 }
 
 static void un_piano_vuoto_non_produce_un_dialogo(void)
@@ -293,7 +295,7 @@ static void percorre_un_albero_contando_file_e_byte(void)
     CHECK(rilascio_percorri(radice, RIL_MAX_ALBERO, &file, &byte)
           == RIL_ALBERO_COMPLETO);
     CHECK(file == 10);
-    /* 100 byte per file, e la sottocartella NON conta come file. */
+    /* 100 bytes per file, e la sottocartella NON conta come file. */
     CHECK(byte == 1000);
 
     togli_albero(radice);
@@ -443,7 +445,7 @@ static void gli_argomenti_assurdi_non_avviano_niente(void)
 int main(void)
 {
     il_tetto_e_provato_sui_confini();
-    scrive_la_taglia_in_italiano();
+    scrive_la_taglia_in_inglese();
     il_messaggio_dei_soli_apk();
     il_messaggio_dei_soli_file();
     il_messaggio_del_rilascio_misto();

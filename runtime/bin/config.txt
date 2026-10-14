@@ -67,6 +67,12 @@ guest_scale=yes
 # These measurements do not change the chosen refresh rate by themselves.
 hz=120
 
+# Advertised refresh at startup on battery, 0 = use hz on both power sources.
+# Uses 60 Hz on battery while keeping 120 Hz on AC. An explicit lower hz wins.
+# The power source is read once per VM start; plugging/unplugging a running
+# VM does not change its refresh. Fewer frames are a smoothness tradeoff.
+battery_hz=60
+
 # The logical density to impose on the guest with "wm density", once, as soon
 # as Android is ready. 0 (default) = do not touch, which is what happens today
 # without this key. Otherwise 120..640.

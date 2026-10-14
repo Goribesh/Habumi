@@ -1,0 +1,340 @@
+diff --git a/src/drm/drm-uapi/drm.h b/src/drm/drm-uapi/drm.h
+--- a/src/drm/drm-uapi/drm.h
++++ b/src/drm/drm-uapi/drm.h
+@@ -57,24 +57,24 @@
+ 
+ /* ioctl direction and size macros (not used on Windows, but needed for
+  * virtgpu_drm.h struct definitions that reference DRM_IOWR etc.) */
+-#define _IOC_NRBITS    8
+-#define _IOC_TYPEBITS  8
+-#define _IOC_SIZEBITS  14
+-#define _IOC_DIRBITS   2
+-#define _IOC_NRSHIFT   0
+-#define _IOC_TYPESHIFT  (_IOC_NRSHIFT + _IOC_NRBITS)
+-#define _IOC_SIZESHIFT  (_IOC_TYPESHIFT + _IOC_TYPEBITS)
+-#define _IOC_DIRSHIFT   (_IOC_SIZESHIFT + _IOC_SIZEBITS)
+-#define _IOC_NONE  0U
+-#define _IOC_WRITE 1U
+-#define _IOC_READ  2U
+-#define _IOC(dir,type,nr,size) \
+-   (((dir) << _IOC_DIRSHIFT) | ((type) << _IOC_TYPESHIFT) | \
+-    ((nr) << _IOC_NRSHIFT) | ((size) << _IOC_SIZESHIFT))
+-#define _IO(type,nr)        _IOC(_IOC_NONE,(type),(nr),0)
+-#define _IOR(type,nr,size)  _IOC(_IOC_READ,(type),(nr),sizeof(size))
+-#define _IOW(type,nr,size)  _IOC(_IOC_WRITE,(type),(nr),sizeof(size))
+-#define _IOWR(type,nr,size) _IOC(_IOC_READ|_IOC_WRITE,(type),(nr),sizeof(size))
++#define DRM_UAPI_IOC_NRBITS    8
++#define DRM_UAPI_IOC_TYPEBITS  8
++#define DRM_UAPI_IOC_SIZEBITS  14
++#define DRM_UAPI_IOC_DIRBITS   2
++#define DRM_UAPI_IOC_NRSHIFT   0
++#define DRM_UAPI_IOC_TYPESHIFT  (DRM_UAPI_IOC_NRSHIFT + DRM_UAPI_IOC_NRBITS)
++#define DRM_UAPI_IOC_SIZESHIFT  (DRM_UAPI_IOC_TYPESHIFT + DRM_UAPI_IOC_TYPEBITS)
++#define DRM_UAPI_IOC_DIRSHIFT   (DRM_UAPI_IOC_SIZESHIFT + DRM_UAPI_IOC_SIZEBITS)
++#define DRM_UAPI_IOC_NONE  0U
++#define DRM_UAPI_IOC_WRITE 1U
++#define DRM_UAPI_IOC_READ  2U
++#define DRM_UAPI_IOC(dir,type,nr,size) \
++   (((dir) << DRM_UAPI_IOC_DIRSHIFT) | ((type) << DRM_UAPI_IOC_TYPESHIFT) | \
++    ((nr) << DRM_UAPI_IOC_NRSHIFT) | ((size) << DRM_UAPI_IOC_SIZESHIFT))
++#define DRM_UAPI_IO(type,nr)        DRM_UAPI_IOC(DRM_UAPI_IOC_NONE,(type),(nr),0)
++#define DRM_UAPI_IOR(type,nr,size)  DRM_UAPI_IOC(DRM_UAPI_IOC_READ,(type),(nr),sizeof(size))
++#define DRM_UAPI_IOW(type,nr,size)  DRM_UAPI_IOC(DRM_UAPI_IOC_WRITE,(type),(nr),sizeof(size))
++#define DRM_UAPI_IOWR(type,nr,size) DRM_UAPI_IOC(DRM_UAPI_IOC_READ|DRM_UAPI_IOC_WRITE,(type),(nr),sizeof(size))
+ 
+ #else /* One of the BSDs */
+ 
+@@ -1075,10 +1075,19 @@
+ #endif
+ 
+ #define DRM_IOCTL_BASE			'd'
++#if defined(_WIN32)
++#define DRM_IO(nr)			DRM_UAPI_IO(DRM_IOCTL_BASE,nr)
++#define DRM_IOR(nr,type)		DRM_UAPI_IOR(DRM_IOCTL_BASE,nr,type)
++#define DRM_IOW(nr,type)		DRM_UAPI_IOW(DRM_IOCTL_BASE,nr,type)
++#define DRM_IOWR(nr,type)		DRM_UAPI_IOWR(DRM_IOCTL_BASE,nr,type)
++
++#else
+ #define DRM_IO(nr)			_IO(DRM_IOCTL_BASE,nr)
+ #define DRM_IOR(nr,type)		_IOR(DRM_IOCTL_BASE,nr,type)
+ #define DRM_IOW(nr,type)		_IOW(DRM_IOCTL_BASE,nr,type)
+ #define DRM_IOWR(nr,type)		_IOWR(DRM_IOCTL_BASE,nr,type)
++
++#endif
+ 
+ #define DRM_IOCTL_VERSION		DRM_IOWR(0x00, struct drm_version)
+ #define DRM_IOCTL_GET_UNIQUE		DRM_IOWR(0x01, struct drm_unique)
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -3,13 +3,16 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef _WIN32
++#include <winsock2.h>
++#include <windows.h>
++#endif
++
+ #include "proxy_context.h"
+ 
+ #include <fcntl.h>
+ #ifdef _WIN32
+-#include <windows.h>
+ #include <io.h>
+-#include <winsock2.h>
+ #include "mman_win32.h"
+ #else
+ #include <poll.h>
+@@ -394,6 +397,7 @@
+    return 0;
+ }
+ 
++#ifndef _WIN32
+ static bool
+ validate_resource_fd_shm(int fd, uint64_t expected_size)
+ {
+@@ -416,6 +420,7 @@
+ 
+    return true;
+ }
++#endif
+ 
+ static inline int
+ add_required_seals_to_fd(int fd)
+diff --git a/src/proxy/proxy_server.c b/src/proxy/proxy_server.c
+--- a/src/proxy/proxy_server.c
++++ b/src/proxy/proxy_server.c
+@@ -590,8 +590,7 @@
+ }
+ 
+ static void
+-server_destroy_worker(struct server_thread_state *state,
+-                      struct server_context_worker *w)
++server_destroy_worker(struct server_context_worker *w)
+ {
+    /* Close our end; worker thread will exit when recv fails */
+    closesocket((SOCKET)w->socket_fd);
+@@ -695,7 +694,7 @@
+          mtx_lock(&state->workers_mutex);
+          struct server_context_worker *w = server_find_worker(state, ctx_id);
+          if (w)
+-            server_destroy_worker(state, w);
++            server_destroy_worker(w);
+          mtx_unlock(&state->workers_mutex);
+          break;
+       }
+@@ -704,7 +703,7 @@
+          mtx_lock(&state->workers_mutex);
+          list_for_each_entry_safe(struct server_context_worker, w,
+                                   &state->workers, head)
+-            server_destroy_worker(state, w);
++            server_destroy_worker(w);
+          mtx_unlock(&state->workers_mutex);
+          break;
+       }
+@@ -725,7 +724,7 @@
+    mtx_lock(&state->workers_mutex);
+    list_for_each_entry_safe(struct server_context_worker, w,
+                             &state->workers, head)
+-      server_destroy_worker(state, w);
++      server_destroy_worker(w);
+    mtx_unlock(&state->workers_mutex);
+ 
+    if (state->vkr_initialized)
+diff --git a/src/proxy/proxy_socket.c b/src/proxy/proxy_socket.c
+--- a/src/proxy/proxy_socket.c
++++ b/src/proxy/proxy_socket.c
+@@ -3,14 +3,17 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef _WIN32
++#include <winsock2.h>
++#include <windows.h>
++#endif
++
+ #include "proxy_socket.h"
+ #include "server/render_protocol.h"
+ 
+ #ifdef _WIN32
+ #include "util/os_file.h"
+ 
+-#include <windows.h>
+-#include <winsock2.h>
+ #include <ws2tcpip.h>
+ #include <io.h>
+ 
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_acceleration_structure.h b/src/venus/venus-protocol/vn_protocol_renderer_acceleration_structure.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_acceleration_structure.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_acceleration_structure.h
+@@ -336,7 +336,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkWriteAccelerationStructuresPropertiesKHR_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     vn_decode_uint32_t(dec, &args->accelerationStructureCount);
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_descriptor_heap.h b/src/venus/venus-protocol/vn_protocol_renderer_descriptor_heap.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_descriptor_heap.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_descriptor_heap.h
+@@ -609,7 +609,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkWriteSamplerDescriptorMESA_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     if (vn_decode_simple_pointer(dec)) {
+@@ -663,7 +663,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkWriteResourceDescriptorMESA_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     if (vn_decode_simple_pointer(dec)) {
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_host_copy.h b/src/venus/venus-protocol/vn_protocol_renderer_host_copy.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_host_copy.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_host_copy.h
+@@ -463,7 +463,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkCopyImageToMemoryMESA_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     if (vn_decode_simple_pointer(dec)) {
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_pipeline.h b/src/venus/venus-protocol/vn_protocol_renderer_pipeline.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_pipeline.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_pipeline.h
+@@ -3779,7 +3779,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetRayTracingShaderGroupHandlesKHR_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     vn_decode_VkPipeline_lookup(dec, &args->pipeline);
+@@ -3831,7 +3831,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetRayTracingCaptureReplayShaderGroupHandlesKHR_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     vn_decode_VkPipeline_lookup(dec, &args->pipeline);
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_pipeline_cache.h b/src/venus/venus-protocol/vn_protocol_renderer_pipeline_cache.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_pipeline_cache.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_pipeline_cache.h
+@@ -165,7 +165,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetPipelineCacheData_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     vn_decode_VkPipelineCache_lookup(dec, &args->pipelineCache);
+diff --git a/src/venus/venus-protocol/vn_protocol_renderer_query_pool.h b/src/venus/venus-protocol/vn_protocol_renderer_query_pool.h
+--- a/src/venus/venus-protocol/vn_protocol_renderer_query_pool.h
++++ b/src/venus/venus-protocol/vn_protocol_renderer_query_pool.h
+@@ -159,7 +159,7 @@
+     const VkCommandTypeEXT cmd_type = VK_COMMAND_TYPE_vkGetQueryPoolResults_EXT;
+     size_t offset = vn_sizeof_VkCommandTypeEXT(&cmd_type);
+ 
+-    VkResult ret;
++    VkResult ret = VK_SUCCESS;
+     offset += vn_sizeof_VkResult(&ret);
+     vn_decode_VkDevice_lookup(dec, &args->device);
+     vn_decode_VkQueryPool_lookup(dec, &args->queryPool);
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -681,6 +681,11 @@
+                               struct virgl_context_blob *out_blob)
+ {
+    TRACE_FUNC();
++#ifdef _WIN32
++   /* The Win32 fd token wraps a non-seekable NT HANDLE; blob_size was
++    * supplied with the allocation and cannot be checked with lseek here. */
++   (void)blob_size;
++#endif
+ 
+    /* a memory can only be exported once; we don't want two resources to point
+     * to the same storage.
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -323,7 +323,6 @@
+ 
+    uint32_t advertised_count = 0;
+    bool saw_host_swapchain = false;
+-   bool advertised_swapchain = false;
+    for (uint32_t i = 0; i < count; i++) {
+       VkExtensionProperties *props = &exts[i];
+ 
+@@ -352,8 +351,6 @@
+          if (props->specVersion > spec_ver)
+             props->specVersion = spec_ver;
+          exts[advertised_count++] = exts[i];
+-         if (!strcmp(props->extensionName, "VK_KHR_swapchain"))
+-            advertised_swapchain = true;
+       }
+    }
+ 
+@@ -479,7 +476,6 @@
+          free(exts);
+          return;
+       }
+-      advertised_swapchain = true;
+    }
+ 
+    if (physical_dev->KHR_external_fence_fd) {
+diff --git a/src/venus/vkr_win32_shim.c b/src/venus/vkr_win32_shim.c
+--- a/src/venus/vkr_win32_shim.c
++++ b/src/venus/vkr_win32_shim.c
+@@ -232,9 +232,6 @@
+    struct vkr_win32_device_entry *entry = vkr_win32_lookup_device(device);
+    if (!entry)
+       return VK_ERROR_DEVICE_LOST;
+-
+-   const VkExternalMemoryHandleTypeFlags host_type =
+-      vkr_win32_get_host_handle_type(entry->dev);
+ 
+    /* Remap any existing external memory info in the pNext chain */
+    vkr_win32_remap_external_handle_types_in_chain(pCreateInfo->pNext);
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -1571,7 +1571,10 @@
+ {
+    int ret = -EINVAL;
+ 
+-#ifndef WIN32
++#ifdef WIN32
++   /* Incoming sync-file accumulation is only implemented on POSIX hosts. */
++   (void)ctx;
++#else
+    ret = sync_accumulate("virglrenderer", &ctx->in_fence_fd, fence_fd);
+ #endif
+    close(fence_fd);
+diff --git a/src/vrend/virgl_video_win32.c b/src/vrend/virgl_video_win32.c
+--- a/src/vrend/virgl_video_win32.c
++++ b/src/vrend/virgl_video_win32.c
+@@ -1103,7 +1103,7 @@
+                                const D3D11_VIDEO_DECODER_DESC *desc,
+                                D3D11_VIDEO_DECODER_CONFIG *out_cfg)
+ {
+-    UINT count = 0, i;
++    UINT count = 0;
+     HRESULT hr;
+ 
+     hr = ID3D11VideoDevice_GetVideoDecoderConfigCount(

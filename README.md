@@ -24,20 +24,23 @@ fallback and the remaining limitations.
 
 **[KNOWN-ISSUES.md](KNOWN-ISSUES.md) is the full list** of what does not work
 yet, ordered by what it costs you. The short version: no code signing, so
-SmartScreen will warn; no automatic updates; no Vulkan inside the guest; and the
-virtual machine freezes if Windows goes to sleep underneath it. What would make
+SmartScreen can warn; there are no automatic updates; graphics support initially
+targets the native Qualcomm Vulkan driver; and repeated overnight resume still
+needs validation. What would make
 the project better, and where help is wanted, is in [ROADMAP.md](ROADMAP.md).
 
 Two things that are choices rather than defects: the guest images are **pinned**
-to Waydroid build `20260403`, because an image that changed by itself would
+to Waydroid OTA commit `026205c747d314865fa18398375ff3b0e7bd7f70` (build `20260927`), because an image that changed by itself would
 change the bugs by itself; and **comments and internal documentation are in
 Italian**, see [Language](#language) below.
 
-As of October 5, 2026, the latest published release is
+As of October 14, 2026, the latest published release is
 [0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3). The repository
-also contains the process-cleanup and inherited-handle fixes prepared for
-0.2.4. Its archive has been built and exercised locally, but 0.2.4 has not been
-published as a GitHub release. See [RELEASE-NOTES.md](RELEASE-NOTES.md).
+is preparing **0.3.0-rc.1**, a prerelease with native Vulkan through Venus,
+Zink composition and asynchronous Android controls. It includes the cleanup,
+variant-restart and English-text changes made after 0.2.3. The candidate is not
+published yet. See [RELEASE-NOTES.md](RELEASE-NOTES.md) and
+[the native Vulkan guide](docs/NATIVE-VULKAN.md).
 
 If it breaks, send `guest\logs\registro-guscio.log`. Previous sessions are
 preserved in `guest\logs\archivio\`.
@@ -50,6 +53,7 @@ preserved in `guest\logs\archivio\`.
 | Disk | about 8 GB free |
 | Network | about **805 MB** on first run — the Android images download themselves |
 | Virtualization | the **Windows Hypervisor Platform** feature must be enabled |
+| Graphics | a compatible native **Qualcomm Vulkan ICD** installed by the device graphics driver |
 
 `tar.exe`, shipped with Windows 11, is used to extract the downloaded images. It
 is a real dependency, not an implementation detail.
@@ -57,7 +61,11 @@ is a real dependency, not an implementation detail.
 ## Install
 
 1. Download the release archive and unpack it wherever you like — any path works.
-2. Run `runtime\bin\Habumi.exe`.
+2. Run **`Start.cmd`**, which selects the native graphics driver and launches Habumi.
+
+For this prerelease, use a new directory. Keep your existing installation and
+Android data separately. Launching `runtime\bin\Habumi.exe` directly bypasses
+the Vulkan setup.
 
 There is nothing to install: no registry entries, no administrator rights, no
 services. To uninstall, delete the folder.
@@ -87,6 +95,12 @@ Windows ARM machine:
 - **Two Android variants** — with and without Google apps — stored separately,
   each keeping its own apps and data. One VM runs at a time; switching does
   not erase anything
+- **Native Vulkan in the development profile**, through Venus on Qualcomm;
+  Wild Life completed with visible scenes. The release package requires its
+  own fresh-install validation; this is not general app or device coverage
+- **Asynchronous boot checks, shutdown and controls**, including density,
+  navigation and guest rotation. A pending ADB client no longer holds the UI
+  timer for the duration of the request
 
 ## Build from source
 
@@ -102,12 +116,24 @@ bash app/scripts/test-guscio.sh     # 13 test suites, no VM needed
 QEMU is built separately; the patches that add the `winq` display backend are in
 `qemu/patches/`, applied on top of QEMU 11.0.3.
 
+The native renderer uses the pinned upstream revision and linear patch set in
+`app/scripts/build-native-renderer.ps1`. The corresponding-source bundle and
+component manifest must accompany the prerelease. See
+[release preparation](docs/RELEASE-READINESS-0.3.0-rc.1.md) for package-specific
+validation and remaining gates.
+
+For repeatable host GPU/CPU and battery measurements, see
+[the measurement protocol](qemu/HOST-OVERHEAD.md). The sampler reads counters
+without changing the running VM or its settings.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules this project holds itself
 to — some of them are not obvious and exist because breaking them cost time.
 
 ## Language
 
-The user interface, this README, and the contributor documents are in English.
+The user interface, runtime diagnostics, this README, and the contributor
+documents are in English. Key-map profiles use English key names; legacy
+Italian key-name aliases remain readable.
 **Everything else — the source comments, and the documentation the scripts
 carry inside themselves — is in Italian.**
 

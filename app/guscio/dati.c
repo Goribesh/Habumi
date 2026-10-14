@@ -186,9 +186,9 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
      * non direbbe niente a chi non conosce Win32. */
     if (SearchPathA(NULL, "tar.exe", NULL, 0, NULL, NULL) == 0) {
         snprintf(errore, errore_n,
-                "impossibile creare il /data: tar.exe non si trova. "
-                "Windows 11 lo spedisce di serie in System32; su una "
-                "macchina senza tar.exe %s non si puo' estrarre.", archivio);
+                "Cannot create /data: tar.exe was not found. "
+                "Windows 11 includes it in System32; on a "
+                "machine without tar.exe, %s cannot be extracted.", archivio);
         return false;
     }
 
@@ -199,8 +199,8 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
     if (!dati_cartella_temp(cartella_temp, sizeof(cartella_temp),
                             percorso_dati)) {
         snprintf(errore, errore_n,
-                "il percorso della cartella temporanea per %s e' troppo "
-                "lungo", percorso_dati);
+                "The temporary folder path for %s is too "
+                "long", percorso_dati);
         return false;
     }
 
@@ -212,7 +212,7 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
     if (snprintf(estratto, sizeof(estratto), "%s\\data.img", cartella_temp)
         >= (int)sizeof(estratto)) {
         snprintf(errore, errore_n,
-                "il percorso del file estratto in %s e' troppo lungo",
+                "The extracted file path in %s is too long",
                 cartella_temp);
         return false;
     }
@@ -230,7 +230,7 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
         errore_dir = GetLastError();
         if (errore_dir != ERROR_ALREADY_EXISTS) {
             snprintf(errore, errore_n,
-                    "non riesco a creare la cartella temporanea %s (%lu)",
+                    "Cannot create temporary folder %s (%lu)",
                     cartella_temp, errore_dir);
             return false;
         }
@@ -239,7 +239,7 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
     if (!dati_comando_estrai(comando, sizeof(comando), archivio,
                              cartella_temp)) {
         snprintf(errore, errore_n,
-                "il comando di estrazione di %s non sta nel buffer",
+                "The extraction command for %s does not fit in the buffer",
                 archivio);
         dati_pulisci_temp(cartella_temp, estratto);
         return false;
@@ -253,7 +253,7 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
     if (!CreateProcessA(NULL, comando, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                         NULL, NULL, &si, &pi)) {
         snprintf(errore, errore_n,
-                "impossibile avviare tar.exe per estrarre %s (%lu)",
+                "Cannot start tar.exe to extract %s (%lu)",
                 archivio, GetLastError());
         dati_pulisci_temp(cartella_temp, estratto);
         return false;
@@ -265,7 +265,7 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
     CloseHandle(pi.hThread);
     if (esito_processo != 0) {
         snprintf(errore, errore_n,
-                "tar.exe e' uscito con codice %lu estraendo %s",
+                "tar.exe exited with code %lu while extracting %s",
                 esito_processo, archivio);
         dati_pulisci_temp(cartella_temp, estratto);
         return false;
@@ -289,8 +289,8 @@ bool dati_crea_se_manca(const char *archivio, const char *percorso_dati,
         if (!dati_sposta_con_riprova(estratto, percorso_dati, 0, "/data",
                                      &ultimo_errore, &tentativi)) {
             snprintf(errore, errore_n,
-                    "estratto %s ma non riesco a spostarlo su %s dopo %d "
-                    "tentativi (%lu)", estratto, percorso_dati, tentativi,
+                    "Extracted %s but cannot move it to %s after %d "
+                    "attempts (%lu)", estratto, percorso_dati, tentativi,
                     (unsigned long)ultimo_errore);
             dati_pulisci_temp(cartella_temp, estratto);
             return false;

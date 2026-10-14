@@ -6,8 +6,8 @@
 # home, non da qui):
 #   MSYSTEM=CLANGARM64 /c/msys64/usr/bin/bash.exe -lc "bash <radice-del-progetto>/app/scripts/confeziona-release.sh"
 #
-# Legge app/release/contenuto.txt (l'elenco misurato) e non decide da se' cosa
-# entra nel pacchetto. Cio' che l'elenco
+# Legge app/release/contenuto.txt (l'elenco misurato, vedi SFOLTIMENTO.md
+# accanto) e non decide da se' cosa entra nel pacchetto. Cio' che l'elenco
 # nomina va COSTRUITO, non raccolto: il guscio e l'initramfs si ricompilano
 # qui, cosi' la release e' riproducibile e non un assemblaggio a mano che
 # nessuno puo' rifare identico (un Habumi.exe raccolto a caso
@@ -34,7 +34,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # segnalare i difetti; un 1.0 promette una stabilita' che nessuno ha ancora
 # potuto smentire.
 #
-# 0.2.0 e non 0.1.1, perche' cambia cosa c'e' dentro e non solo
+# 0.2.0 (14/08/2026) e non 0.1.1, perche' cambia cosa c'e' dentro e non solo
 # come sta insieme:
 #   - si spedisce la NOSTRA Mesa 26.2.0 (runtime/bin/opengl32.dll), che in
 #     0.1.0 non c'era affatto: quel pacchetto girava sull'OpenGL di sistema;
@@ -126,7 +126,13 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # In piu', gia' in albero da prima: il degrado dei vCPU scatta anche sul MURO
 # (due tentativi bloccati alla stessa riga seriale dimezzano), non solo sullo
 # zero, e KNOWN-ISSUES.md dice cosa resta del Surface Pro 12".
-VERSIONE="0.2.4"
+VERSIONE="$(tr -d '\r\n' < "$ROOT/app/release/version.txt")"
+case "$VERSIONE" in
+    0.3.*)
+        echo "Use app/scripts/prepare-native-release.ps1 for the native Vulkan package."
+        exit 1
+        ;;
+esac
 # Il nome del PRODOTTO, non della cartella del progetto: finisce nel nome
 # dell'archivio e in quello della cartella di uscita qui sotto.
 NOME="Habumi"

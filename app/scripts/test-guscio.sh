@@ -16,7 +16,7 @@ for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama
     # LE DIPENDENZE SONO LA DOCUMENTAZIONE ESEGUIBILE DEI CONFINI: se un modulo
     # comincia a chiamare qualcosa che non e' nella sua riga, la prova non compila.
     # E' cosi' che "rilascio.c non dipende da vm.c" resta vero invece di restare
-    # scritto. registro.c tira dentro archivio.c, quindi chi linka
+    # scritto. registro.c tira dentro archivio.c dal 04/08/2026, quindi chi linka
     # il registro linka anche quello.
     extra="registro.c archivio.c"
     if [ "$prova" = "registro" ]; then extra="archivio.c"; fi
@@ -26,7 +26,7 @@ for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama
     # a prescindere da cosa la singola prova chiami davvero -- e' cosi' per
     # config stesso e per ognuna delle righe qui sotto che include config.c.
     if [ "$prova" = "config" ]; then extra="registro.c archivio.c varianti.c"; fi
-    if [ "$prova" = "vm" ]; then extra="registro.c archivio.c config.c adb.c varianti.c"; fi
+    if [ "$prova" = "vm" ]; then extra="registro.c archivio.c config.c adb.c varianti.c comandi.c dpi.c tubo.c"; fi
     if [ "$prova" = "dpi" ]; then extra="registro.c archivio.c config.c varianti.c"; fi
     if [ "$prova" = "adb" ]; then extra="registro.c archivio.c config.c varianti.c"; fi
     if [ "$prova" = "apk" ]; then extra="registro.c archivio.c config.c adb.c varianti.c"; fi
@@ -62,7 +62,11 @@ for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama
     # sanno installare e copiare. NON dipende da vm.c: lo stato gli arriva come
     # parametro, e per questo il guardiano si prova senza la macchina a stati.
     if [ "$prova" = "rilascio" ]; then extra="registro.c archivio.c config.c adb.c apk.c file.c varianti.c"; fi
-    clang -std=c11 -Wall -Werror -o "test-$prova.exe" "test-$prova.c" "$prova.c" $extra
+    # test-vm include vm.c per esercitare la seriale fra due lanci; non si
+    # collega una seconda copia dello stesso modulo.
+    modulo="$prova.c"
+    if [ "$prova" = "vm" ]; then modulo=""; fi
+    clang -std=c11 -Wall -Werror -o "test-$prova.exe" "test-$prova.c" $modulo $extra
     ./"test-$prova.exe" || esito=1
 done
 exit $esito

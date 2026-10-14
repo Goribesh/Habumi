@@ -33,7 +33,7 @@
 
 /* Il pavimento di velocita' con cui si converte una dimensione in un tempo.
  *
- * MISURATO con dati INCOMPRIMIBILI -- gli zeri davano 1176 MB/s,
+ * MISURATO il 04/08/2026 con dati INCOMPRIMIBILI -- gli zeri davano 1176 MB/s,
  * perche' adb push comprime per default, quindi misuravano la sorgente e non il
  * canale: 115 MB/s su 200 MB a cache calda, 84 su 600 MB, 57 su 200 MB a freddo,
  * 30,8 su 1,2 GB a mano e **27,9 su 1,2 GB attraverso il prodotto**, che e' il
@@ -54,7 +54,7 @@
 
 /* Il costo per FILE, che i byte non catturano.
  *
- * MISURATO : 500 file piccoli spinti come cartella costano 3,44 s,
+ * MISURATO il 04/08/2026: 500 file piccoli spinti come cartella costano 3,44 s,
  * cioe' ~6,9 ms l'uno, mentre i byte non contano niente (50 KB in tutto). Senza
  * questo termine una cartella al tetto di 2000 file avrebbe avuto i soli 20 s di
  * base contro ~14 s misurati: funziona su questa macchina e si rompe su una piu'
@@ -108,7 +108,7 @@ unsigned adb_scadenza_trasferimento(long long byte, int file)
  *
  * PERCHE' NON UNA SCADENZA DI INATTIVITA', che sarebbe meglio: distinguerebbe
  * "lento" da "piantato", ma richiede un segnale di avanzamento e quel segnale
- * NON ESISTE -- misurato, adb non stampa il progresso su un tubo
+ * NON ESISTE -- misurato il 04/08/2026, adb non stampa il progresso su un tubo
  * rediretto (600 MB, sette secondi di tubo muto) e l'unico flag che ha (-q)
  * serve a sopprimerlo, non a pretenderlo. */
 static int esegui_catturando(const char *riga, char *uscita, int max,
@@ -541,6 +541,251 @@ bool adb_spegni(const Config *c)
 {
     registro_riga(REG_GUSCIO, "shutting Android down (reboot -p)");
     return adb_esegui(c, "reboot -p", NULL, 0);
+}
+
+struct AdbCliente {
+    HANDLE processo;
+    HANDLE lettura;
+    bool finito;
+    AdbSpegniStato esito;
+    char ultima[256];
+    const char *operazione;
+    bool uscita_troncata;
+};
+
+static AdbSpegnimento *adb_cliente_avvia(const Config *c, const char *coda,
+                                        bool seleziona_guest, const char *operazione)
+{
+    char adb[MAX_PATH], riga[1024];
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    STARTUPINFOA si = {0};
+    PROCESS_INFORMATION pi = {0};
+    HANDLE scrittura = NULL;
+    AdbSpegnimento *richiesta;
+
+    if (!c) { return NULL; }
+    adb_percorso(adb, sizeof(adb));
+    if (seleziona_guest) {
+        if (!adb_riga(riga, sizeof(riga), adb, c->porta_adb, coda)) { return NULL; }
+    } else {
+        int n = snprintf(riga, sizeof(riga), "\"%s\" %s", adb, coda);
+        if (n < 0 || n >= (int)sizeof(riga)) { return NULL; }
+    }
+    richiesta = calloc(1, sizeof(*richiesta));
+    if (!richiesta) { return NULL; }
+    richiesta->operazione = operazione;
+    if (!CreatePipe(&richiesta->lettura, &scrittura, &sa, 0) ||
+        !SetHandleInformation(richiesta->lettura, HANDLE_FLAG_INHERIT, 0)) {
+        if (scrittura) { CloseHandle(scrittura); }
+        adb_spegni_chiudi(richiesta);
+        return NULL;
+    }
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = si.hStdError = scrittura;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    if (!CreateProcessA(adb, riga, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        registro_riga(REG_GUSCIO, "adb: cannot start %s client (%lu)", operazione, GetLastError());
+        CloseHandle(scrittura);
+        adb_spegni_chiudi(richiesta);
+        return NULL;
+    }
+    CloseHandle(scrittura);
+    CloseHandle(pi.hThread);
+    richiesta->processo = pi.hProcess;
+    return richiesta;
+}
+
+AdbSpegnimento *adb_spegni_avvia(const Config *c)
+{
+    AdbSpegnimento *richiesta = adb_cliente_avvia(c, "shell reboot -p", true, "shutdown");
+    if (richiesta) {
+        registro_riga(REG_GUSCIO, "shutting Android down (reboot -p); request is asynchronous");
+    }
+    return richiesta;
+}
+
+AdbSpegniStato adb_spegni_passo(AdbSpegnimento *richiesta)
+{
+    DWORD disponibili, letti, attesa, codice;
+    char pezzo[128], ultima[256];
+    if (!richiesta) { return ADB_SPEGNI_ERRORE; }
+    if (richiesta->finito) { return richiesta->esito; }
+    /* A noisy client cannot monopolize a UI tick. Never wait for pipe EOF:
+     * an ADB server may inherit the write end even after this client exits. */
+    for (int i = 0; i < 8; i++) {
+        if (!PeekNamedPipe(richiesta->lettura, NULL, 0, NULL, &disponibili, NULL) ||
+            !disponibili) { break; }
+        DWORD quanti = disponibili < sizeof(pezzo)-1 ? disponibili : sizeof(pezzo)-1;
+        if (!ReadFile(richiesta->lettura, pezzo, quanti, &letti, NULL) || !letti) { break; }
+        size_t vecchi = strlen(richiesta->ultima);
+        size_t elimina = vecchi + letti >= sizeof(richiesta->ultima) ?
+                         vecchi + letti - sizeof(richiesta->ultima) + 1 : 0;
+        if (elimina) {
+            richiesta->uscita_troncata = true;
+            memmove(richiesta->ultima, richiesta->ultima + elimina, vecchi - elimina);
+            vecchi -= elimina;
+        }
+        memcpy(richiesta->ultima + vecchi, pezzo, letti);
+        if (memchr(pezzo, '\0', letti)) { richiesta->uscita_troncata = true; }
+        richiesta->ultima[vecchi + letti] = '\0';
+    }
+    attesa = WaitForSingleObject(richiesta->processo, 0);
+    if (attesa == WAIT_TIMEOUT) { return ADB_SPEGNI_ATTESA; }
+    richiesta->finito = true;
+    richiesta->esito = ADB_SPEGNI_ERRORE;
+    if (attesa == WAIT_OBJECT_0 && GetExitCodeProcess(richiesta->processo, &codice)) {
+        richiesta->esito = codice == 0 ? ADB_SPEGNI_OK : ADB_SPEGNI_ERRORE;
+        if (codice) {
+            adb_ultima_riga(richiesta->ultima, ultima, sizeof(ultima));
+            registro_riga(REG_GUSCIO, "adb: %s client exited with code %lu: %s", richiesta->operazione, codice, ultima);
+        } else if (!strcmp(richiesta->operazione, "shutdown")) {
+            registro_riga(REG_GUSCIO, "adb: shutdown request accepted; waiting for QEMU to exit");
+        }
+    } else {
+        registro_riga(REG_GUSCIO, "adb: %s client status unavailable (%lu)", richiesta->operazione, GetLastError());
+    }
+    return richiesta->esito;
+}
+
+bool adb_spegni_chiudi(AdbSpegnimento *richiesta)
+{
+    if (!richiesta) { return true; }
+    if (richiesta->processo) {
+        if (WaitForSingleObject(richiesta->processo, 0) != WAIT_OBJECT_0) {
+            /* Cancel before a new VM can reuse the same TCP endpoint. */
+            if (!TerminateProcess(richiesta->processo, 1)) {
+                registro_riga(REG_GUSCIO, "adb: cannot cancel owned %s client (%lu)", richiesta->operazione, GetLastError());
+            }
+            if (WaitForSingleObject(richiesta->processo, 1000) != WAIT_OBJECT_0) {
+                registro_riga(REG_GUSCIO, "adb: %s client is still ending; handle retained, restart must wait", richiesta->operazione);
+                return false;
+            }
+        }
+        CloseHandle(richiesta->processo);
+    }
+    if (richiesta->lettura) { CloseHandle(richiesta->lettura); }
+    free(richiesta);
+    return true;
+}
+
+struct AdbPreparazione {
+    AdbSpegnimento *cliente;
+    int porta;
+    int fase; /* 0=property, 1=connect, 2=retry property */
+    ULONGLONG iniziata;
+    bool annullata;
+    bool finita;
+    AdbProntoStato esito;
+};
+
+static AdbSpegnimento *adb_pronto_cliente(const AdbPreparazione *richiesta)
+{
+    Config config = {0};
+    config.porta_adb = richiesta->porta;
+    if (richiesta->fase == 1) {
+        char coda[64];
+        snprintf(coda, sizeof(coda), "connect 127.0.0.1:%d", config.porta_adb);
+        return adb_cliente_avvia(&config, coda, false, "boot connect");
+    }
+    return adb_cliente_avvia(&config, "shell getprop sys.boot_completed", true, "boot property");
+}
+
+AdbPreparazione *adb_pronto_avvia(const Config *c)
+{
+    if (!c) { return NULL; }
+    AdbPreparazione *richiesta = calloc(1, sizeof(*richiesta));
+    if (!richiesta) { return NULL; }
+    richiesta->porta = c->porta_adb;
+    richiesta->iniziata = GetTickCount64();
+    richiesta->cliente = adb_pronto_cliente(richiesta);
+    if (!richiesta->cliente) { free(richiesta); return NULL; }
+    return richiesta;
+}
+
+static bool adb_boot_completo(const char *uscita)
+{
+    while (*uscita && strchr(" \t\r\n", *uscita)) { uscita++; }
+    if (*uscita++ != '1') { return false; }
+    while (*uscita && strchr(" \t\r\n", *uscita)) { uscita++; }
+    return *uscita == '\0';
+}
+
+AdbProntoStato adb_pronto_passo(AdbPreparazione *richiesta)
+{
+    if (!richiesta) { return ADB_PRONTO_NO; }
+    if (richiesta->finita) { return richiesta->esito; }
+    if (richiesta->annullata || GetTickCount64() - richiesta->iniziata >= ADB_BASE_MS) {
+        if (!richiesta->annullata) {
+            registro_riga(REG_GUSCIO, "adb: asynchronous boot check reached its 20 s deadline; retry later");
+            richiesta->annullata = true;
+        }
+        if (!adb_spegni_chiudi(richiesta->cliente)) { return ADB_PRONTO_ATTESA; }
+        richiesta->cliente = NULL;
+        richiesta->finita = true;
+        return richiesta->esito = ADB_PRONTO_NO;
+    }
+    AdbSpegniStato stato = adb_spegni_passo(richiesta->cliente);
+    if (stato == ADB_SPEGNI_ATTESA) { return ADB_PRONTO_ATTESA; }
+    bool pronto = stato == ADB_SPEGNI_OK &&
+                  !richiesta->cliente->uscita_troncata &&
+                  adb_boot_completo(richiesta->cliente->ultima);
+    if (!adb_spegni_chiudi(richiesta->cliente)) { return ADB_PRONTO_ATTESA; }
+    richiesta->cliente = NULL;
+    if (richiesta->fase != 1 && (stato == ADB_SPEGNI_OK || richiesta->fase == 2)) {
+        richiesta->finita = true;
+        return richiesta->esito = pronto ? ADB_PRONTO_SI : ADB_PRONTO_NO;
+    }
+    if (richiesta->fase == 1 && stato != ADB_SPEGNI_OK) {
+        richiesta->finita = true;
+        return richiesta->esito = ADB_PRONTO_NO;
+    }
+    richiesta->fase++;
+    richiesta->cliente = adb_pronto_cliente(richiesta);
+    if (!richiesta->cliente) {
+        richiesta->finita = true;
+        return richiesta->esito = ADB_PRONTO_NO;
+    }
+    return ADB_PRONTO_ATTESA;
+}
+
+bool adb_pronto_chiudi(AdbPreparazione *richiesta)
+{
+    if (!richiesta) { return true; }
+    richiesta->annullata = true;
+    if (!adb_spegni_chiudi(richiesta->cliente)) { return false; }
+    free(richiesta);
+    return true;
+}
+
+AdbComando *adb_comando_avvia(const Config *c, const char *comando)
+{
+    char coda[1024];
+    if (!c || !comando) { return NULL; }
+    int n = snprintf(coda, sizeof(coda), "shell %s", comando);
+    if (n < 0 || n >= (int)sizeof(coda)) { return NULL; }
+    return adb_cliente_avvia(c, coda, true, "interface");
+}
+
+AdbSpegniStato adb_comando_passo(AdbComando *richiesta, char *uscita,
+                               int max, bool *troncata)
+{
+    AdbSpegniStato stato = adb_spegni_passo(richiesta);
+    if (uscita && max > 0) {
+        snprintf(uscita, (size_t)max, "%s", richiesta ? richiesta->ultima : "");
+    }
+    if (troncata) {
+        *troncata = richiesta && (richiesta->uscita_troncata ||
+                    (uscita && max > 0 && strlen(richiesta->ultima) >= (size_t)max));
+    }
+    return stato;
+}
+
+bool adb_comando_chiudi(AdbComando *richiesta)
+{
+    return adb_spegni_chiudi(richiesta);
 }
 
 bool adb_risoluzione_guest(const Config *c, int *w, int *h)

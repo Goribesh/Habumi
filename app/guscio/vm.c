@@ -59,6 +59,56 @@ static int vm_vcpu_ora;
  * data) le scrive build-all.ps1 sotto guest/images/android/. Non sono la
  * stessa cartella per caso: appiattirle qui senza toccare le due build
  * reintroduce esattamente il difetto che questo file corregge. */
+/* Testo da accodare alla riga di comando del kernel del guest, da
+ * WINQ_APPEND_EXTRA. Vuoto se la variabile non c'e', cioe' il prodotto non
+ * cambia di una virgola.
+ *
+ * PERCHE' ESISTE. L'initramfs sa gia' leggere sovrascritture di proprieta'
+ * dalla riga di comando nella forma "winq.prop.<chiave>=<valore>", e le applica
+ * con un sed SUL POSTO -- che e' l'unico modo di cambiare una ro.* che
+ * l'immagine imposta gia', perche' per quelle vince la PRIMA assegnazione e
+ * accodarla al build.prop non fa niente: il file cambia e la proprieta' no.
+ * Ma il guscio costruiva la riga di comando cablata, quindi quel meccanismo era
+ * raggiungibile solo dagli scenari di guest_console.py, non da una sessione
+ * vera. Serviva per misurare
+ * ro.surface_flinger.max_frame_buffer_acquired_buffers senza ricompilare
+ * l'initramfs a ogni valore.
+ *
+ * DIAGNOSTICA, NON CONFIGURAZIONE: si legge dall'ambiente e NON da config.txt,
+ * apposta. Chi usa il prodotto non deve poter incollare testo arbitrario nella
+ * riga di comando del kernel per sbaglio; chi misura esporta una variabile.
+ *
+ * LE VIRGOLETTE SI RIFIUTANO. Il testo finisce DENTRO un -append "..." nella
+ * riga di comando di QEMU: una virgoletta la chiuderebbe a meta' e il resto
+ * diventerebbe un'opzione di QEMU, con un errore che non nomina questa
+ * variabile. Meglio ignorare il valore e dirlo. */
+static const char *vm_append_extra(void)
+{
+    /* Niente cache: questa funzione e' chiamata una volta per avvio, non su un
+     * percorso caldo, e senza cache le prove possono esercitare i due casi. */
+    static char extra[512];
+    const char *v = getenv("WINQ_APPEND_EXTRA");
+
+    extra[0] = '\0';
+    if (!v || !*v) {
+        return extra;
+    }
+    if (strchr(v, '"')) {
+        registro_riga(REG_GUSCIO, "WINQ_APPEND_EXTRA contains a double quote: "
+                      "ignored, it would break the QEMU command line");
+        return extra;
+    }
+    if (snprintf(extra, sizeof(extra), " %s", v) >= (int)sizeof(extra)) {
+        registro_riga(REG_GUSCIO, "WINQ_APPEND_EXTRA is too long (max %d): "
+                      "ignored", (int)sizeof(extra) - 2);
+        extra[0] = '\0';
+        return extra;
+    }
+    registro_riga(REG_GUSCIO, "kernel command line extended by "
+                  "WINQ_APPEND_EXTRA:%s", extra);
+    return extra;
+}
+
 int vm_argomenti(const Config *c, char *buf, int max)
 {
     int n;
@@ -72,13 +122,13 @@ int vm_argomenti(const Config *c, char *buf, int max)
      * doppio) con la spiegazione "un buffer host GRANDE affama il guest" -- vedi
      * la tabella nel commento qui sotto. Quella prova cambiava DUE variabili in
      * una volta, e soprattutto misurava un guest il cui driver virtio-snd si
-     * comportava in modo diverso: il driver e' stato corretto per
+     * comportava in modo diverso: il 03/08/2026 il driver e' stato corretto per
      * chiamare snd_pcm_period_elapsed una volta per periodo con una posizione
      * riportata che avanza di un periodo alla volta. Il meccanismo su cui
      * poggiava il rifiuto non c'e' piu', quindi il rifiuto va rimisurato.
      *
      * Il motivo per riprovare, con il numero: la coda del ritardo di scrittura
-     * verso l'HAL misurata e' 61,6 ms (media 0,027, std 4,68)
+     * verso l'HAL misurata il 03/08/2026 e' 61,6 ms (media 0,027, std 4,68)
      * contro un buffer di 30 ms. Un ritardo piu' lungo del buffer produce
      * silenzio, e all'altoparlante si contano 12 silenzi in 30 s che l'utente
      * SENTE in cuffia.
@@ -131,7 +181,7 @@ int vm_argomenti(const Config *c, char *buf, int max)
         "-kernel guest/images/kernel-guest-arm64 "
         "-initrd guest/images/android/initramfs.img "
         "-append \"console=ttyAMA0 printk.devkmsg=on "
-        "androidboot.hardware=waydroid androidboot.selinux=permissive audit=0\" "
+        "androidboot.hardware=waydroid androidboot.selinux=permissive audit=0%s\" "
         "-drive file=%s,format=raw,if=virtio,readonly=on "
         "-drive file=guest/images/android/vendor.img,format=raw,if=virtio,readonly=on "
         "-drive file=%s,format=raw,if=virtio,"
@@ -153,6 +203,7 @@ int vm_argomenti(const Config *c, char *buf, int max)
         "-serial file:guest/logs/sessione-viva.log "
         "-monitor none%s",
         c->memoria, vm_vcpu_ora > 0 ? vm_vcpu_ora : c->vcpu,
+        vm_append_extra(),
         immagine, dati, c->larghezza, c->altezza,
         c->porta_adb,
         /* LE TRE OPZIONI DELL'AUDIO SONO TUTTE MISURATE, e la ragione di
@@ -287,6 +338,9 @@ static const Config *vm_c;
 static HANDLE vm_processo;
 static HANDLE vm_stderr_lettura;
 static HANDLE vm_thread_stderr;
+static AdbSpegnimento *vm_adb_spegni;
+static AdbPreparazione *vm_adb_pronto;
+static bool vm_adb_spegni_avviato;
 /* IL JOB A CUI QEMU E' AGGANCIATO. Vedi vm_aggancia_al_job: e' cio' che fa
  * morire QEMU insieme al guscio anche quando il guscio non ha modo di
  * chiederglielo. Sta aperto per tutta la vita del processo di proposito --
@@ -308,7 +362,7 @@ static unsigned long vm_omx_dette;
 static FILE *vm_seriale;
 static long vm_seriale_pos;
 static DWORD vm_ora_spegni;
-static DWORD vm_ora_ultima_adb;  /* ultima chiamata ad adb_pronto: vedi il freno in VM_ATTESA_ANDROID */
+static DWORD vm_ora_ultima_adb;  /* last asynchronous boot check; retries are spaced by 2 s */
 /* Quando e' arrivata l'ultima riga di seriale. E' cio' che distingue un kernel
  * lento da uno fermo: vedi il commento sulle soglie qui sotto. */
 static DWORD vm_ora_ultima_riga;
@@ -398,7 +452,7 @@ static DWORD vm_ora_ultima_riga;
  * messaggi opposti per lo stesso evento, secondo quale finestra si e' chiusa
  * prima. Con 20000 e' sempre il guscio a dichiarare il fallimento, che e' chi
  * lo conosce per davvero (ha visto vm_viva() restare vera). Margine 4x sui
- * 4485 ms misurati per uno spegnimento pulito completo. Se una
+ * 4485 ms misurati per uno spegnimento pulito completo (Task 6). Se una
  * futura modifica cambia UNA delle due scadenze, va cambiata anche l'altra
  * mantenendo questo margine, o il guasto sopra si ripresenta. */
 #define VM_SPEGNIMENTO_MS     20000
@@ -459,7 +513,7 @@ static DWORD WINAPI vm_thread_stderr_corpo(LPVOID p)
  * Windows usa i named pipe ed e' delicato. Tenerlo semplice qui costa nulla. */
 /* La riga e' una delle ripetizioni della ricerca dell'HAL OMX?
  *
- * COSA SUCCEDE, misurato su un'installazione appena fatta:
+ * COSA SUCCEDE, misurato il 10/08 su un'installazione appena fatta:
  * mediaserver chiama getService() su android.hardware.media.omx@1.0::IOmxStore,
  * hwservicemanager chiede a init di avviare quel servizio, init non lo trova e
  * lo scrive sulla seriale, HidlServiceManagement aspetta un secondo e RIPROVA.
@@ -681,6 +735,24 @@ static bool vm_lancia(void)
     PROCESS_INFORMATION pi = {0};
     HANDLE scrivi = NULL;
 
+    if (!comandi_annulla()) {
+        registro_riga(REG_GUSCIO, "Refusing to start QEMU while Android controls are still stopping");
+        return false;
+    }
+    if (vm_adb_pronto) {
+        if (!adb_pronto_chiudi(vm_adb_pronto)) {
+            registro_riga(REG_GUSCIO, "Refusing to start QEMU while the previous boot check is still ending");
+            return false;
+        }
+        vm_adb_pronto = NULL;
+    }
+    if (vm_adb_spegni) {
+        if (!adb_spegni_chiudi(vm_adb_spegni)) {
+            registro_riga(REG_GUSCIO, "Refusing to start QEMU while the previous shutdown client is still ending");
+            return false;
+        }
+        vm_adb_spegni = NULL;
+    }
     if (!vm_argomenti(vm_c, argomenti, sizeof(argomenti))) {
         registro_riga(REG_GUSCIO, "the arguments do not fit the buffer: this is a "
                                   "defect of the shell, not of the configuration");
@@ -688,12 +760,21 @@ static bool vm_lancia(void)
     }
     snprintf(riga, sizeof(riga), "runtime\\bin\\qemu-nostro.exe %s", argomenti);
 
+    /* Il lettore appartiene al guscio e sopravvive allo spegnimento della VM.
+     * Prima della rotazione va chiuso: su Windows fopen non condivide DELETE,
+     * quindi al cambio variante era il guscio stesso a bloccare il log.
+     * Essere non ereditabile evita copie nei figli, non questo handle nostro. */
+    if (vm_seriale) {
+        fclose(vm_seriale);
+        vm_seriale = NULL;
+    }
+
     /* La seriale ATTIVA deve nascere pulita a ogni tentativo: un log vecchio
      * farebbe contare righe di un avvio precedente e dichiarare sano un kernel
      * inchiodato. Il difetto e' gia' capitato leggendo un boot_completed di due
      * ore prima come se fosse quello appena fatto.
      *
-     * MA CANCELLARLA DISTRUGGEVA LE PROVE. system_server e' morto
+     * MA CANCELLARLA DISTRUGGEVA LE PROVE. Il 04/08/2026 system_server e' morto
      * durante un install, e la riga del kernel che nominava il pid giusto e'
      * andata perduta al riavvio successivo: di quel crash restano solo le righe
      * copiate a mano prima di riavviare. Con un difetto che si presenta una volta
@@ -737,16 +818,12 @@ static bool vm_lancia(void)
             registro_riga(REG_GUSCIO, "the active serial log could not be "
                           "rotated nor deleted: something still holds "
                           "guest/logs/sessione-viva.log open.");
-            registro_riga(REG_GUSCIO, "almost always a leftover "
-                          "qemu-nostro.exe. Refusing to start: counting its "
-                          "lines as ours would call a dead boot healthy. "
-                          "Close it and try again.");
+            registro_riga(REG_GUSCIO, "Refusing to start with a stale serial "
+                          "log. The shell's reader is closed; another "
+                          "process may still hold the file. Close that "
+                          "process and try again.");
             return false;
         }
-    }
-    if (vm_seriale) {
-        fclose(vm_seriale);
-        vm_seriale = NULL;
     }
     vm_righe_totali = 0;
     /* Si azzera anche qui, non solo dentro VM_ATTESA_ANDROID: cosi' il primo
@@ -790,7 +867,7 @@ static bool vm_lancia(void)
 
     /* MESA_WGL_NO_FLUSH_WAIT non la impostiamo PIU'.
      *
-     * COSA E' CAMBIATO IL. Quella variabile cambiava la semantica di
+     * COSA E' CAMBIATO IL 13/08/2026. Quella variabile cambiava la semantica di
      * GL dentro Mesa per chiunque girasse nel processo, ed era il modo
      * sbagliato di chiedere una cosa che la specifica prevede: adesso winq
      * chiede WGL_CONTEXT_RELEASE_BEHAVIOR_NONE_ARB a wglCreateContextAttribsARB
@@ -810,19 +887,34 @@ static bool vm_lancia(void)
     }
 
     /* WINQ_HZ per il figlio, stessa via di WINQ_GL qui sopra e per la stessa
-     * ragione (l'ambiente nostro, non un blocco costruito a mano). Solo
-     * quando hz != 0: lo 0 e' "automatico" (winq legge il pannello da se',
-     * GetDeviceCaps(VREFRESH)), e non impostare la variabile e' come non
-     * averla mai messa -- il comportamento di oggi, invariato. Il valore
+     * ragione (l'ambiente nostro, non un blocco costruito a mano). La scelta
+     * a batteria si risolve una volta per avvio; lo 0 e' "automatico" (winq
+     * legge il pannello da se', GetDeviceCaps(VREFRESH)) e rimuove un override
+     * precedente, anche in un riavvio nella stessa istanza. Il valore
      * arriva a QEMU per ambiente e non per riga di comando perche' winq lo
      * rilegge ad ogni cambio di scanout e ad ogni rotazione (vedi
-     * winq_hz_da_annunciare in winq-window.c): una riga di comando fissa
+     * winq_hz_da_annunciare in winq-ciclo.c): una riga di comando fissa
      * varrebbe solo all'avvio. */
-    if (vm_c->hz != 0) {
+    {
+        SYSTEM_POWER_STATUS alimentazione;
+        bool batteria = GetSystemPowerStatus(&alimentazione) &&
+                        alimentazione.ACLineStatus == 0 &&
+                        alimentazione.BatteryFlag != 255 &&
+                        !(alimentazione.BatteryFlag & 128);
+        int hz = config_hz_effettivi(vm_c, batteria);
         char hz_buf[16];
 
-        snprintf(hz_buf, sizeof(hz_buf), "%d", vm_c->hz);
-        SetEnvironmentVariableA("WINQ_HZ", hz_buf);
+        if (hz != 0) {
+            snprintf(hz_buf, sizeof(hz_buf), "%d", hz);
+            SetEnvironmentVariableA("WINQ_HZ", hz_buf);
+        } else {
+            /* Un riavvio nella stessa istanza non deve ereditare i 60 Hz
+             * scelti a batteria se ora la configurazione chiede automatico. */
+            SetEnvironmentVariableA("WINQ_HZ", NULL);
+        }
+        registro_riga(REG_GUSCIO, "display refresh at startup: %d Hz "
+                      "(0=automatic, battery profile=%s, battery_hz=%d)",
+                      hz, batteria ? "yes" : "no", vm_c->hz_batteria);
     }
 
     si.cb = sizeof(si);
@@ -856,6 +948,13 @@ static bool vm_lancia(void)
 
 static void vm_uccidi(void)
 {
+    comandi_annulla();
+    if (adb_pronto_chiudi(vm_adb_pronto)) {
+        vm_adb_pronto = NULL;
+    }
+    if (adb_spegni_chiudi(vm_adb_spegni)) {
+        vm_adb_spegni = NULL;
+    }
     if (vm_processo) {
         DWORD esito;
 
@@ -905,6 +1004,20 @@ VmStato vm_stato(void)
     return vm_s;
 }
 
+static void vm_tenta_client_spegnimento(void)
+{
+    if (vm_adb_spegni_avviato) { return; }
+    if (!comandi_annulla()) { return; }
+    if (!adb_pronto_chiudi(vm_adb_pronto)) { return; }
+    vm_adb_pronto = NULL;
+    vm_adb_spegni_avviato = true;
+    vm_adb_spegni = adb_spegni_avvia(vm_c);
+    if (!vm_adb_spegni) {
+        registro_riga(REG_GUSCIO, "adb shutdown client could not start: waiting "
+                                  "for Android until the shutdown deadline");
+    }
+}
+
 void vm_avvia_spegnimento(void)
 {
     /* La guardia copre anche VM_MORTA e VM_FALLITA, non solo SPEGNIMENTO e
@@ -922,18 +1035,10 @@ void vm_avvia_spegnimento(void)
     }
     vm_ora_spegni = vm_adesso();
     vm_vai(VM_SPEGNIMENTO);
-    /* LIMITE NOTO: adb_spegni chiama esegui_catturando in modo SINCRONO, sullo
-     * stesso thread della finestra, con la stessa scadenza di 20 s di ogni
-     * comando adb (vedi adb.c). Al clic di chiusura il guscio puo' quindi
-     * restare fermo fino a 20 s se adb si e' impiantato. E' un colpo solo,
-     * chiamato una volta sola qui e non ad ogni tick come adb_pronto in
-     * VM_ATTESA_ANDROID: per questo non serve renderlo asincrono in questo
-     * task. Ma il blocco va dichiarato, perche' altrimenti una finestra ferma
-     * al momento della chiusura, senza spiegazione, sembra un guasto. */
-    if (!adb_spegni(vm_c)) {
-        registro_riga(REG_GUSCIO, "adb did not accept reboot -p: waiting "
-                                  "anyway, then forcing");
-    }
+    /* The VM timer polls the owned client; a stalled ADB cannot block the UI.
+     * Keep the existing shutdown deadline and duplicate-close guard. */
+    vm_adb_spegni_avviato = false;
+    vm_tenta_client_spegnimento();
 }
 
 /* Decide COSA fare quando l'utente chiude la finestra di Android, in funzione
@@ -1005,6 +1110,7 @@ AzioneChiusura vm_azione_chiusura(VmStato s)
 
 VmStato vm_passo(void)
 {
+    comandi_pulizia();
     switch (vm_s) {
     case VM_PREPARA: {
         char mancante[MAX_PATH];
@@ -1230,25 +1336,23 @@ VmStato vm_passo(void)
             vm_vai(VM_FALLITA);
             break;
         }
-        /* IL FRENO A 2 SECONDI, misurato: adb_pronto lancia 1 o 2 processi
-         * SINCRONI tramite esegui_catturando, che costano 100-300 ms l'uno
-         * quando adb risponde e FINO A 20 S INTERI se adb si e' impiantato
-         * (vedi la scadenza in adb.c). Il timer di vm_passo batte ogni 500
-         * ms: senza freno, nei due minuti di questo stato adb_pronto verrebbe
-         * chiamata fino a 240 volte, e un solo adb impiantato bloccherebbe
-         * proprio il thread che deve restare reattivo -- quello della
-         * finestra -- per 20 s, cioe' esattamente il difetto che questa
-         * macchina a stati esiste per eliminare. Si interroga adb al massimo
-         * ogni 2 s, come dice la tabella degli stati del piano: negli altri
-         * tick si insegue solo la seriale e si controlla che QEMU sia vivo,
-         * che non costano nulla. */
-        if (vm_adesso() - vm_ora_ultima_adb >= 2000) {
-            vm_ora_ultima_adb = vm_adesso();
-            if (adb_pronto(vm_c)) {
-                registro_riga(REG_GUSCIO, "Android is ready");
-                vm_vai(VM_PRONTO);
-                break;
+        /* Only one owned asynchronous check. The UI timer keeps following
+         * serial/QEMU while a query or connection is pending. */
+        if (vm_adb_pronto) {
+            AdbProntoStato stato = adb_pronto_passo(vm_adb_pronto);
+            if (stato != ADB_PRONTO_ATTESA && adb_pronto_chiudi(vm_adb_pronto)) {
+                vm_adb_pronto = NULL;
+                vm_ora_ultima_adb = vm_adesso();
+                if (stato == ADB_PRONTO_SI) {
+                    registro_riga(REG_GUSCIO, "Android is ready (asynchronous ADB check)");
+                    vm_vai(VM_PRONTO);
+                    break;
+                }
             }
+        }
+        if (!vm_adb_pronto && vm_adesso() - vm_ora_ultima_adb >= 2000) {
+            vm_ora_ultima_adb = vm_adesso();
+            vm_adb_pronto = adb_pronto_avvia(vm_c);
         }
         if (vm_adesso() - vm_ora_stato > VM_ATTESA_ANDROID_MS) {
             /* DUE MESSAGGI, PERCHE' SONO DUE SITUAZIONI.
@@ -1321,6 +1425,11 @@ VmStato vm_passo(void)
         break;
 
     case VM_SPEGNIMENTO:
+        vm_tenta_client_spegnimento();
+        if (vm_adb_spegni && adb_spegni_passo(vm_adb_spegni) != ADB_SPEGNI_ATTESA &&
+            adb_spegni_chiudi(vm_adb_spegni)) {
+            vm_adb_spegni = NULL;
+        }
         vm_righe_totali += vm_segui_seriale();
         if (!vm_viva()) {
             registro_riga(REG_GUSCIO, "Android shut down and QEMU exited on "

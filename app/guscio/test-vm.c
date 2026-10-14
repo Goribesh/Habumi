@@ -19,7 +19,7 @@
  * Una prova che guarda la stringa costa un secondo e chiude quella categoria. */
 #include <stdio.h>
 #include <string.h>
-#include "guscio.h"
+#include "vm.c"
 
 static int totali = 0;
 static int fallimenti = 0;
@@ -372,6 +372,69 @@ static void il_guardiano_distingue_vivo_e_lento_da_fermo(void)
     CHECK(vm_righe_nuove(10, 2144) == 0);
 }
 
+static void il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare(void)
+{
+    char precedente[MAX_PATH];
+    char temporanea[MAX_PATH];
+    char radice[MAX_PATH];
+    char archivio[MAX_PATH];
+    char letto[64] = {0};
+    WIN32_FIND_DATAA dato;
+    HANDLE ricerca;
+    FILE *f;
+    Config c;
+
+    CHECK(GetCurrentDirectoryA(sizeof(precedente), precedente) > 0);
+    CHECK(GetTempPathA(sizeof(temporanea), temporanea) > 0);
+    CHECK(GetTempFileNameA(temporanea, "hvm", 0, radice) != 0);
+    CHECK(DeleteFileA(radice));
+    CHECK(CreateDirectoryA(radice, NULL));
+    CHECK(SetCurrentDirectoryA(radice));
+    CHECK(CreateDirectoryA("guest", NULL));
+    CHECK(CreateDirectoryA("guest/logs", NULL));
+    f = fopen("guest/logs/sessione-viva.log", "wb");
+    CHECK(f != NULL);
+    if (f) {
+        fputs("prova della sessione precedente\n", f);
+        fclose(f);
+    }
+    vm_seriale = fopen("guest/logs/sessione-viva.log", "rb");
+    CHECK(vm_seriale != NULL);
+    CHECK(!DeleteFileA("guest/logs/sessione-viva.log"));
+    CHECK(GetLastError() == ERROR_SHARING_VIOLATION);
+    config_default(&c);
+    vm_c = &c;
+    /* Il lancio fallisce perche' runtime/bin/qemu-nostro.exe non esiste qui.
+     * La rotazione deve pero' essere gia' riuscita, senza perdere la prova. */
+    CHECK(!vm_lancia());
+    CHECK(vm_seriale == NULL);
+    CHECK(GetFileAttributesA("guest/logs/sessione-viva.log") ==
+          INVALID_FILE_ATTRIBUTES);
+    ricerca = FindFirstFileA("guest/logs/archivio/sessione-viva-*.log", &dato);
+    CHECK(ricerca != INVALID_HANDLE_VALUE);
+    if (ricerca != INVALID_HANDLE_VALUE) {
+        snprintf(archivio, sizeof(archivio), "guest/logs/archivio/%s",
+                 dato.cFileName);
+        f = fopen(archivio, "rb");
+        CHECK(f != NULL);
+        if (f) {
+            CHECK(fgets(letto, sizeof(letto), f) != NULL);
+            CHECK(!strcmp(letto, "prova della sessione precedente\n"));
+            fclose(f);
+        }
+        FindClose(ricerca);
+        CHECK(DeleteFileA(archivio));
+    }
+    vm_chiudi();
+    DeleteFileA("guest/logs/sessione-viva.log");
+    CHECK(RemoveDirectoryA("guest/logs/archivio"));
+    CHECK(RemoveDirectoryA("guest/logs"));
+    CHECK(RemoveDirectoryA("guest"));
+    CHECK(SetCurrentDirectoryA(precedente));
+    CHECK(RemoveDirectoryA(radice));
+    vm_c = NULL;
+}
+
 int main(void)
 {
     registro_apri();
@@ -389,6 +452,7 @@ int main(void)
     vm_verifica_file_riporta_un_nome_utile_se_manca_qualcosa();
     ogni_stato_ha_la_sua_azione_di_chiusura();
     il_guardiano_distingue_vivo_e_lento_da_fermo();
+    il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare();
     registro_chiudi();
 
     printf("test-vm: %d su %d passati\n", totali - fallimenti, totali);

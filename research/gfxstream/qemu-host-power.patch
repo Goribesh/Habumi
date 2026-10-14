@@ -1,0 +1,376 @@
+diff --git a/accel/whpx/whpx-common.c b/accel/whpx/whpx-common.c
+index b813a5d..35e1b23 100644
+--- a/accel/whpx/whpx-common.c
++++ b/accel/whpx/whpx-common.c
+@@ -43,6 +43,23 @@ static HMODULE hWinHvPlatform;
+ struct whpx_state whpx_global;
+ struct WHPDispatch whp_dispatch;
+ 
++bool whpx_host_suspend_time(void)
++{
++    HRESULT hr;
++    g_assert(bql_locked());
++    if (!whpx_allowed || whpx_global.running_cpus ||
++        !whp_dispatch.WHvSuspendPartitionTime) {
++        return false;
++    }
++    hr = whp_dispatch.WHvSuspendPartitionTime(whpx_global.partition);
++    if (FAILED(hr)) {
++        error_report("winq/power: WHPX partition time suspend failed: 0x%08lx", hr);
++        return false;
++    }
++    /* WHvRunVirtualProcessor resumes partition time on the next vm_start. */
++    return true;
++}
++
+ void whpx_flush_cpu_state(CPUState *cpu)
+ {
+     if (cpu->vcpu_dirty) {
+diff --git a/include/system/whpx.h b/include/system/whpx.h
+index 4217a27..be93955 100644
+--- a/include/system/whpx.h
++++ b/include/system/whpx.h
+@@ -26,6 +26,8 @@
+ #ifdef CONFIG_WHPX_IS_POSSIBLE
+ extern bool whpx_allowed;
+ extern bool whpx_irqchip_in_kernel;
++/* BQL held and all vCPUs stopped; optional host-suspend experiment. */
++bool whpx_host_suspend_time(void);
+ #define whpx_enabled() (whpx_allowed)
+ #define whpx_irqchip_in_kernel() (whpx_irqchip_in_kernel)
+ #else /* !CONFIG_WHPX_IS_POSSIBLE */
+diff --git a/ui/winq-ciclo.c b/ui/winq-ciclo.c
+index 680cc05..543de52 100644
+--- a/ui/winq-ciclo.c
++++ b/ui/winq-ciclo.c
+@@ -38,6 +38,9 @@
+ #include "qapi/qapi-commands-control.h"
+ #include "qemu/error-report.h"
+ #include "system/system.h"
++#include "system/runstate.h"
++#include "hw/core/cpu.h"
++#include "system/whpx.h"
+ #include "ui/console.h"
+ #include "winq.h"
+ #include "winq-coda.h"
+@@ -113,6 +116,56 @@ void winq_arma_scadenza_chiusura(void)
+  * parziali, che e' il codice che si scrive male leggendo senza bloccare. */
+ static HANDLE winq_tubo = INVALID_HANDLE_VALUE;
+ 
++/* Off unless the isolated profile explicitly opts in. Main-loop/BQL only. */
++static bool winq_host_pause_owned;
++static bool winq_host_power_enabled(void)
++{
++    const char *enabled = getenv("WINQ_HOST_POWER_TEST");
++    return enabled && !strcmp(enabled, "1");
++}
++
++static void winq_host_power(bool suspend)
++{
++    CPUState *cpu;
++    if (!winq_host_power_enabled()) {
++        return;
++    }
++    if (suspend) {
++        if (winq_host_pause_owned) {
++            return;
++        }
++        if (!runstate_is_running()) {
++            info_report("winq/power: host suspend while VM already stopped; state preserved");
++            return;
++        }
++        if (vm_stop(RUN_STATE_PAUSED)) {
++            error_report("winq/power: cannot pause VM before host suspend");
++            return;
++        }
++        winq_host_pause_owned = true;
++        bool frozen = whpx_enabled() && whpx_host_suspend_time();
++        info_report("winq/power: VM paused before host suspend; partition time %s",
++                    frozen ? "suspended" : "not suspended (API unavailable or failed)");
++        return;
++    }
++    if (winq_host_pause_owned) {
++        winq_host_pause_owned = false;
++        if (runstate_check(RUN_STATE_PAUSED)) {
++            vm_start();
++            info_report("winq/power: host resume restarted the VM paused by this handler");
++        } else {
++            info_report("winq/power: host resume preserves changed VM run state");
++        }
++    } else {
++        info_report("winq/power: host resume without an owned pause; run state preserved");
++    }
++    if (runstate_is_running()) {
++        CPU_FOREACH(cpu) {
++            qemu_cpu_kick(cpu);
++        }
++    }
++}
++
+ static void winq_tubo_apri(void)
+ {
+     winq_tubo = CreateNamedPipeA("\\\\.\\pipe\\AndroidRuntimeGuscio.comandi",
+@@ -130,6 +183,16 @@ static void winq_tubo_esegui(const char *comando)
+ {
+     int w = 0, h = 0;
+ 
++    /* Diagnostic replay pauses only this VM, never changes host power state. */
++    if (winq_host_power_enabled() && !strcmp(comando, "host-power suspend")) {
++        winq_host_power(true);
++        return;
++    }
++    if (winq_host_power_enabled() && !strcmp(comando, "host-power resume")) {
++        winq_host_power(false);
++        return;
++    }
++
+     /* "mappa carica <percorso>" e "mappa impara <...>": il resto della riga,
+      * comando+13, e' passato PARI PARI -- winq_tubo_passo (sopra) ha gia'
+      * tolto sia il \n di terminazione (mai copiato in accumulo) sia ogni \r,
+@@ -300,6 +363,17 @@ static void winq_coda_drena(void)
+         case WINQ_REC_ESPONI:
+             winq.expose = true;
+             break;
++        case WINQ_REC_HOST_SUSPEND:
++            winq_host_power(true);
++            if (r.power_ack) {
++                HANDLE ack = (HANDLE)(uintptr_t)r.power_ack;
++                SetEvent(ack);
++                CloseHandle(ack);
++            }
++            break;
++        case WINQ_REC_HOST_RESUME:
++            winq_host_power(false);
++            break;
+         case WINQ_REC_CHIUSURA:
+             if (r.inatteso) {
+                 error_report("winq: the window message loop has "
+diff --git a/ui/winq-coda.h b/ui/winq-coda.h
+index 7ba4b12..82f6ee0 100644
+--- a/ui/winq-coda.h
++++ b/ui/winq-coda.h
+@@ -51,7 +51,9 @@ enum {
+     WINQ_REC_ROTELLA,
+     WINQ_REC_DIMENSIONE,
+     WINQ_REC_ESPONI,
+-    WINQ_REC_CHIUSURA
++    WINQ_REC_CHIUSURA,
++    WINQ_REC_HOST_SUSPEND,
++    WINQ_REC_HOST_RESUME
+ };
+ 
+ /* Il tipo di evento del puntatore.
+@@ -96,6 +98,9 @@ typedef struct WinqRec {
+     /* WINQ_REC_CHIUSURA */
+     bool     guscio_ha_risposto;
+     bool     inatteso;    /* il ciclo dei messaggi e' finito da solo: guasto */
++
++    /* HOST_SUSPEND: duplicated event handle owned by the consumer. */
++    uint64_t power_ack;
+ } WinqRec;
+ 
+ /* Da chiamare una volta, prima di qualunque altra: inizializza il lucchetto. */
+diff --git a/ui/winq-window.c b/ui/winq-window.c
+index 2ff13c9..d4f02ba 100644
+--- a/ui/winq-window.c
++++ b/ui/winq-window.c
+@@ -51,6 +51,22 @@
+ #include "ui/console.h"
+ #include "winq.h"
+ #include "winq-coda.h"
++
++static HPOWERNOTIFY winq_power_notification;
++static HPOWERNOTIFY winq_power_callback_notification;
++static HPOWERNOTIFY winq_display_notification;
++static HMODULE winq_power_library;
++static DWORD (WINAPI *winq_power_unregister)(HPOWERNOTIFY);
++static bool winq_power_test;
++/* MinGW lacks DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS; match the Windows ABI. */
++typedef struct {
++    ULONG (CALLBACK *callback)(PVOID, ULONG, PVOID);
++    PVOID context;
++} WinqPowerSubscribe;
++static WinqPowerSubscribe winq_power_subscribe;
++static const GUID winq_console_display_guid = {
++    0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}
++};
+ #include "winq-mappa.h"
+ 
+ WinqState winq;
+@@ -237,6 +253,81 @@ static void winq_accoda(const WinqRec *r)
+                      WINQ_ATTESA_MAX_MS);
+ }
+ 
++/* The window thread waits for an acknowledgment, never takes QEMU's BQL.
++ * Separate event handles keep a late consumer safe after the bounded wait.
++ * A timeout is diagnostic evidence that the sleep interval was not covered. */
++static void winq_accoda_power(bool suspend)
++{
++    WinqRec r = { .tipo = suspend ? WINQ_REC_HOST_SUSPEND : WINQ_REC_HOST_RESUME };
++    HANDLE ack = NULL, consumer_ack = NULL;
++    int waited;
++
++    if (suspend) {
++        ack = CreateEvent(NULL, TRUE, FALSE, NULL);
++        if (!ack || !DuplicateHandle(GetCurrentProcess(), ack,
++                                    GetCurrentProcess(), &consumer_ack,
++                                    0, FALSE, DUPLICATE_SAME_ACCESS)) {
++            if (ack) { CloseHandle(ack); }
++            error_report("winq/power: suspend acknowledgment allocation failed");
++            return;
++        }
++        r.power_ack = (uint64_t)(uintptr_t)consumer_ack;
++    }
++    for (waited = 0; waited < WINQ_ATTESA_MAX_MS; waited++) {
++        if (winq_coda_metti(&r)) {
++            winq_sveglia();
++            if (ack) {
++                DWORD result = WaitForSingleObject(ack, 1500);
++                if (result == WAIT_OBJECT_0) {
++                    info_report("winq/power: suspend handler acknowledged before returning to Windows");
++                } else {
++                    error_report("winq/power: suspend acknowledgment timed out or failed; host sleep is not protected");
++                }
++                CloseHandle(ack);
++            }
++            return;
++        }
++        Sleep(1);
++    }
++    if (consumer_ack) { CloseHandle(consumer_ack); }
++    if (ack) { CloseHandle(ack); }
++    winq_coda_conta_scarto();
++    error_report("winq/power: power event dropped after queue timeout; host sleep is not protected");
++}
++
++/* May run on a Windows worker thread: queue only, never call QEMU/BQL. */
++static ULONG CALLBACK winq_power_callback(PVOID context, ULONG type, PVOID setting)
++{
++    (void)context;
++    (void)setting;
++    if (!winq_power_test) {
++        return ERROR_SUCCESS;
++    }
++    info_report("winq/power: callback event 0x%lx", type);
++    if (type == PBT_APMSUSPEND) {
++        winq_accoda_power(true);
++    } else if (type == PBT_APMRESUMEAUTOMATIC || type == PBT_APMRESUMESUSPEND) {
++        winq_accoda_power(false);
++    }
++    return ERROR_SUCCESS;
++}
++
++static void winq_power_display_setting(const POWERBROADCAST_SETTING *setting)
++{
++    DWORD state;
++    if (!setting || memcmp(&setting->PowerSetting, &winq_console_display_guid,
++                           sizeof(GUID))) {
++        return;
++    }
++    if (setting->DataLength != sizeof(state)) {
++        error_report("winq/power: invalid console display notification size");
++        return;
++    }
++    memcpy(&state, setting->Data, sizeof(state));
++    info_report("winq/power: console display state %lu (0=off, 1=on, 2=dim); diagnostic only",
++                state);
++}
++
+ /* I quattro aiuti che costruiscono un record.
+  *
+  * Esistono perche' il wndproc li chiama da dodici rami diversi, e ripetere il
+@@ -673,6 +764,19 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+                     r->bottom - r->top);
+         return 0;
+     }
++    case WM_POWERBROADCAST:
++        if (winq_power_test) {
++            info_report("winq/power: window event 0x%llx", (unsigned long long)wp);
++            if (wp == PBT_POWERSETTINGCHANGE) {
++                winq_power_display_setting((const POWERBROADCAST_SETTING *)lp);
++            } else if (!winq_power_callback_notification && wp == PBT_APMSUSPEND) {
++                winq_accoda_power(true);
++            } else if (!winq_power_callback_notification &&
++                       (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND)) {
++                winq_accoda_power(false);
++            }
++        }
++        return TRUE;
+     case WM_PAINT: {
+         /* BeginPaint/EndPaint e non solo il flag: WM_PAINT resta in coda
+          * finche' la regione non e' validata, e PeekMessage lo ripescherebbe
+@@ -1251,6 +1355,46 @@ bool winq_create_window(int w, int h)
+         return false;
+     }
+     winq_dimensiona_cliente(w, h);
++    const char *power_test = getenv("WINQ_HOST_POWER_TEST");
++    winq_power_test = power_test && !strcmp(power_test, "1");
++    if (winq_power_test) {
++        DWORD (WINAPI *register_callback)(DWORD, HANDLE, PHPOWERNOTIFY) = NULL;
++        winq_power_library = LoadLibraryExW(L"PowrProf.dll", NULL,
++                                          LOAD_LIBRARY_SEARCH_SYSTEM32);
++        if (winq_power_library) {
++            register_callback = (void *)GetProcAddress(winq_power_library,
++                                "PowerRegisterSuspendResumeNotification");
++            winq_power_unregister = (void *)GetProcAddress(winq_power_library,
++                                "PowerUnregisterSuspendResumeNotification");
++        }
++        if (register_callback && winq_power_unregister) {
++            winq_power_subscribe.callback = winq_power_callback;
++            DWORD result = register_callback(2 /* DEVICE_NOTIFY_CALLBACK */,
++                             &winq_power_subscribe, &winq_power_callback_notification);
++            if (result != ERROR_SUCCESS) {
++                winq_power_callback_notification = NULL;
++                error_report("winq/power: callback registration failed: %lu", result);
++            } else {
++                info_report("winq/power: direct suspend/resume callback registered");
++            }
++        }
++        if (!winq_power_callback_notification) {
++            winq_power_notification = RegisterSuspendResumeNotification(
++                winq.hwnd, DEVICE_NOTIFY_WINDOW_HANDLE);
++            if (!winq_power_notification) {
++                error_report("winq/power: window notification registration failed: %lu", GetLastError());
++            } else {
++                info_report("winq/power: window suspend/resume fallback registered");
++            }
++        }
++        winq_display_notification = RegisterPowerSettingNotification(
++            winq.hwnd, &winq_console_display_guid, DEVICE_NOTIFY_WINDOW_HANDLE);
++        if (!winq_display_notification) {
++            error_report("winq/power: display diagnostic registration failed: %lu", GetLastError());
++        } else {
++            info_report("winq/power: console display diagnostic registered; does not pause the VM");
++        }
++    }
+     {
+         RECT cliente;
+ 
+@@ -1347,6 +1491,27 @@ static void *winq_thread_corpo(void *opaque)
+         DispatchMessage(&m);
+     }
+ 
++    if (winq_power_notification) {
++        UnregisterSuspendResumeNotification(winq_power_notification);
++        winq_power_notification = NULL;
++    }
++    if (winq_display_notification) {
++        UnregisterPowerSettingNotification(winq_display_notification);
++        winq_display_notification = NULL;
++    }
++    if (winq_power_callback_notification) {
++        DWORD result = winq_power_unregister(winq_power_callback_notification);
++        if (result == ERROR_SUCCESS) {
++            winq_power_callback_notification = NULL;
++        } else {
++            error_report("winq/power: callback unregister failed: %lu; module kept loaded", result);
++        }
++    }
++    if (winq_power_library && !winq_power_callback_notification) {
++        FreeLibrary(winq_power_library);
++        winq_power_library = NULL;
++    }
++
+     /* r == 0 e' WM_QUIT, cioe' una chiusura CHIESTA; r == -1 e' un errore di
+      * GetMessage. Distinguerli e' il punto della diagnosi: hanno cause
+      * opposte, e da fuori si vedono uguali -- QEMU che sparisce in silenzio. */

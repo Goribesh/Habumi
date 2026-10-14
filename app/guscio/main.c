@@ -159,7 +159,7 @@ static bool istanza_unica(void)
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND altra = NULL;
 
-        /* NON FindWindowA: la verifica di allora documenta che IN QUESTO
+        /* NON FindWindowA: il rapporto del Task 5 documenta che IN QUESTO
          * STESSO AMBIENTE FindWindowA con questa classe ha ritornato handle 0
          * mentre EnumWindows la trovava -- tanto che chi verificava lo
          * spegnimento ha dovuto riscrivere il proprio script per usare
@@ -193,7 +193,7 @@ static int modo_argomenti(void)
      * gia' stata scelta in cima a main(), prima che si arrivasse qui. */
     configurazione_risolta(&g_c);
     if (!vm_argomenti(&g_c, buf, sizeof(buf))) {
-        printf("gli argomenti non stanno nel buffer\n");
+        printf("QEMU arguments do not fit in the buffer\n");
         return 1;
     }
     printf("%s\n", buf);
@@ -205,14 +205,7 @@ static int modo_argomenti(void)
  * versata nel registro in VM_PRONTO) non giustifica condividere quella
  * funzione fra file, e pota() toglie anche gli spazi in testa, che qui non
  * servono. */
-static void taglia_fine_riga(char *s)
-{
-    size_t n = strlen(s);
 
-    while (n > 0 && (s[n - 1] == '\r' || s[n - 1] == '\n')) {
-        s[--n] = '\0';
-    }
-}
 
 /* hz e densita' hanno entrambe uno 0 con un significato speciale (automatico
  * per hz, non toccare per densita'), e stampare uno zero nudo in --config non
@@ -246,36 +239,38 @@ static int modo_config(void)
      * runtime (vedi vm.c): --config esiste apposta per vedere la
      * configurazione risolta senza avviare niente, e senza questa chiave
      * mancherebbe l'unica cosa che lo direbbe. */
-    printf("--- default\n  vcpu=%d memoria=%d %dx%d riprove=%d porta_adb=%d "
-           "porta_appunti=%d gl=%s gl_flush_wait=%s audio=%s scala_guest=%s "
-           "hz=%s densita=%s "
-           "variante=%s\n",
+    printf("--- defaults\n  vcpu=%d memory=%d %dx%d retries=%d adb_port=%d "
+           "clipboard_port=%d gl=%s gl_flush_wait=%s audio=%s guest_scale=%s "
+           "hz=%s battery_hz=%d density=%s "
+           "variant=%s\n",
            g_c.vcpu,
            g_c.memoria, g_c.larghezza, g_c.altezza, g_c.riprove,
            g_c.porta_adb, g_c.porta_appunti, g_c.gl,
            g_c.gl_attesa_flush ? "yes" : "no", g_c.audio ? "on" : "off",
-           g_c.scala_guest ? "si" : "no",
+           g_c.scala_guest ? "yes" : "no",
            forma_o_zero(g_c.hz, hz_buf, sizeof(hz_buf), "auto"),
+           g_c.hz_batteria,
            forma_o_zero(g_c.densita, densita_buf, sizeof(densita_buf),
-                        "non_tocca"),
+                        "unchanged"),
            var_testo(g_c.variante));
     /* Stesso percorso accanto all'eseguibile di modo_argomenti e di main():
      * vedi guscio_percorso_accanto in adb.c per il perche'. */
     configurazione_risolta(&g_c);
-    printf("--- risolta\n  vcpu=%d memoria=%d %dx%d riprove=%d porta_adb=%d "
-           "porta_appunti=%d gl=%s gl_flush_wait=%s audio=%s scala_guest=%s "
-           "hz=%s densita=%s "
-           "variante=%s\n",
+    printf("--- resolved\n  vcpu=%d memory=%d %dx%d retries=%d adb_port=%d "
+           "clipboard_port=%d gl=%s gl_flush_wait=%s audio=%s guest_scale=%s "
+           "hz=%s battery_hz=%d density=%s "
+           "variant=%s\n",
            g_c.vcpu,
            g_c.memoria, g_c.larghezza, g_c.altezza, g_c.riprove,
            g_c.porta_adb, g_c.porta_appunti, g_c.gl,
            g_c.gl_attesa_flush ? "yes" : "no", g_c.audio ? "on" : "off",
-           g_c.scala_guest ? "si" : "no",
+           g_c.scala_guest ? "yes" : "no",
            forma_o_zero(g_c.hz, hz_buf, sizeof(hz_buf), "auto"),
+           g_c.hz_batteria,
            forma_o_zero(g_c.densita, densita_buf, sizeof(densita_buf),
-                        "non_tocca"),
+                        "unchanged"),
            var_testo(g_c.variante));
-    printf("--- cosa e' stato ignorato\n");
+    printf("--- ignored settings\n");
     while (registro_nuove(buf, sizeof(buf))) {
         printf("%s", buf);
     }
@@ -429,7 +424,7 @@ static void mappa_menu_mostra(HWND bottone)
                     "put profiles in runtime\\keymaps\\*.txt");
     }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(menu, MF_STRING, ID_MENU_SPEGNI, "shut down");
+    AppendMenuA(menu, MF_STRING, ID_MENU_SPEGNI, "disable key map");
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     /* "learn" senza un profilo scelto manderebbe un percorso vuoto: le due
      * voci restano disabilitate finche' l'utente non ne ha scelto uno. */
@@ -532,14 +527,16 @@ static const char *VARIANTE_NOME_MENU[VAR_QUANTE] = { "vanilla", "GAPPS" };
  *
  * PRIMA si ricostruiva concatenando una base fissa al nome del file --
  * funzionava, VERIFICATO carattere per carattere contro il manifesto vero
- * -- ma era una trappola in cui si cade in silenzio al prossimo
+ * l'08/08/2026 -- ma era una trappola in cui si cade in silenzio al prossimo
  * tipo di immagine che si aggiunge: i percorsi di SourceForge NON sono
  * uguali fra i tipi di immagine (system ha il segmento "lineage/", il vendor
  * qualche centinaio di righe piu' sotto no). Leggere il campo che il
  * manifesto contiene gia' chiude quella trappola una volta per tutte, per
  * entrambi. */
+#define WAYDROID_OTA_REVISION "026205c747d314865fa18398375ff3b0e7bd7f70"
 #define VARIANTE_URL_MANIFESTO_BASE \
-    "https://raw.githubusercontent.com/waydroid/OTA/master/system/lineage/" \
+    "https://raw.githubusercontent.com/waydroid/OTA/" WAYDROID_OTA_REVISION \
+    "/system/lineage/" \
     "waydroid_arm64_only/"
 
 /* La dimensione del /data vuoto, sempre la stessa per entrambe le varianti:
@@ -550,7 +547,7 @@ static const struct {
     const char *manifesto;     /* nome del file JSON, sotto VARIANTE_URL_MANIFESTO_BASE */
     uint64_t archivio_byte;    /* La taglia dello ZIP della build fissata del
                                 * 20260403, dal manifesto vero letto
-                                * (728517282 e 1171824911 byte --
+                                * l'08/08/2026 (728517282 e 1171824911 byte --
                                 * "728 MB" e "1,17 GB" nella spec).
                                 *
                                 * SERVE COME RIPIEGO, e serve proprio a chi non
@@ -574,7 +571,7 @@ static const struct {
                                 * mai la sicurezza dello scaricamento, che si
                                 * riverifica da se' con lo sha256 del
                                 * manifesto dentro scarica_file. */
-    uint64_t estratto_byte; /* MISURATO su questa macchina :
+    uint64_t estratto_byte;    /* MISURATO su questa macchina l'08/08/2026:
                                  * la dimensione di system(-gapps).img DOPO
                                  * l'estrazione, per la build fissata del
                                  * 20260403 (system.img 1624354816 byte,
@@ -742,7 +739,7 @@ static void variante_cartella_di(const char *percorso, char *dest, size_t max)
  * immagine va rifatta) e il nome dentro lo zip e' fisso a "system.img" --
  * quello che gli archivi ufficiali di Waydroid usano per l'immagine di
  * sistema, qualunque sia il nome del file .zip che la contiene (verificato
- * scaricando il manifesto vero: il filename cambia con la data
+ * l'08/08/2026 scaricando il manifesto vero: il filename cambia con la data
  * e il romtype, "system.img" dentro no). */
 static bool variante_estrai_immagine(const char *archivio,
                                      const char *immagine_finale,
@@ -760,21 +757,21 @@ static bool variante_estrai_immagine(const char *archivio,
 
     if (SearchPathA(NULL, "tar.exe", NULL, 0, NULL, NULL) == 0) {
         snprintf(errore, errore_n,
-                "impossibile estrarre %s: tar.exe non si trova. Windows 11 "
-                "lo spedisce di serie in System32", archivio);
+                "Cannot extract %s: tar.exe was not found. Windows 11 "
+                "includes it in System32", archivio);
         return false;
     }
     if (!dati_cartella_temp(cartella_temp, sizeof(cartella_temp),
                             immagine_finale)) {
         snprintf(errore, errore_n,
-                "il percorso della cartella temporanea per %s e' troppo "
-                "lungo", immagine_finale);
+                "The temporary folder path for %s is too "
+                "long", immagine_finale);
         return false;
     }
     if (snprintf(estratto, sizeof(estratto), "%s\\system.img", cartella_temp)
         >= (int)sizeof(estratto)) {
         snprintf(errore, errore_n,
-                "il percorso del file estratto in %s e' troppo lungo",
+                "The extracted file path in %s is too long",
                 cartella_temp);
         return false;
     }
@@ -782,7 +779,7 @@ static bool variante_estrai_immagine(const char *archivio,
         errore_dir = GetLastError();
         if (errore_dir != ERROR_ALREADY_EXISTS) {
             snprintf(errore, errore_n,
-                    "non riesco a creare la cartella temporanea %s (%lu)",
+                    "Cannot create temporary folder %s (%lu)",
                     cartella_temp, errore_dir);
             return false;
         }
@@ -790,7 +787,7 @@ static bool variante_estrai_immagine(const char *archivio,
     if (!dati_comando_estrai(comando, sizeof(comando), archivio,
                              cartella_temp)) {
         snprintf(errore, errore_n,
-                "il comando di estrazione di %s non sta nel buffer", archivio);
+                "The extraction command for %s does not fit in the buffer", archivio);
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
         return false;
@@ -802,7 +799,7 @@ static bool variante_estrai_immagine(const char *archivio,
     if (!CreateProcessA(NULL, comando, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                         NULL, NULL, &si, &pi)) {
         snprintf(errore, errore_n,
-                "impossibile avviare tar.exe per estrarre %s (%lu)", archivio,
+                "Cannot start tar.exe to extract %s (%lu)", archivio,
                 GetLastError());
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
@@ -855,16 +852,16 @@ static bool variante_estrai_immagine(const char *archivio,
                               "-- TerminateProcess %s, tar.exe %s: the folder "
                               "stays on disk and must be removed by hand",
                               cartella_temp, (unsigned long)errore_pulizia,
-                              ucciso ? "riuscita" : "FALLITA",
-                              morte == WAIT_OBJECT_0 ? "morto"
-                                                     : "ancora vivo");
+                              ucciso ? "succeeded" : "FAILED",
+                              morte == WAIT_OBJECT_0 ? "exited"
+                                                     : "still running");
             }
             /* Corto apposta: chi chiama lo incastona in una riga di registro
              * che nomina gia' l'archivio, e REG_LUNGHEZZA e' 256. La cartella
              * la nomina la riga qui sopra, che c'e' solo quando serve. */
-            snprintf(errore, errore_n, "annullata, la cartella temporanea %s",
-                    pulita ? "e' stata ripulita"
-                           : "NON si e' potuta ripulire");
+            snprintf(errore, errore_n, "Cancelled; the temporary folder %s",
+                    pulita ? "was removed"
+                           : "could NOT be removed");
             return false;
         }
     }
@@ -874,7 +871,7 @@ static bool variante_estrai_immagine(const char *archivio,
     CloseHandle(pi.hThread);
     if (esito_processo != 0) {
         snprintf(errore, errore_n,
-                "tar.exe e' uscito con codice %lu estraendo %s",
+                "tar.exe exited with code %lu while extracting %s",
                 esito_processo, archivio);
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
@@ -917,7 +914,7 @@ static bool variante_estrai_immagine(const char *archivio,
         int tentativi = 0;
 
         if (!dati_sposta_con_riprova(estratto, immagine_finale,
-                                     MOVEFILE_REPLACE_EXISTING, "immagine",
+                                     MOVEFILE_REPLACE_EXISTING, "image",
                                      &ultimo_errore, &tentativi)) {
             /* Se le riprove qui sopra si esauriscono, chi legge deve sapere
              * la stessa cosa che ha reso possibile il successo a mano: questa
@@ -927,14 +924,14 @@ static bool variante_estrai_immagine(const char *archivio,
              * questo momento, e senza dirlo non ha modo di saperlo. */
             if (dati_sposta_errore_e_transitorio(ultimo_errore)) {
                 snprintf(errore, errore_n,
-                        "estratto %s ma non riesco a spostarlo su %s dopo %d "
-                        "tentativi (%lu) -- l'archivio scaricato resta sul "
-                        "disco, riprovare non lo riscarica",
+                        "Extracted %s but cannot move it to %s after %d "
+                        "attempts (%lu) -- the downloaded archive stays on "
+                        "disk; retrying will reuse it",
                         estratto, immagine_finale, tentativi,
                         (unsigned long)ultimo_errore);
             } else {
                 snprintf(errore, errore_n,
-                        "estratto %s ma non riesco a spostarlo su %s (%lu)",
+                        "Extracted %s but cannot move it to %s (%lu)",
                         estratto, immagine_finale,
                         (unsigned long)ultimo_errore);
             }
@@ -1062,7 +1059,7 @@ static void variante_classifica_avvia(void)
     }
 }
 
-/* Riscrive SOLO la riga "variante=..." di config.txt (chiave
+/* Riscrive SOLO la selezione "variant=..." di config.txt (chiave
  * eventualmente indentata, con o senza spazi attorno all'uguale, come
  * config_carica gia' tollera), lasciando ogni altra riga -- commenti compresi
  * -- intatta: e' la configurazione dell'UTENTE, non uno stato del programma
@@ -1091,9 +1088,6 @@ static void variante_scrivi_configurazione(VarNome v)
     FILE *f;
     size_t letti;
     size_t scritti = 0;
-    const char *p;
-    const char *fine;
-    bool trovata = false;
 
     guscio_percorso_accanto("config.txt", percorso, sizeof(percorso));
 
@@ -1118,66 +1112,11 @@ static void variante_scrivi_configurazione(VarNome v)
     fclose(f);
     contenuto[letti] = '\0';
 
-    p = contenuto;
-    fine = contenuto + letti;
-    while (p < fine) {
-        const char *fine_riga = memchr(p, '\n', (size_t)(fine - p));
-        size_t lung_riga = fine_riga ? (size_t)(fine_riga - p) + 1
-                                     : (size_t)(fine - p);
-        const char *q = p;
-        bool chiave_variante;
-
-        while (q < p + lung_riga && (*q == ' ' || *q == '\t')) {
-            q++;
-        }
-        chiave_variante = (size_t)(p + lung_riga - q) >= strlen("variante") &&
-                          !strncmp(q, "variante", strlen("variante"));
-        if (chiave_variante) {
-            const char *r = q + strlen("variante");
-
-            while (r < p + lung_riga && (*r == ' ' || *r == '\t')) {
-                r++;
-            }
-            chiave_variante = r < p + lung_riga && *r == '=';
-        }
-
-        if (chiave_variante) {
-            if (!trovata) {
-                int n = snprintf(nuovo + scritti, sizeof(nuovo) - scritti,
-                                "variante=%s\n", var_testo(v));
-
-                if (n < 0 || (size_t)n >= sizeof(nuovo) - scritti) {
-                    registro_riga(REG_GUSCIO, "variant: %s not rewritten, "
-                                  "the new line does not fit the buffer",
-                                  percorso);
-                    return;
-                }
-                scritti += (size_t)n;
-                trovata = true;
-            }
-            /* Righe "variante=" successive alla prima si tolgono e basta:
-             * vedi il commento sopra la funzione. */
-        } else {
-            if (lung_riga >= sizeof(nuovo) - scritti) {
-                registro_riga(REG_GUSCIO, "variant: %s not rewritten, it does "
-                              "not fit the buffer", percorso);
-                return;
-            }
-            memcpy(nuovo + scritti, p, lung_riga);
-            scritti += lung_riga;
-        }
-        p += lung_riga;
-    }
-    if (!trovata) {
-        int n = snprintf(nuovo + scritti, sizeof(nuovo) - scritti,
-                        "variante=%s\n", var_testo(v));
-
-        if (n < 0 || (size_t)n >= sizeof(nuovo) - scritti) {
-            registro_riga(REG_GUSCIO, "variant: %s not rewritten, the new "
-                          "line does not fit the buffer", percorso);
-            return;
-        }
-        scritti += (size_t)n;
+    scritti = var_config_riscrivi(contenuto, v, nuovo, sizeof(nuovo));
+    if (!scritti) {
+        registro_riga(REG_GUSCIO, "variant: %s not rewritten, the new "
+                      "configuration does not fit the buffer", percorso);
+        return;
     }
 
     f = fopen(percorso, "wb");
@@ -1239,7 +1178,7 @@ static void variante_applica(VarNome v)
  *
  * Il cambio vero (variante_applica) avviene SOLO quando la VM ha gia' finito
  * di fermarsi: scrivere sopra system.img/data.img sotto una VM ancora accesa
- * e' esattamente il guasto MISURATO che ha disegnato tutto
+ * e' esattamente il guasto MISURATO il 06/08/2026 che ha disegnato tutto
  * questo lavoro (sezione 2 della spec) -- li' e' stato un cp a mano mentre
  * QEMU teneva aperta l'immagine, qui la stessa corsa si eviterebbe per un
  * pelo invece che per costruzione. */
@@ -1522,7 +1461,7 @@ static bool variante_conferma(VarNome altra, VarMancante m_altra,
 
     rilascio_taglia(taglia, sizeof(taglia), (long long)archivio_byte);
     snprintf(msg, sizeof(msg),
-            "Per usare %s serve scaricare circa %s.\n\nContinuare?",
+            "Using %s requires a download of about %s.\n\nContinue?",
             VARIANTE_NOME_MENU[altra], taglia);
     if (MessageBoxA(finestra_handle(), msg, "Habumi",
                     MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
@@ -1550,8 +1489,8 @@ static bool variante_conferma(VarNome altra, VarMancante m_altra,
                   "%s free on %s, %s short", var_testo(altra), t_serve,
                   t_liberi, cartella, t_manca);
     snprintf(msg, sizeof(msg),
-            "Spazio insufficiente per %s.\n\nServono %s, liberi %s.\n"
-            "Mancano %s.", VARIANTE_NOME_MENU[altra], t_serve, t_liberi,
+            "Not enough space for %s.\n\nRequired: %s. Available: %s.\n"
+            "An additional %s is needed.", VARIANTE_NOME_MENU[altra], t_serve, t_liberi,
             t_manca);
     MessageBoxA(finestra_handle(), msg, "Habumi",
                 MB_OK | MB_ICONERROR);
@@ -1620,7 +1559,7 @@ static void variante_menu_mostra(HWND bottone)
         AppendMenuA(menu, MF_STRING, ID_MENU_VARIANTE_ANNULLA,
                     "cancel download");
     } else {
-        snprintf(etichetta, sizeof(etichetta), "%s (attiva)",
+        snprintf(etichetta, sizeof(etichetta), "%s (active)",
                 VARIANTE_NOME_MENU[attiva]);
         AppendMenuA(menu, MF_STRING | MF_GRAYED | MF_CHECKED, 0, etichetta);
 
@@ -1633,7 +1572,7 @@ static void variante_menu_mostra(HWND bottone)
                         "still verifying the images");
         } else {
             if (m_altra == VAR_PRONTA || m_altra == VAR_MANCA_DATI) {
-                snprintf(etichetta, sizeof(etichetta), "%s -- pronta",
+                snprintf(etichetta, sizeof(etichetta), "%s -- ready",
                         VARIANTE_NOME_MENU[altra]);
             } else {
                 char taglia[32];
@@ -1641,7 +1580,7 @@ static void variante_menu_mostra(HWND bottone)
                 rilascio_taglia(taglia, sizeof(taglia),
                                 (long long)archivio_byte);
                 snprintf(etichetta, sizeof(etichetta),
-                        "%s -- da scaricare, %s", VARIANTE_NOME_MENU[altra],
+                        "%s -- download required, %s", VARIANTE_NOME_MENU[altra],
                         taglia);
             }
             AppendMenuA(menu, MF_STRING, ID_MENU_VARIANTE_ALTRA, etichetta);
@@ -1830,6 +1769,29 @@ static void guscio_chiudi_finestra(void)
  * annidati compresi. Le funzioni chiamate sotto restano quelle di prima e
  * girano sullo stesso thread della finestra di prima -- cambia soltanto CHI
  * le raggiunge. */
+#define UI_CONTROLLI_TIMER 2
+static void CALLBACK ui_controlli_timer(HWND h, UINT messaggio, UINT_PTR id, DWORD ora)
+{
+    (void)messaggio; (void)ora;
+    comandi_passo();
+    if (!comandi_in_corso()) { KillTimer(h, id); }
+}
+
+static void ui_accoda(ComandoUi tipo, int valore)
+{
+    if (g_chiudendo || vm_stato() != VM_PRONTO) {
+        registro_riga(REG_GUSCIO, "controls: Android is not ready or the shell is closing");
+        return;
+    }
+    if (comandi_accoda(&g_c, tipo, valore)) {
+        comandi_passo();
+        if (comandi_in_corso() && !SetTimer(finestra_handle(), UI_CONTROLLI_TIMER, 50, ui_controlli_timer)) {
+            registro_riga(REG_GUSCIO, "controls: cannot start polling timer; queued controls cancelled");
+            comandi_annulla();
+        }
+    }
+}
+
 static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
 {
     if (m == WM_APP + 1) {
@@ -1921,120 +1883,13 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
      * tutto. */
     if (m == WM_APP + 2) {
         switch (LOWORD(wp)) {
-        case ID_POWER:   adb_keyevent(&g_c, "KEYCODE_POWER"); break;
-        case ID_VOL_SU:  adb_keyevent(&g_c, "KEYCODE_VOLUME_UP"); break;
-        case ID_VOL_GIU: adb_keyevent(&g_c, "KEYCODE_VOLUME_DOWN"); break;
-        case ID_HOME:    adb_keyevent(&g_c, "KEYCODE_HOME"); break;
-        case ID_BACK:    adb_keyevent(&g_c, "KEYCODE_BACK"); break;
-        case ID_RECENTI: adb_keyevent(&g_c, "KEYCODE_APP_SWITCH"); break;
-        case ID_RUOTA: {
-            int w = 0, h = 0;
-            char stato[32] = { 0 };
-            int attuale = 0;
-            bool verso_orizzontale;
-            int bw = 0, bh = 0;
-
-            /* Si chiede al guest quanto crede di essere, invece di tenere
-             * un contatore nostro: se qualcosa avesse cambiato la
-             * risoluzione alle nostre spalle, un contatore mentirebbe. */
-            if (!adb_risoluzione_guest(&g_c, &w, &h)) {
-                registro_riga(REG_GUSCIO, "rotation: cannot read "
-                              "the guest resolution");
-                break;
-            }
-            /* LO STATO SI LEGGE PRIMA DI REGISTRARE, e la ragione e' che la
-             * riga di registro precedente MENTIVA. Diceva
-             *     rotazione: 1280x800 -> 800x1280
-             * costruita dalla risoluzione appena letta con "wm size" -- che
-             * in questo QEMU non cambia mai. MISURATO: tre pressioni di
-             * seguito hanno prodotto tre righe IDENTICHE, mentre la
-             * rotazione vera alternava (user_rotation 0->1->0->1). Chi
-             * leggeva il registro non poteva sapere in quale verso fosse
-             * andata, ne' se fosse andata affatto.
-             *
-             * "settings get" su una chiave mai scritta risponde con la
-             * stringa "null", non con un numero: prima della prima rotazione
-             * della sessione e' proprio questo il caso. Va trattata come "0"
-             * ESPLICITAMENTE: senza il confronto il codice funzionerebbe
-             * comunque, ma per una proprieta' implicita di atoi (atoi("null")
-             * vale 0 perche' si ferma al primo carattere non numerico), e chi
-             * legge non deve essere costretto a dedurla. */
-            if (adb_esegui(&g_c, "settings get system user_rotation",
-                           stato, sizeof(stato))) {
-                if (!strncmp(stato, "null", 4)) {
-                    attuale = 0;
-                } else {
-                    attuale = atoi(stato);
-                }
-            }
-            /* IL BERSAGLIO SI RICAVA DAL VERSO, non scambiando w e h.
-             *
-             * Prima era tubo_risoluzione(h, w), cioe' lo scambio di cio' che
-             * dice "wm size" -- che in questo QEMU non cambia mai. MISURATO
-             * nel registro del prodotto: tre pressioni, tre
-             * volte lo stesso bersaglio (1600x2560) mentre il verso alternava
-             * correttamente. Effetto: dopo la prima pressione il framebuffer
-             * restava verticale per sempre, e quando Android tornava
-             * orizzontale il contenuto finiva scalato dentro le bande. Il
-             * difetto era invisibile a chi guardava il video, perche' lo
-             * schermo SI VEDE ruotare comunque: quello lo fa user_rotation.
-             *
-             * Il verso: user_rotation a 0 vuol dire che adesso siamo
-             * orizzontali, quindi si va al VERTICALE, e viceversa. */
-            verso_orizzontale = attuale != 0;
-            dpi_ruota(w, h, verso_orizzontale, &bw, &bh);
-            if (bw <= 0 || bh <= 0) {
-                registro_riga(REG_GUSCIO, "rotation: the resolution read "
-                              "from the guest (%dx%d) is not usable", w, h);
-                break;
-            }
-            /* Si registra SOLO il bersaglio chiesto, non "da X a Y": QEMU non
-             * dice indietro quale risoluzione abbia applicato, e il tubo e' a
-             * senso unico. La riga di prima dichiarava un "da" che era la
-             * lettura invariante di wm size, cioe' un numero che non
-             * descriveva il framebuffer vero. */
-            registro_riga(REG_GUSCIO, "rotation: to %s, framebuffer "
-                          "requested %dx%d",
-                          verso_orizzontale ? "landscape"
-                                            : "portrait", bw, bh);
-
-            if (!tubo_risoluzione(bw, bh)) {
-                /* Il PERCHE' del fallimento (tubo assente, tubo occupato,
-                 * altro errore Windows) e' gia' registrato dentro
-                 * tubo_risoluzione: quel logging vive solo li' dentro, e
-                 * chi legge main.c non lo sa. Questa riga registra solo
-                 * che, dal punto di chiamata, il comando non e' arrivato
-                 * a QEMU. */
-                registro_riga(REG_GUSCIO, "rotation: the command pipe "
-                              "did not deliver the resolution to QEMU");
-            }
-
-            /* RIPIEGO, e la ragione per cui esiste sta nella misura del
-             * Passo 6 del piano: lo scambio delle dimensioni da solo non ha
-             * raddrizzato l'immagine, quindi ad Android va detto anche di
-             * ruotare. accelerometer_rotation va spenta o Android
-             * ripristina la propria scelta. */
-            adb_esegui(&g_c, "settings put system accelerometer_rotation 0",
-                       NULL, 0);
-
-            /* SCOSTAMENTO DAL BRIEF, misurato: il brief decide il verso
-             * da "h > w" sulla risoluzione appena letta con adb_risoluzione_guest
-             * (cioe' "wm size"). Ma il Passo 6 ha gia' mostrato che "wm size"
-             * (Physical size) NON cambia mai, in questo QEMU, qualunque cosa
-             * gli si mandi sul tubo: resta 1280x800 a ogni pressione. Decidere
-             * il verso su un valore che non cambia mai sceglie sempre lo stesso
-             * ramo, e "ruota" non tornerebbe mai indietro (misurato: due
-             * pressioni consecutive hanno prodotto user_rotation=1 entrambe le
-             * volte). Si legge invece la stessa impostazione che si sta per
-             * scrivere e la si inverte: e' l'unico stato che davvero alterna a
-             * ogni pressione, e resta "chiesto al guest" nello spirito del
-             * commento sopra -- non un contatore nostro, ma la lettura di cio'
-             * che il guest ha gia' applicato. */
-            adb_esegui(&g_c, attuale ? "settings put system user_rotation 0"
-                                     : "settings put system user_rotation 1",
-                       NULL, 0);
-            break;
-        }
+        case ID_POWER:   ui_accoda(COMANDO_POWER, 0); break;
+        case ID_VOL_SU:  ui_accoda(COMANDO_VOL_SU, 0); break;
+        case ID_VOL_GIU: ui_accoda(COMANDO_VOL_GIU, 0); break;
+        case ID_HOME:    ui_accoda(COMANDO_HOME, 0); break;
+        case ID_BACK:    ui_accoda(COMANDO_BACK, 0); break;
+        case ID_RECENTI: ui_accoda(COMANDO_RECENTI, 0); break;
+        case ID_RUOTA:   ui_accoda(COMANDO_RUOTA, 0); break;
         case ID_TASTI:
             mappa_menu_mostra((HWND)lp);
             break;
@@ -2101,7 +1956,7 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
 /* Manifesto a URL fisso, come i due delle varianti (VARIANTE_URL_MANIFESTO_BASE
  * qui sopra) ma sotto un sottopercorso diverso: "vendor/waydroid_arm64_only/",
  * SENZA il segmento "lineage/" che hanno system e system-gapps -- verificato
- * (.superpowers/sdd/rl-vincoli.md) scaricando questo manifesto
+ * il 09/08/2026 (.superpowers/sdd/rl-vincoli.md) scaricando questo manifesto
  * per davvero e leggendone la voce MAINLINE 20260403. L'URL dell'ARCHIVIO
  * invece non ha una base fissa qui: come per le varianti (vedi il commento
  * su VARIANTE_URL_MANIFESTO_BASE), si legge dal campo "url" della voce del
@@ -2109,7 +1964,8 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
  * era la prova che ricostruirlo da una base condivisa con le varianti non
  * avrebbe funzionato. */
 #define VENDOR_URL_MANIFESTO \
-    "https://raw.githubusercontent.com/waydroid/OTA/master/vendor/" \
+    "https://raw.githubusercontent.com/waydroid/OTA/" WAYDROID_OTA_REVISION \
+    "/vendor/" \
     "waydroid_arm64_only/MAINLINE.json"
 
 /* Alzato quando l'utente chiude la finestra durante lo scaricamento del
@@ -2189,21 +2045,21 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
 
     if (SearchPathA(NULL, "tar.exe", NULL, 0, NULL, NULL) == 0) {
         snprintf(errore, errore_n,
-                "impossibile estrarre %s: tar.exe non si trova. Windows 11 "
-                "lo spedisce di serie in System32", archivio);
+                "Cannot extract %s: tar.exe was not found. Windows 11 "
+                "includes it in System32", archivio);
         return false;
     }
     if (!dati_cartella_temp(cartella_temp, sizeof(cartella_temp),
                             immagine_finale)) {
         snprintf(errore, errore_n,
-                "il percorso della cartella temporanea per %s e' troppo "
-                "lungo", immagine_finale);
+                "The temporary folder path for %s is too "
+                "long", immagine_finale);
         return false;
     }
     if (snprintf(estratto, sizeof(estratto), "%s\\vendor.img", cartella_temp)
         >= (int)sizeof(estratto)) {
         snprintf(errore, errore_n,
-                "il percorso del file estratto in %s e' troppo lungo",
+                "The extracted file path in %s is too long",
                 cartella_temp);
         return false;
     }
@@ -2211,7 +2067,7 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
         errore_dir = GetLastError();
         if (errore_dir != ERROR_ALREADY_EXISTS) {
             snprintf(errore, errore_n,
-                    "non riesco a creare la cartella temporanea %s (%lu)",
+                    "Cannot create temporary folder %s (%lu)",
                     cartella_temp, errore_dir);
             return false;
         }
@@ -2219,7 +2075,7 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
     if (!dati_comando_estrai(comando, sizeof(comando), archivio,
                              cartella_temp)) {
         snprintf(errore, errore_n,
-                "il comando di estrazione di %s non sta nel buffer", archivio);
+                "The extraction command for %s does not fit in the buffer", archivio);
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
         return false;
@@ -2231,7 +2087,7 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
     if (!CreateProcessA(NULL, comando, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                         NULL, NULL, &si, &pi)) {
         snprintf(errore, errore_n,
-                "impossibile avviare tar.exe per estrarre %s (%lu)", archivio,
+                "Cannot start tar.exe to extract %s (%lu)", archivio,
                 GetLastError());
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
@@ -2244,7 +2100,7 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
     CloseHandle(pi.hThread);
     if (esito_processo != 0) {
         snprintf(errore, errore_n,
-                "tar.exe e' uscito con codice %lu estraendo %s",
+                "tar.exe exited with code %lu while extracting %s",
                 esito_processo, archivio);
         DeleteFileA(estratto);
         RemoveDirectoryA(cartella_temp);
@@ -2258,8 +2114,8 @@ static bool vendor_estrai(const char *archivio, const char *immagine_finale,
         if (!dati_sposta_con_riprova(estratto, immagine_finale, 0, "vendor",
                                      &ultimo_errore, &tentativi)) {
             snprintf(errore, errore_n,
-                    "estratto %s ma non riesco a spostarlo su %s dopo %d "
-                    "tentativi (%lu)", estratto, immagine_finale, tentativi,
+                    "Extracted %s but cannot move it to %s after %d "
+                    "attempts (%lu)", estratto, immagine_finale, tentativi,
                     (unsigned long)ultimo_errore);
             DeleteFileA(estratto);
             RemoveDirectoryA(cartella_temp);
@@ -2470,7 +2326,7 @@ static bool guscio_pompa_attesa(HANDLE h)
             if (msg.message == WM_QUIT) {
                 return false;
             }
-            if (msg.message == WM_TIMER && msg.hwnd == finestra_handle()) {
+            if (msg.message == WM_TIMER && msg.hwnd == finestra_handle() && msg.wParam != UI_CONTROLLI_TIMER) {
                 /* NON vm_passo(): vedi il commento qui sopra. */
                 finestra_passo();
                 continue;
@@ -2715,11 +2571,11 @@ int main(int argc, char **argv)
         char messaggio[MAX_PATH + 256];
 
         snprintf(messaggio, sizeof(messaggio),
-                 "Habumi non trova la propria installazione.\n\n"
-                 "Cercato: %s\n\n"
-                 "Il pacchetto potrebbe essere incompleto, oppure "
-                 "l'eseguibile e' stato spostato fuori dalla cartella "
-                 "runtime\\bin\\ in cui deve stare.", g_radice_provato);
+                 "Habumi cannot find its installation.\n\n"
+                 "Looked for: %s\n\n"
+                 "The package may be incomplete, or "
+                 "the executable was moved out of the "
+                 "runtime\\bin\\ folder where it belongs.", g_radice_provato);
         MessageBoxA(NULL, messaggio, "Habumi", MB_OK | MB_ICONERROR);
     }
 
@@ -2730,7 +2586,8 @@ int main(int argc, char **argv)
      * un valore letto senza consapevolezza sarebbe la meta' del vero. */
     dpi_dichiara();
 
-    if (argc > 1 && !strcmp(argv[1], "--argomenti")) {
+    if (argc > 1 && (!strcmp(argv[1], "--arguments") ||
+                     !strcmp(argv[1], "--argomenti"))) {
         return modo_argomenti();
     }
     if (argc > 1 && !strcmp(argv[1], "--config")) {
@@ -2974,7 +2831,7 @@ int main(int argc, char **argv)
     vm_apri(&g_c);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
-        if (msg.message == WM_TIMER && msg.hwnd == finestra_handle()) {
+        if (msg.message == WM_TIMER && msg.hwnd == finestra_handle() && msg.wParam != UI_CONTROLLI_TIMER) {
             VmStato s = vm_passo();
 
             if (g_chiusura &&
@@ -2994,37 +2851,8 @@ int main(int argc, char **argv)
                 case VM_PRONTO:
                     finestra_fase("Android", "ready");
                     finestra_bottoni(true);
-                    /* densita=0 (default) non tocca nulla: e' il comportamento
-                     * di oggi. Applicata UNA volta qui, non ripetuta a ogni
-                     * passo, perche' la macchina a stati raggiunge VM_PRONTO
-                     * una sola volta per avvio (vedi vm.c: da li' si esce solo
-                     * verso VM_MORTA). "wm density" scrive in /data e quindi
-                     * PERSISTE finche' data.img non viene sostituita --
-                     * verificato riavviando la VM -- ma su una data.img nuova
-                     * quel valore non c'e' ancora, ed e' per quello che questa
-                     * chiave serve. Una densita' applicata in silenzio
-                     * sarebbe indistinguibile da una non applicata: si
-                     * registra sempre l'esito, non solo il fallimento. */
-                    if (g_c.densita != 0) {
-                        char comando[64];
-                        char uscita[256] = { 0 };
-
-                        snprintf(comando, sizeof(comando), "wm density %d",
-                                 g_c.densita);
-                        if (adb_esegui(&g_c, comando, uscita, sizeof(uscita))) {
-                            /* "wm density" e' muto su questa immagine, ma
-                             * un'uscita con \n spezzerebbe la riga di
-                             * registro: si toglie la fine di riga prima di
-                             * versarla. */
-                            taglia_fine_riga(uscita);
-                            registro_riga(REG_GUSCIO, "density: applied %d "
-                                          "(%s)", g_c.densita, uscita);
-                        } else {
-                            registro_riga(REG_GUSCIO, "density: applying "
-                                          "%d FAILED (adb did not "
-                                          "answer)", g_c.densita);
-                        }
-                    }
+                    /* Density is queued once before subsequent button commands. */
+                    if (g_c.densita != 0) { ui_accoda(COMANDO_DENSITA, g_c.densita); }
                     break;
                 case VM_FALLITA:
                     finestra_fase("boot", "FAILED");

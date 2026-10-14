@@ -1,0 +1,3150 @@
+diff --git a/src/mesa/compat/c11/threads_win32.h b/src/mesa/compat/c11/threads_win32.h
+index 9f00d44..be25122 100644
+--- a/src/mesa/compat/c11/threads_win32.h
++++ b/src/mesa/compat/c11/threads_win32.h
+@@ -175,7 +175,7 @@ static int impl_tss_dtor_register(tss_t key, tss_dtor_t dtor)
+     return 0;
+ }
+ 
+-static void impl_tss_dtor_invoke()
++static void impl_tss_dtor_invoke(void)
+ {
+     int i;
+     for (i = 0; i < EMULATED_THREADS_TSS_DTOR_SLOTNUM; i++) {
+diff --git a/src/meson.build b/src/meson.build
+index ecb99c9..8b43e2e 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -46,6 +46,8 @@ vrend_sources = [
+ 
+ virglrenderer_sources = [
+    'virglrenderer.c',
++   'winq-glspia-conta.c',
++   'winq-glspia-gpu.c',
+ ]
+ 
+ vrend_winsys_gbm_sources = [
+@@ -274,6 +276,7 @@ libvirgl = static_library(
+    virgl_sources,
+    include_directories: [inc_gallium, inc_configuration, 'venus', 'drm'],
+    dependencies : [virgl_depends, drm_uapi_dep],
++   c_args : ['-include', join_paths(meson.current_source_dir(), 'winq-glspia.h')],
+ )
+ 
+ libvirgl_inc = [
+@@ -295,7 +298,8 @@ libvirglrenderer = library(
+    version : binary_age.to_string() + '.'
+              + interface_age.to_string() + '.'
+              + revision.to_string(),
+-   install : true
++   install : true,
++   c_args : ['-include', join_paths(meson.current_source_dir(), 'winq-glspia.h')],
+ )
+ 
+ pkg = import('pkgconfig')
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index c6b6d81..e44c424 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -178,7 +178,10 @@ proxy_context_sync_thread(void *arg)
+ 
+    while (!ctx->sync_thread.stop) {
+ #ifdef _WIN32
+-      HANDLE event = (HANDLE)_get_osfhandle(ctx->sync_thread.fence_eventfd);
++      /* Non _get_osfhandle: su Windows il fence eventfd non e' un
++       * descrittore della CRT, e' l'indice di un HANDLE nella tabella di
++       * virgl_util. Vedi create_eventfd. */
++      HANDLE event = (HANDLE)eventfd_handle(ctx->sync_thread.fence_eventfd);
+       DWORD wait_ret = WaitForSingleObject(event, 100); /* 100ms timeout */
+       if (wait_ret == WAIT_FAILED) {
+          proxy_log("failed to wait on fence event");
+@@ -541,7 +544,7 @@ proxy_context_destroy(struct virgl_context *base)
+          thrd_join(ctx->sync_thread.thread, NULL);
+       }
+ 
+-      os_close_fd(ctx->sync_thread.fence_eventfd);
++      close_eventfd(ctx->sync_thread.fence_eventfd);
+    }
+ 
+    if (ctx->shmem.ptr)
+diff --git a/src/test-winq-glspia-conta.c b/src/test-winq-glspia-conta.c
+new file mode 100644
+index 0000000..27b4400
+--- /dev/null
++++ b/src/test-winq-glspia-conta.c
+@@ -0,0 +1,824 @@
++/* Prove dei contatori dello shim GL. Nessun GL, nessun contesto, nessuna VM:
++ * e' la ragione per cui la logica di accumulo sta in un file separato da
++ * winq-glspia.h, che invece e' solo macro.
++ *
++ * Compilare ed eseguire con research/scripts/test-glspia.sh. */
++#include <stdio.h>
++#include <string.h>
++#include "winq-glspia-conta.h"
++
++static int falliti;
++
++static void esigi(int condizione, const char *cosa)
++{
++    printf("  %-58s %s\n", cosa, condizione ? "ok" : "FALLITA");
++    if (!condizione) {
++        falliti++;
++    }
++}
++
++/* Con la frequenza forzata a 1 MHz un tick vale 1000 ns, cosi' i conti
++ * dell'aritmetica si leggono a occhio invece di dipendere dall'orologio
++ * della macchina -- che renderebbe la prova non deterministica. */
++static void prova_accumulo(void)
++{
++    struct winq_glspia s;
++
++    printf("accumulo:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 200, 210);    /* 10 tick = 10 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_SHADER, 0, 3000); /* 3 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 60000, "GL: 60 us in nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 2, "GL: due chiamate contate");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 3000000, "SHADER: 3 ms in nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 1, "SHADER: una chiamata contata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC: intatta");
++}
++
++/* Un orologio che torna indietro esiste davvero: QueryPerformanceCounter puo'
++ * dare valori non monotoni fra core su alcune macchine. Un intervallo negativo
++ * sottratto come unsigned diventerebbe un numero enorme, e una sola occorrenza
++ * falserebbe l'intero secondo. Si scarta e si conta. */
++static void prova_intervallo_negativo(void)
++{
++    struct winq_glspia s;
++
++    printf("intervallo negativo:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 500, 400);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 1, "contata come assurda");
++}
++
++/* La lettura e' una FOTOGRAFIA che azzera: la riga al secondo di QEMU deve
++ * poter chiedere "quanto da quando ho chiesto l'ultima volta" senza tenere
++ * lei lo stato precedente. */
++static void prova_lettura_azzera(void)
++{
++    struct winq_glspia s;
++
++    printf("la lettura azzera:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 1000);
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: 1 ms");
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: azzerata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate");
++}
++
++/* Il secchio fuori intervallo non deve scrivere fuori dall'array. Se questa
++ * prova sparisce, torna un buco di memoria in un percorso caldo. */
++static void prova_secchio_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("secchio invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, -1, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N + 99, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori");
++}
++
++/* QUARTA CORREZIONE DELL'11/08/2026: aggiungi() ora indicizza un array a due
++ * dimensioni (thread e secchio). Lo stesso rischio di prova_secchio_invalido(),
++ * sull'altro asse: un thread fuori bounds deve scartarsi come assurda, non
++ * scrivere fuori dall'array. */
++static void prova_thread_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("thread invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(-1, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_N, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi(WINQ_THREAD_N + 99, WINQ_SPIA_GL, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
++/* La taratura deve dare un numero, e un numero piccolo: se una coppia di
++ * letture dell'orologio costasse quanto una chiamata GL, lo strumento
++ * misurerebbe se stesso. La soglia e' larga apposta -- qui si esclude
++ * l'ordine di grandezza sbagliato, non si certifica una prestazione.
++ *
++ * QUARTA CORREZIONE DELL'11/08/2026: il numero ora include anche una lettura
++ * di winq_glspia_thread_id() per giro (vedi il commento sopra
++ * winq_glspia_taratura_ns()), perche' e' quello che il percorso caldo fa
++ * davvero da questa correzione in poi. La soglia non cambia: GetCurrentThreadId()
++ * e' una lettura del TEB, non sposta l'ordine di grandezza. */
++static void prova_taratura(void)
++{
++    uint64_t costo;
++
++    printf("taratura:\n");
++    winq_glspia_freq_vera();
++    costo = winq_glspia_taratura_ns();
++    printf("  costo di una tripletta di letture (ora+ora+thread_id): %llu ns\n",
++           (unsigned long long)costo);
++    esigi(costo > 0, "la taratura restituisce un valore");
++    esigi(costo < 10000, "sotto i 10 us per tripletta");
++}
++
++/* Misura isolata di winq_glspia_thread_id() da solo, separata dal numero
++ * combinato di taratura_ns(): il rapporto deve poter citare il costo della
++ * sola lettura del thread id, non solo il totale con le due letture
++ * dell'orologio incluse. Non e' una prova di correttezza (nessun esigi()
++ * sul valore stesso oltre alla soglia larga): e' la misura dichiarata nel
++ * compito. */
++static void prova_costo_thread_id(void)
++{
++    const uint64_t giri = 1000000;
++    uint64_t i, a, b, costo;
++    volatile uint64_t anti_ottimizzazione = 0;
++
++    printf("costo isolato di winq_glspia_thread_id():\n");
++    winq_glspia_freq_vera();
++
++    a = winq_glspia_ora();
++    for (i = 0; i < giri; i++) {
++        uint64_t t = winq_glspia_thread_id();
++
++        if (t == 0) {
++            anti_ottimizzazione++;
++        }
++    }
++    (void)anti_ottimizzazione;
++    b = winq_glspia_ora();
++
++    costo = winq_glspia_intervallo_ns(a, b) / giri;
++    printf("  costo di una lettura: %llu ns\n", (unsigned long long)costo);
++    esigi(costo < 10000, "sotto i 10 us per lettura");
++}
++
++/* Il buco che il brief non copre: prima che winq_glspia_accesa() o
++ * winq_glspia_freq_forza() vengano chiamate, freq_hz vale zero. Una divisione
++ * per freq_hz in quello stato manderebbe in crash il processo che ospita lo
++ * shim -- cioe' QEMU. Serve un processo separato per osservare freq_hz==0
++ * davvero, perche' tutte le prove sopra lo impostano; qui si verifica solo
++ * che con freq_hz a zero forzato esplicitamente la chiamata non trabocchi ne'
++ * faccia una divisione per zero, e che il campione sia contato come assurdo. */
++static void prova_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++
++    printf("frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 200);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 1, "contata come assurda invece di dividere per zero");
++}
++
++/* Stesso buco della prova precedente, ma sull'altra funzione che divide per
++ * freq_hz. winq_glspia_taratura_ns() pero' non ha un contatore "assurde" da
++ * incrementare: deve solo restituire 0 con garbo invece di dividere per
++ * zero, senza toccare spia. */
++static void prova_taratura_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++    uint64_t costo;
++
++    printf("taratura con frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    costo = winq_glspia_taratura_ns();
++
++    esigi(costo == 0, "nessuna divisione per zero: restituisce 0");
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 0, "la taratura non conta il campione come assurdo");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun contatore ns toccato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun contatore chiamate toccato");
++}
++
++/* winq_glspia_gpu_chiudi() passa il proprio argomento alla banda di
++ * plausibilita' di winq-glspia-gpu.c come tempo CPU vero, in nanosecondi, da
++ * confrontare con i nanosecondi veri della query GL. QueryPerformanceFrequency
++ * su Windows non e' mai 1 GHz (tipicamente 10 MHz: qemu/probe/sonda-gltimer.c
++ * lo converte esplicitamente con lo stesso schema). Se l'aggancio passasse i
++ * tick grezzi invece dei nanosecondi convertiti, la banda confronterebbe
++ * numeri di ordini di grandezza diversi e scarterebbe come "assurdi" quasi
++ * tutti i campioni validi -- silenziosamente, perche' "assurda" e' comunque
++ * un conteggio valido e nessuno lo leggerebbe come sintomo di un bug di unita'
++ * di misura. Questa prova blocca la regressione a quell'errore. */
++static void prova_intervallo_ns(void)
++{
++    printf("intervallo in nanosecondi:\n");
++    winq_glspia_freq_forza(1000000);   /* 1 MHz: un tick vale 1000 ns */
++
++    esigi(winq_glspia_intervallo_ns(100, 150) == 50000,
++          "50 tick a 1 MHz sono 50000 ns, non 50");
++    esigi(winq_glspia_intervallo_ns(500, 400) == 0,
++          "intervallo negativo: zero, non un numero enorme");
++}
++
++/* I nanosecondi della query non passano dalla conversione da tick: se un
++ * giorno qualcuno li facesse passare da aggiungi(), questa prova lo prende.
++ * Sempre nel secchio WINQ_THREAD_PRINCIPALE: somma_gpu() non prende un
++ * thread, vedi il commento sulla funzione. */
++static void prova_somma_gpu(void)
++{
++    struct winq_glspia s;
++
++    printf("somma GPU:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_somma_gpu(1500000);
++    winq_glspia_somma_gpu(500000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 2000000, "2 ms sommati come nanosecondi");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 2, "due campioni contati");
++}
++
++/* L'interruttore di finestra: acceso da winq_glspia_finestra_apri(), spento
++ * da winq_glspia_finestra_chiudi(). Non e' parte della fotografia che
++ * winq_glspia_leggi() restituisce e winq_glspia_azzera() ripulisce: e' lo
++ * stato del tratto cronometrato in corso, non un accumulo al secondo -- per
++ * questo qui non si passa da azzera()/leggi(), si legge solo
++ * winq_glspia_in_finestra(). */
++static void prova_finestra_flag(void)
++{
++    printf("interruttore di finestra:\n");
++
++    winq_glspia_finestra_chiudi();
++    esigi(!winq_glspia_in_finestra(), "chiusa: la lettura dice chiusa");
++
++    winq_glspia_finestra_apri();
++    esigi(winq_glspia_in_finestra(), "aperta: la lettura dice aperta");
++
++    winq_glspia_finestra_chiudi();
++    esigi(!winq_glspia_in_finestra(), "richiusa: la lettura torna a dire chiusa");
++}
++
++/* CORREZIONE DEL 11/08/2026: sul campo la raccolta reale ha detto che "fuori"
++ * e' il 62% del secondo (623,9 ms/s contro 19,0 ms/s dentro), ma essendo un
++ * unico contenitore diceva solo quanto, non cosa. Ora e' parallelo ai secchi
++ * dentro-finestra (WINQ_SPIA_GL/SHADER/FLUSH/FINISH/WAITSYNC): winq_glspia_aggiungi_fuori()
++ * prende un thread e un secchio come aggiungi(), e scrive in
++ * fuori_ns[thread][secchio]/fuori_chiamate[thread][secchio]. WINQ_SPIA_GPU
++ * non ha mai un campione fuori: le query GL_TIME_ELAPSED si aprono solo
++ * dentro la finestra (winq-glspia-gpu.c), quindi quella riga dell'array
++ * resta sempre zero, e non e' un caso da testare qui perche' nessun
++ * chiamante puo' produrlo. Non e' nemmeno un campione scartato: assurde
++ * resta a zero. */
++static void prova_aggiungi_fuori(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 150);    /* 50 tick = 50 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 0, 3000);     /* 3000 tick = 3 ms */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_SHADER, 0, 500);  /* 500 tick = 0,5 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 3050000, "GL fuori: 3,05 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 2, "GL fuori: due chiamate contate");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 500000, "SHADER fuori: 0,5 ms in nanosecondi");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 1, "SHADER fuori: una chiamata contata");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "WAITSYNC fuori: intatto, nessuna chiamata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "GL dentro-finestra: intatto, fuori e' parallelo");
++    esigi(s.assurde == 0, "fuori non e' un errore: nessuna assurda");
++}
++
++/* Stessa guardia di aggiungi() sull'orologio che torna indietro, ma qui un
++ * campione scartato non e' un errore da contare in assurde: e' lavoro fuori
++ * dalla finestra, e si ignora in silenzio senza toccare nessun contatore. */
++static void prova_aggiungi_fuori_orologio_indietro(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, orologio indietro:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 500, 400);
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
++}
++
++/* Stesso buco di prova_frequenza_non_impostata(), sull'altra funzione che
++ * divide per freq_hz. */
++static void prova_aggiungi_fuori_frequenza_non_impostata(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, frequenza non impostata:\n");
++    winq_glspia_freq_forza(0);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_GL, 100, 200);
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessun tempo accumulato senza frequenza");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "nessuna chiamata contata");
++    esigi(s.assurde == 0, "non e' un errore, quindi nessuna assurda");
++}
++
++/* Il secchio fuori intervallo non deve scrivere fuori dall'array
++ * fuori_ns[]/fuori_chiamate[]: stesso rischio di prova_secchio_invalido(),
++ * ora raddoppiato perche' i campi sono array e non piu' scalari. Qui un
++ * secchio invalido E' un errore di chi chiama (indice fuori bounds), non
++ * lavoro fuori perimetro: si conta come assurda, come in aggiungi(). */
++static void prova_aggiungi_fuori_secchio_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, secchio invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, -1, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_N + 99, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
++/* Come prova_thread_invalido(), ma per aggiungi_fuori(): l'array e' a due
++ * dimensioni anche qui. */
++static void prova_aggiungi_fuori_thread_invalido(void)
++{
++    struct winq_glspia s;
++
++    printf("fuori dalla finestra, thread invalido:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(-1, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_N, WINQ_SPIA_GL, 0, 1000);
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_N + 99, WINQ_SPIA_GL, 0, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 3, "tre scarti contati, nessuna scrittura fuori dall'array");
++}
++
++/* Il tempo CPU della finestra di decodifica, esportato nella struttura
++ * perche' QEMU lo usi al posto del proprio (piu' largo) nella sottrazione
++ * della riga di riepilogo -- vedi il commento nell'aggancio di
++ * vrend_decode.c. I nanosecondi arrivano gia' convertiti da
++ * winq_glspia_intervallo_ns(), quindi si sommano direttamente, come
++ * winq_glspia_somma_gpu(). */
++static void prova_somma_finestra(void)
++{
++    struct winq_glspia s;
++
++    printf("somma finestra:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_somma_finestra(1000000);
++    winq_glspia_somma_finestra(2000000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.finestra_ns == 3000000, "3 ms sommati come nanosecondi");
++}
++
++/* La lettura azzera anche i campi nuovi: la riga al secondo non deve vedere
++ * lavoro fuori-finestra o tempo di finestra di un secondo precedente. */
++static void prova_lettura_azzera_campi_nuovi(void)
++{
++    struct winq_glspia s;
++
++    printf("la lettura azzera anche i campi nuovi:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 1000);
++    winq_glspia_somma_finestra(500000);
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1000000, "prima lettura: fuori(WAITSYNC) 1 ms");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1, "prima lettura: una chiamata fuori(WAITSYNC)");
++    esigi(s.finestra_ns == 500000, "prima lettura: finestra 0,5 ms");
++
++    winq_glspia_leggi(&s);
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: fuori(WAITSYNC) azzerato");
++    esigi(s.fuori_chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 0, "seconda lettura: zero chiamate fuori(WAITSYNC)");
++    esigi(s.finestra_ns == 0, "seconda lettura: finestra azzerata");
++}
++
++/* TERZA CORREZIONE DELL'11/08/2026: ATTESA sommava glFlush, glFinish e
++ * glClientWaitSync in un solo secchio. Qui si verifica che i tre secchi
++ * nuovi (FLUSH/FINISH/WAITSYNC) siano davvero indipendenti fra loro e dai
++ * secchi preesistenti (GL/SHADER/GPU) -- il livello macro (winq-glspia.h) non
++ * e' provabile senza GL, ma l'array sottostante (ns[]/chiamate[], dimensionato
++ * su WINQ_SPIA_N) e' lo stesso che le macro useranno, quindi provarlo qui
++ * copre la parte che conta: che allungare l'enum non abbia fatto collidere
++ * due secchi sullo stesso indice. */
++static void prova_secchi_attesa_distinti(void)
++{
++    struct winq_glspia s;
++
++    printf("i tre secchi di attesa sono distinti:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_FLUSH, 0, 100);      /* 100 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_FINISH, 0, 200);     /* 200 us */
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 300);   /* 300 us */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] == 100000, "FLUSH: 100 us, non contaminato");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] == 200000, "FINISH: 200 us, non contaminato");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 300000, "WAITSYNC: 300 us, non contaminato");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FLUSH] == 1, "FLUSH: una chiamata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_FINISH] == 1, "FINISH: una chiamata");
++    esigi(s.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 1, "WAITSYNC: una chiamata");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GL] == 0, "GL: intatto");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_SHADER] == 0, "SHADER: intatto");
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] == 0, "GPU: intatto");
++}
++
++/* SONDA glGetError, aggiunta l'11/08/2026. Qui si prova solo la logica di
++ * armo/richiesta/registrazione in winq-glspia-conta.c: le chiamate GL vere
++ * (epoxy_glGetError() dentro gpu_apri()/gpu_chiudi()) vivono in
++ * winq-glspia-gpu.c, che tocca GL e per questo resta fuori da
++ * test-glspia.sh (vedi il commento in cima al file). */
++static void prova_sonda_richiesta_e_registrazione(void)
++{
++    struct winq_glspia s;
++
++    printf("sonda: richiesta, registrazione, disarmo:\n");
++    winq_glspia_azzera();
++    /* Stato di partenza noto: forza un ciclo completo cosi' il test non
++     * dipende da come sonda_armata era lasciata dalla prova precedente. */
++    winq_glspia_sonda_registra_inizio(0);
++    winq_glspia_sonda_registra_fine(0);
++    winq_glspia_leggi(&s);   /* scarta: serve solo a riarmare in modo noto */
++
++    esigi(winq_glspia_sonda_richiesta(), "armata dopo la lettura");
++
++    winq_glspia_sonda_registra_inizio(0);
++    esigi(winq_glspia_sonda_richiesta(),
++          "ancora armata dopo registra_inizio: fine() la disarma, non inizio()");
++
++    winq_glspia_sonda_registra_fine(0x0502);   /* GL_INVALID_OPERATION */
++    esigi(!winq_glspia_sonda_richiesta(), "disarmata dopo registra_fine");
++
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 1, "eseguita: vera");
++    esigi(s.sonda_errore_inizio == 0, "inizio: GL_NO_ERROR");
++    esigi(s.sonda_errore_fine == 0x0502, "fine: il codice passato a registra_fine");
++}
++
++/* Un ciclo senza nessuna registrazione deve leggersi come "non eseguita", non
++ * come "eseguita con successo" (i codici a zero sarebbero indistinguibili da
++ * GL_NO_ERROR senza sonda_eseguita) -- e azzera() deve davvero azzerare i tre
++ * campi, non lasciare i valori del ciclo precedente. */
++static void prova_sonda_azzerata_se_non_eseguita(void)
++{
++    struct winq_glspia s;
++
++    printf("sonda non eseguita: azzerata, non un residuo del ciclo prima:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_sonda_registra_inizio(0x0500);   /* GL_INVALID_ENUM */
++    winq_glspia_sonda_registra_fine(0x0501);     /* GL_INVALID_VALUE */
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 1, "primo ciclo: eseguita (per costruzione della prova)");
++
++    /* Secondo ciclo: la lettura sopra ha riarmato la richiesta, ma qui
++     * nessuno la consuma -- come un ciclo reale in cui nessun gpu_apri()
++     * arriva a aprire una query. */
++    winq_glspia_leggi(&s);
++    esigi(s.sonda_eseguita == 0, "secondo ciclo: non eseguita");
++    esigi(s.sonda_errore_inizio == 0, "secondo ciclo: inizio azzerato, non un residuo");
++    esigi(s.sonda_errore_fine == 0, "secondo ciclo: fine azzerata, non un residuo");
++}
++
++/* QUARTA CORREZIONE DELL'11/08/2026. winq_glspia_thread_forza()/thread_vero()
++ * rendono deterministico cio' che winq_glspia_thread_id() restituisce, senza
++ * dover creare un secondo thread vero: la prova base che il seme funziona. */
++static void prova_thread_id_forzato(void)
++{
++    printf("thread id forzato per le prove:\n");
++
++    winq_glspia_thread_forza(777);
++    esigi(winq_glspia_thread_id() == 777, "restituisce il valore forzato");
++
++    winq_glspia_thread_forza(42);
++    esigi(winq_glspia_thread_id() == 42, "cambia se forzato di nuovo");
++
++    winq_glspia_thread_vero();
++    esigi(winq_glspia_thread_id() != 777 && winq_glspia_thread_id() != 42,
++          "tornato al vero GetCurrentThreadId(), non piu' al valore forzato");
++    esigi(winq_glspia_thread_id() != 0, "il vero thread id non e' mai zero");
++}
++
++/* winq_glspia_finestra_apri() registra il thread principale SOLO alla prima
++ * chiamata: chiamate successive, anche da un "thread" (forzato) diverso, non
++ * lo devono riscrivere -- altrimenti un secondo thread che needlessly
++ * chiamasse questa funzione soppianterebbe quello vero. */
++static void prova_thread_registrazione_principale(void)
++{
++    struct winq_glspia s;
++
++    printf("registrazione del thread principale:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(1001);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 1001, "registrato alla prima chiamata");
++
++    /* Una "seconda" chiamata da un thread diverso (forzato): non deve
++     * cambiare chi e' il principale. */
++    winq_glspia_thread_forza(2002);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 1001, "non riscritto da una chiamata successiva");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il cuore della correzione: lo stesso thread che ha aperto la finestra e'
++ * WINQ_THREAD_PRINCIPALE, un thread diverso e' WINQ_THREAD_ALTRI -- e
++ * l'effetto collaterale di thread_indice() lo registra nel piccolo insieme. */
++static void prova_thread_indice_principale_e_altri(void)
++{
++    struct winq_glspia s;
++
++    printf("thread_indice: principale contro altri:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(5000);
++    winq_glspia_finestra_apri();   /* registra 5000 come principale */
++    winq_glspia_finestra_chiudi();
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_PRINCIPALE,
++          "lo stesso thread che ha aperto la finestra e' principale");
++
++    winq_glspia_thread_forza(6000);
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_ALTRI,
++          "un thread diverso e' altri");
++
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 5000, "il principale registrato e' 5000");
++    esigi(s.thread_altri_n == 1, "un solo altro thread visto");
++    esigi(s.thread_altri_id[0] == 6000, "il suo id e' 6000");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il piccolo insieme regge fino a WINQ_THREAD_TABELLA identita' distinte; un
++ * thread ulteriore, distinto, non trova posto e si conta in
++ * thread_altri_fuori_tabella -- senza scrivere fuori dall'array
++ * thread_altri_id[]. Un thread GIA' visto, richiamato dopo che la tabella e'
++ * piena, non deve incrementare fuori_tabella: e' riconosciuto dalla scansione
++ * prima di provare a inserirlo. */
++static void prova_thread_registro_tabella(void)
++{
++    struct winq_glspia s;
++    int i;
++
++    printf("registro degli altri thread: tabella e overflow:\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(1);
++    winq_glspia_finestra_apri();   /* thread 1 = principale */
++    winq_glspia_finestra_chiudi();
++
++    for (i = 0; i < WINQ_THREAD_TABELLA; i++) {
++        winq_glspia_thread_forza((uint64_t)(100 + i));
++        (void)winq_glspia_thread_indice();
++    }
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_n == WINQ_THREAD_TABELLA, "tabella piena: 8 altri thread distinti");
++    esigi(s.thread_altri_fuori_tabella == 0, "nessun overflow finche' la tabella non e' piena");
++
++    /* Un nono thread, distinto: non trova posto. */
++    winq_glspia_thread_forza(999);
++    esigi(winq_glspia_thread_indice() == WINQ_THREAD_ALTRI,
++          "resta 'altri' anche senza posto in tabella");
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_n == WINQ_THREAD_TABELLA, "il conteggio in tabella non supera 8");
++    esigi(s.thread_altri_fuori_tabella == 1, "un overflow contato");
++
++    /* Un thread GIA' in tabella (100), richiamato ora: riconosciuto dalla
++     * scansione, nessun NUOVO overflow. thread_altri_fuori_tabella e'
++     * persistente (leggi() non lo azzera, vedi prova_thread_registro_persiste):
++     * resta 1, quello del thread 999 sopra -- se la scansione non
++     * riconoscesse 100 diventerebbe 2. */
++    winq_glspia_thread_forza(100);
++    (void)winq_glspia_thread_indice();
++    winq_glspia_leggi(&s);
++    esigi(s.thread_altri_fuori_tabella == 1,
++          "un thread gia' noto non aggiunge un secondo overflow");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il registro (thread_principale, thread_altri_*) e' un'identita' di
++ * processo, non un accumulo al secondo: winq_glspia_azzera()/leggi() NON lo
++ * devono azzerare, a differenza di tutti gli altri campi della struct. Solo
++ * winq_glspia_thread_azzera_registro() (solo per le prove) lo fa. */
++static void prova_thread_registro_persiste(void)
++{
++    struct winq_glspia s;
++
++    printf("il registro dei thread persiste attraverso leggi()/azzera():\n");
++    winq_glspia_thread_azzera_registro();
++
++    winq_glspia_thread_forza(3003);
++    winq_glspia_finestra_apri();
++    winq_glspia_finestra_chiudi();
++    winq_glspia_thread_forza(4004);
++    (void)winq_glspia_thread_indice();
++
++    winq_glspia_azzera();   /* azzera i secchi, non deve toccare il registro */
++    winq_glspia_leggi(&s);
++    esigi(s.thread_principale == 3003, "principale intatto dopo azzera()/leggi()");
++    esigi(s.thread_altri_n == 1, "altri visti intatti dopo azzera()/leggi()");
++    esigi(s.thread_altri_id[0] == 4004, "il loro id e' intatto");
++
++    winq_glspia_leggi(&s);   /* una seconda lettura, stesso discorso */
++    esigi(s.thread_principale == 3003, "principale intatto anche alla seconda lettura");
++    esigi(s.thread_altri_n == 1, "altri visti intatti anche alla seconda lettura");
++
++    winq_glspia_thread_azzera_registro();
++    winq_glspia_thread_vero();
++}
++
++/* Il cuore della quarta correzione: dentro/altri e fuori/altri sono secchi
++ * indipendenti da dentro/principale e fuori/principale. Un thread "altri"
++ * che accumula non deve toccare le celle del principale, e viceversa --
++ * altrimenti la contaminazione che questa correzione esiste per rivelare
++ * sarebbe ancora invisibile, solo spostata. */
++static void prova_dentro_e_fuori_per_thread_indipendenti(void)
++{
++    struct winq_glspia s;
++
++    printf("dentro/altri e fuori/altri non contaminano il principale:\n");
++    winq_glspia_freq_forza(1000000);
++    winq_glspia_azzera();
++
++    winq_glspia_aggiungi(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 100);       /* 100 us */
++    winq_glspia_aggiungi(WINQ_THREAD_ALTRI, WINQ_SPIA_WAITSYNC, 0, 900);            /* 900 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_PRINCIPALE, WINQ_SPIA_WAITSYNC, 0, 50);  /* 50 us */
++    winq_glspia_aggiungi_fuori(WINQ_THREAD_ALTRI, WINQ_SPIA_WAITSYNC, 0, 950);      /* 950 us */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 100000,
++          "dentro/principale: 100 us, non contaminato da altri");
++    esigi(s.ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] == 900000,
++          "dentro/altri: 900 us, non nel secchio del principale");
++    esigi(s.fuori_ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_WAITSYNC] == 50000,
++          "fuori/principale: 50 us, non contaminato da altri");
++    esigi(s.fuori_ns[WINQ_THREAD_ALTRI][WINQ_SPIA_WAITSYNC] == 950000,
++          "fuori/altri: 950 us, non nel secchio del principale");
++}
++
++/* QUINTA CORREZIONE DELL'11/08/2026: winq_glspia_ctx_richiesto()/ctx_vero()
++ * sono incrementi banali (un confronto sui bordi, poi ++ o +=) -- non c'e'
++ * comportamento interessante da provare oltre a "scrivono nella casella
++ * giusta" e "un indice invalido non scrive fuori dall'array". Non invento
++ * prove piu' elaborate di quello che il codice fa davvero: la logica vera di
++ * questo giro (dove vrend_hw_switch_context() classifica l'origine e quando
++ * chiama davvero make_current) vive in vrend_renderer.c, tocca GL/vrend, e
++ * resta fuori da test-glspia.sh per lo stesso motivo di sempre -- vedi il
++ * commento in cima al file. */
++static void prova_ctx_richiesto_e_vero(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: richiesto e vero, per origine:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_richiesto(WINQ_CTX_ALTRO);
++    winq_glspia_ctx_vero(WINQ_CTX_FORCE0, 1000000);   /* 1 ms */
++    winq_glspia_ctx_vero(WINQ_CTX_ALTRO, 250000);     /* 0,25 ms */
++
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 2, "FORCE0: due richieste");
++    esigi(s.ctx_richiesti[WINQ_CTX_ALTRO] == 1, "ALTRO: una richiesta, non contaminata da FORCE0");
++    esigi(s.ctx_veri[WINQ_CTX_FORCE0] == 1, "FORCE0: un switch vero");
++    esigi(s.ctx_veri[WINQ_CTX_ALTRO] == 1, "ALTRO: un switch vero, non contaminato da FORCE0");
++    esigi(s.ctx_ns[WINQ_CTX_FORCE0] == 1000000, "FORCE0: 1 ms cumulativo");
++    esigi(s.ctx_ns[WINQ_CTX_ALTRO] == 250000, "ALTRO: 0,25 ms cumulativo");
++    esigi(s.assurde == 0, "nessuna assurda su un origine valido");
++}
++
++/* Stesso rischio di ogni altro indice in questa struttura: un'origine fuori
++ * bounds deve scartarsi come assurda, non scrivere fuori da ctx_richiesti[]/
++ * ctx_veri[]/ctx_ns[]. */
++static void prova_ctx_origine_invalida(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: origine invalida:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(-1);
++    winq_glspia_ctx_richiesto(WINQ_CTX_N);
++    winq_glspia_ctx_vero(-1, 1000);
++    winq_glspia_ctx_vero(WINQ_CTX_N + 99, 1000);
++
++    winq_glspia_leggi(&s);
++    esigi(s.assurde == 4, "quattro scarti contati, nessuna scrittura fuori dall'array");
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 0, "FORCE0 intatto");
++    esigi(s.ctx_richiesti[WINQ_CTX_ALTRO] == 0, "ALTRO intatto");
++}
++
++/* leggi()/azzera() devono ripulire anche questi tre campi: sono un accumulo
++ * al secondo come ns[]/chiamate[], non un registro persistente come
++ * thread_principale/thread_altri_*. */
++static void prova_ctx_azzerato_da_leggi(void)
++{
++    struct winq_glspia s;
++
++    printf("switch di contesto: azzerato dalla lettura:\n");
++    winq_glspia_azzera();
++
++    winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++    winq_glspia_ctx_vero(WINQ_CTX_FORCE0, 500000);
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 1, "prima lettura: una richiesta");
++
++    winq_glspia_leggi(&s);
++    esigi(s.ctx_richiesti[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++    esigi(s.ctx_veri[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++    esigi(s.ctx_ns[WINQ_CTX_FORCE0] == 0, "seconda lettura: azzerato");
++}
++
++int main(void)
++{
++    prova_accumulo();
++    prova_intervallo_negativo();
++    prova_lettura_azzera();
++    prova_secchio_invalido();
++    prova_thread_invalido();
++    prova_taratura();
++    prova_costo_thread_id();
++    prova_frequenza_non_impostata();
++    prova_taratura_frequenza_non_impostata();
++    prova_intervallo_ns();
++    prova_somma_gpu();
++    prova_finestra_flag();
++    prova_aggiungi_fuori();
++    prova_aggiungi_fuori_orologio_indietro();
++    prova_aggiungi_fuori_frequenza_non_impostata();
++    prova_aggiungi_fuori_secchio_invalido();
++    prova_aggiungi_fuori_thread_invalido();
++    prova_somma_finestra();
++    prova_lettura_azzera_campi_nuovi();
++    prova_secchi_attesa_distinti();
++    prova_sonda_richiesta_e_registrazione();
++    prova_sonda_azzerata_se_non_eseguita();
++    prova_thread_id_forzato();
++    prova_thread_registrazione_principale();
++    prova_thread_indice_principale_e_altri();
++    prova_thread_registro_tabella();
++    prova_thread_registro_persiste();
++    prova_dentro_e_fuori_per_thread_indipendenti();
++    prova_ctx_richiesto_e_vero();
++    prova_ctx_origine_invalida();
++    prova_ctx_azzerato_da_leggi();
++
++    if (falliti) {
++        printf("\n%d PROVE FALLITE\n", falliti);
++        return 1;
++    }
++    printf("\ntutte le prove passate\n");
++    return 0;
++}
+diff --git a/src/virgl_util.c b/src/virgl_util.c
+index be2903f..d5c71dd 100644
+--- a/src/virgl_util.c
++++ b/src/virgl_util.c
+@@ -102,30 +102,100 @@ bool has_eventfd(void)
+ #endif
+ }
+ 
++#ifdef _WIN32
++/*
++ * Emulazione di eventfd su Windows.
++ *
++ * L'implementazione precedente avvolgeva un HANDLE di Event in un
++ * descrittore con _open_osfhandle. Non puo' funzionare: la UCRT chiama
++ * GetFileType sull'handle, per un Event ottiene FILE_TYPE_UNKNOWN con
++ * ERROR_INVALID_HANDLE, e rifiuta con EBADF. Verificato in isolamento su
++ * Windows 11 ARM64 con UCRT: _open_osfhandle su un Event ritorna sempre -1.
++ * Di conseguenza create_eventfd falliva sempre, e con essa ogni percorso
++ * che dipende da VIRGL_RENDERER_THREAD_SYNC — che QEMU imposta da se',
++ * senza modo di disattivarlo.
++ *
++ * Qui l'HANDLE non viene travestito da descrittore: sta in una tabella e
++ * il valore restituito e' un indice riconoscibile. I chiamanti continuano a
++ * maneggiare un int, come su Linux, ma non lo passano piu' a funzioni della
++ * CRT: per chiuderlo c'e' close_eventfd, per ottenere l'HANDLE
++ * eventfd_handle.
++ *
++ * L'allocazione degli slot e' senza lock, con InterlockedCompareExchange
++ * su ciascuno: evita di dover inizializzare un mutex prima del primo uso,
++ * cosa che in questo file non avrebbe un punto naturale in cui avvenire.
++ *
++ * Il valore restituito e' >= 0 e ben oltre qualunque descrittore reale,
++ * perche' il codice esistente usa `fd >= 0` e `fd != -1` come test di
++ * validita' e li deve continuare a superare.
++ */
++#define VIRGL_EVENTFD_BASE 0x10000000
++#define VIRGL_EVENTFD_MAX  256
++
++static PVOID virgl_eventfd_table[VIRGL_EVENTFD_MAX];
++
++static bool virgl_is_eventfd(int fd)
++{
++   return fd >= VIRGL_EVENTFD_BASE &&
++          fd < VIRGL_EVENTFD_BASE + VIRGL_EVENTFD_MAX;
++}
++
++void *eventfd_handle(int fd)
++{
++   if (!virgl_is_eventfd(fd))
++      return NULL;
++   return virgl_eventfd_table[fd - VIRGL_EVENTFD_BASE];
++}
++#endif /* _WIN32 */
++
+ int create_eventfd(unsigned int initval)
+ {
+ #ifdef HAVE_EVENTFD_H
+    return eventfd(initval, EFD_CLOEXEC | EFD_NONBLOCK);
+ #elif defined(_WIN32)
++   /* Manual reset: flush_eventfd deve poter azzerare esplicitamente lo
++    * stato, come fa la read su un eventfd Linux. */
+    HANDLE event = CreateEventA(NULL, TRUE, initval ? TRUE : FALSE, NULL);
+    if (!event)
+       return -1;
+-   int fd = _open_osfhandle((intptr_t)event, 0);
+-   if (fd < 0)
+-      CloseHandle(event);
+-   return fd;
++
++   for (int i = 0; i < VIRGL_EVENTFD_MAX; i++) {
++      if (!InterlockedCompareExchangePointer(&virgl_eventfd_table[i],
++                                             event, NULL))
++         return VIRGL_EVENTFD_BASE + i;
++   }
++
++   /* Tabella piena: nessuno slot libero. Meglio fallire che perdere
++    * l'handle. */
++   CloseHandle(event);
++   return -1;
+ #else
+    (void)initval;
+    return -1;
+ #endif
+ }
+ 
++void close_eventfd(int fd)
++{
++#ifdef _WIN32
++   if (!virgl_is_eventfd(fd))
++      return;
++   HANDLE event = InterlockedExchangePointer(
++      &virgl_eventfd_table[fd - VIRGL_EVENTFD_BASE], NULL);
++   if (event)
++      CloseHandle(event);
++#else
++   if (fd >= 0)
++      close(fd);
++#endif
++}
++
+ int write_eventfd(int fd, uint64_t val)
+ {
+ #ifdef _WIN32
+    (void)val;
+-   HANDLE event = (HANDLE)_get_osfhandle(fd);
+-   if (event == INVALID_HANDLE_VALUE)
++   HANDLE event = eventfd_handle(fd);
++   if (!event)
+       return -1;
+    return SetEvent(event) ? 0 : -1;
+ #else
+@@ -151,8 +221,8 @@ int write_eventfd(int fd, uint64_t val)
+ void flush_eventfd(int fd)
+ {
+ #ifdef _WIN32
+-   HANDLE event = (HANDLE)_get_osfhandle(fd);
+-   if (event != INVALID_HANDLE_VALUE)
++   HANDLE event = eventfd_handle(fd);
++   if (event)
+       ResetEvent(event);
+ #else
+     ssize_t len;
+diff --git a/src/virgl_util.h b/src/virgl_util.h
+index a4fb7c7..3dbbd1b 100644
+--- a/src/virgl_util.h
++++ b/src/virgl_util.h
+@@ -70,6 +70,24 @@ int create_eventfd(unsigned int initval);
+ int write_eventfd(int fd, uint64_t val);
+ void flush_eventfd(int fd);
+ 
++/*
++ * Il valore restituito da create_eventfd va chiuso con questa, non con
++ * close() ne' os_close_fd(): su Windows non e' un descrittore della CRT ma
++ * l'indice di un HANDLE in una tabella interna. Su POSIX equivale a
++ * close().
++ */
++void close_eventfd(int fd);
++
++#ifdef _WIN32
++/*
++ * HANDLE associato a un eventfd, per i chiamanti che devono attenderlo con
++ * le primitive Win32. Ritorna NULL se il descrittore non viene da
++ * create_eventfd. Dichiarato void* per non tirare windows.h in questo
++ * header.
++ */
++void *eventfd_handle(int fd);
++#endif
++
+ /*
+  * Returns true once WINQ_DIAG=1 (or any non-empty, non-"0" value) has been
+  * observed in the environment. Modules that have their own VIRGL_*_DIAG
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index d2f928e..3a6d1fc 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -291,12 +291,28 @@ void virgl_renderer_context_destroy(uint32_t handle)
+    virgl_context_remove(handle);
+ }
+ 
++/* CORREZIONE POST-REVIEW: l'aggancio alla query GL_TIME_ELAPSED (apri/chiudi)
++ * che stava qui e' stato spostato dentro vrend_decode_ctx_submit_cmd
++ * (research/winq-virgl/src/vrend/vrend_decode.c), subito dopo che
++ * vrend_hw_switch_context() ha reso corrente il contesto GL del vrend_context
++ * di destinazione. Da qui, il cambio di contesto avviene DENTRO
++ * ctx->submit_cmd(): aprire la query prima di chiamarlo -- come faceva
++ * questa funzione -- significa aprirla sul contesto lasciato corrente dalla
++ * submit PRECEDENTE, non su quello che sta per eseguire i comandi (mai, alla
++ * primissima chiamata del processo). Percio' questa funzione e' tornata a
++ * essere il semplice inoltro che era prima di quell'aggancio: nessun'altra
++ * ragione per estrarne il corpo in una funzione a se' (vedi il commento in
++ * cima a vrend_decode_ctx_submit_cmd per dove vive ora la garanzia sui
++ * quattro punti di uscita). */
+ int virgl_renderer_submit_cmd(void *buffer,
+                               int ctx_id,
+                               int ndw)
+ {
++   struct virgl_context *ctx;
++
+    TRACE_FUNC();
+-   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
++
++   ctx = virgl_context_lookup(ctx_id);
+    if (!ctx)
+       return EINVAL;
+ 
+@@ -684,10 +700,34 @@ static int make_current_surfaceless(virgl_renderer_gl_context ctx)
+       return vrend_winsys_make_context_current(ctx);
+ 
+    ret = state.cbs->make_current(state.cookie, 0, ctx);
+-   if (ret && state.cbs->version >= 4) {
++   if (ret) {
++      /* IL FALLIMENTO SI PROPAGA SEMPRE, non solo da versione 4 in su.
++       *
++       * Prima, con callback a versione < 4, questa funzione restituiva 0 --
++       * cioe' "riuscito" -- anche quando make_current era fallita, e senza
++       * stampare niente. Su WGL la versione delle callback resta 3
++       * deliberatamente (vedi il commento in hw/display/virtio-gpu-virgl.c:
++       * a 4 l'assert qui sotto farebbe abortire QEMU), quindi su questa
++       * piattaforma il fallimento era invisibile per costruzione, e nessun
++       * controllo del chiamante poteva vederlo.
++       *
++       * Perche' importa: l'unico chiamante che lo controlla e' thread_sync()
++       * (vrend_renderer.c). Un thread di sync che parte SENZA contesto GL
++       * corrente non fallisce in modo rumoroso -- glClientWaitSync senza
++       * contesto restituisce zero, che non e' GL_TIMEOUT_EXPIRED, quindi
++       * do_wait() conclude "fence pronta" e la ritira subito. Tutte le fence
++       * verrebbero ritirate all'istante: il guest crederebbe che la GPU
++       * abbia finito quando non ha finito, e il sintomo sarebbe a schermo,
++       * non nel registro.
++       *
++       * L'assert resta legato alla versione: abortire e' una decisione che
++       * appartiene a chi ha dichiarato di poterla reggere. Restituire un
++       * errore, no. */
+       virgl_error("%s: Error switching surfaceless context: %d\n",
+                   __func__, ret);
+-      assert(!ret && "Failed to switch GL context");
++      if (state.cbs->version >= 4) {
++         assert(!ret && "Failed to switch GL context");
++      }
+       return -1;
+    }
+ 
+diff --git a/src/vrend/vrend_decode.c b/src/vrend/vrend_decode.c
+index 7774a25..9213597 100644
+--- a/src/vrend/vrend_decode.c
++++ b/src/vrend/vrend_decode.c
+@@ -38,6 +38,7 @@
+ #include "vrend_object.h"
+ #include "tgsi/tgsi_text.h"
+ #include "vrend_debug.h"
++#include "winq-glspia-conta.h"
+ #include "vrend_tweaks.h"
+ #include "virgl_util.h"
+ 
+@@ -2053,11 +2054,15 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+    TRACE_FUNC();
+    struct vrend_decode_ctx *gdctx = (struct vrend_decode_ctx *)ctx;
+    bool bret;
+-   int ret;
++   int ret = 0;
++   uint64_t t0, t1;
+ 
+ #define TRANSFER_HEADER_SIZE 4096
+ 
+-   bret = vrend_hw_switch_context(gdctx->grctx, true);
++   /* WINQ_CTX_ALTRO: il percorso di decodifica, non force_ctx_0() -- vedi
++    * il commento sopra vrend_hw_switch_context() in vrend_renderer.c per
++    * la classificazione completa (QUINTA CORREZIONE dell'11/08/2026). */
++   bret = vrend_hw_switch_context(gdctx->grctx, WINQ_CTX_ALTRO, true);
+    if (bret == false)
+       return EINVAL;
+ 
+@@ -2068,6 +2073,42 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+                                   size - TRANSFER_HEADER_SIZE);
+    }
+ 
++   /* CORREZIONE POST-REVIEW: qui, e solo qui, il contesto GL e' garantito
++    * essere quello giusto. vrend_hw_switch_context() qui sopra e' arrivato
++    * fino a vrend_finish_context_switch() (vrend_renderer.c), che ha gia'
++    * fatto vrend_clicbs->make_current(ctx->sub->gl_context) se un cambio
++    * serviva -- e i comandi del buffer, decodificati dal ciclo sotto, non
++    * sono ancora stati eseguiti. Prima di questo punto (come faceva la
++    * versione precedente, dentro virgl_renderer_submit_cmd in
++    * virglrenderer.c, chiamata PRIMA di arrivare fin qui) il contesto
++    * corrente e' ancora quello lasciato dalla submit precedente, non quello
++    * che sta per lavorare: glBeginQuery finirebbe sul contesto sbagliato, o
++    * su nessuno alla primissima chiamata del processo. Percio' l'apertura e
++    * la chiusura della query GL_TIME_ELAPSED avvolgono da qui il ciclo di
++    * decodifica, non il corpo di virgl_renderer_submit_cmd.
++    *
++    * t_cpu per la banda di plausibilita' (winq-glspia-gpu.c) e' misurato
++    * qui, non nel chiamante esterno: e' l'unico consumatore di questo
++    * numero, e deve coprire esattamente il tratto che la query GL
++    * cronometra, non un intervallo piu' largo che includerebbe anche la
++    * validazione fatta da virgl_renderer_submit_cmd prima di arrivare al
++    * vero submit_cmd del contesto.
++    *
++    * CORREZIONE DELL'11/08/2026: winq_glspia_finestra_apri() alza qui lo
++    * stesso interruttore che le macro di winq-glspia.h leggono a ogni
++    * chiamata GL avvolta (winq_glspia_in_finestra()), sugli stessi confini
++    * di winq_glspia_gpu_apri()/gpu_chiudi() qui sotto -- non a caso: e' la
++    * stessa garanzia sul contesto GL corrente che ha spostato quell'aggancio
++    * qui (vedi il commento sopra). Senza questo interruttore i wrapper
++    * contavano ogni chiamata GL avvolta come se fosse dentro "cpu", ma
++    * virglrenderer ne chiama molte fuori da questo ciclo (attesa sulle
++    * fence, trasferimenti, creazione di oggetti): quel tempo finiva
++    * comunque nei secchi, sottratto da un "cpu" che non lo includeva mai --
++    * la causa della maggioranza dei campioni con virgl=0. */
++   winq_glspia_finestra_apri();
++   winq_glspia_gpu_apri();
++   t0 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
++
+    const uint32_t *typed_buf = (const uint32_t *)buffer;
+    const uint32_t buf_total = (uint32_t)(size / sizeof(uint32_t));
+    uint32_t buf_offset = 0;
+@@ -2078,8 +2119,10 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+       uint32_t len = *buf >> 16;
+       uint32_t cmd = *buf & 0xff;
+ 
+-      if (cmd >= VIRGL_MAX_COMMANDS)
+-         return EINVAL;
++      if (cmd >= VIRGL_MAX_COMMANDS) {
++         ret = EINVAL;
++         goto out;
++      }
+ 
+       buf_offset += len + 1;
+ 
+@@ -2103,10 +2146,38 @@ static int vrend_decode_ctx_submit_cmd(struct virgl_context *ctx,
+                gdctx->base.ctx_id, vrend_get_comand_name(cmd), ret);
+          if (ret == EINVAL)
+             vrend_report_buffer_error(gdctx->grctx, *buf);
+-         return ret;
++         goto out;
+       }
+    }
+-   return 0;
++   ret = 0;
++
++out:
++   /* Un solo punto di chiusura per tutte le uscite del ciclo (il return
++    * anticipato su comando invalido, il return sull'errore di dispatch, e il
++    * completamento normale): un chiudi dimenticato su uno di questi rami
++    * lascerebbe la query GL_TIME_ELAPSED aperta per sempre, e ogni
++    * glBeginQuery successivo su questo contesto fallirebbe in silenzio
++    * (vedi il commento in cima a winq-glspia-gpu.c). Per lo stesso motivo
++    * winq_glspia_finestra_chiudi() sta qui e non in un secondo punto: un
++    * interruttore lasciato acceso farebbe contare come "dentro" anche il
++    * lavoro GL della submit successiva, prima che la sua finestra si apra. */
++   {
++      uint64_t finestra_ns;
++
++      t1 = winq_glspia_accesa() ? winq_glspia_ora() : 0;
++      finestra_ns = winq_glspia_intervallo_ns(t0, t1);
++
++      /* finestra_ns e' lo stesso numero passato alla banda di plausibilita'
++       * di gpu_chiudi() qui sotto: e' il tempo CPU dello stesso tratto che i
++       * secchi GL/SHADER/ATTESA misurano. Esportato nella struttura perche'
++       * QEMU lo usi come denominatore della sottrazione (§4 del brief),
++       * invece del proprio "cpu" misurato attorno a virgl_renderer_submit_cmd,
++       * che e' piu' largo di questo ciclo. */
++      winq_glspia_somma_finestra(finestra_ns);
++      winq_glspia_gpu_chiudi(finestra_ns);
++   }
++   winq_glspia_finestra_chiudi();
++   return ret;
+ }
+ 
+ static int vrend_decode_ctx_get_fencing_fd(UNUSED struct virgl_context *ctx)
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 562efdc..bcc8dc9 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -54,6 +54,7 @@
+ #include "vrend_debug.h"
+ #include "vrend_winsys.h"
+ #include "vrend_blitter.h"
++#include "winq-glspia-conta.h"
+ 
+ #include "virgl_util.h"
+ 
+@@ -887,7 +888,12 @@ static void vrend_pause_render_condition(struct vrend_context *ctx, bool pause);
+ static void vrend_update_viewport_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_update_scissor_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_destroy_query_object(void *obj_ptr);
+-static void vrend_finish_context_switch(struct vrend_context *ctx);
++/* QUINTA CORREZIONE DELL'11/08/2026: restituisce se ha chiamato davvero
++ * vrend_clicbs->make_current() (true) o e' tornata subito perche' non
++ * serviva (false) -- vedi il commento sopra vrend_hw_switch_context() per
++ * come questo distingue "switch vero" da "switch saltato" nella
++ * diagnostica. */
++static bool vrend_finish_context_switch(struct vrend_context *ctx);
+ static void vrend_patch_blend_state(struct vrend_sub_context *sub_ctx);
+ static void vrend_update_frontface_state(struct vrend_sub_context *ctx);
+ static void vrend_destroy_program(struct vrend_linked_shader_program *ent);
+@@ -7398,6 +7404,25 @@ static void wait_sync(struct vrend_fence *fence)
+       mtx_unlock(&vrend_state.poll_mutex);
+ }
+ 
++/* Esito dell'avvio del thread di sync, per la stretta di mano con
++ * vrend_renderer_use_threaded_sync(): 0 = in corso, 1 = pronto, -1 = fallito.
++ *
++ * PERCHE' UNA STRETTA DI MANO E NON UN RITORNO MUTO. Se il thread esce dopo
++ * essere stato creato, u_thread_create ha comunque avuto successo:
++ * vrend_state.sync_thread resta non nullo, il ripiego di :7500 non scatta, e
++ * use_async_fence_cb resta VERO. Il ciclo principale prenderebbe allora il
++ * ramo asincrono di vrend_renderer_poll(), che non ritira nessuna fence --
++ * e nessun altro le ritira, perche' il thread che doveva farlo e' morto.
++ * Il guest si pianta, in silenzio, senza una riga nel registro che colleghi
++ * il sintomo alla causa. Il creatore deve sapere se il thread e' vivo prima
++ * di lasciare che il resto del programma ci conti sopra.
++ *
++ * Si protegge con fence_mutex e si annuncia con fence_cond, che esistono gia'
++ * e sono gli stessi che il thread usa subito dopo: nessuna primitiva nuova, e
++ * il predicato si legge sotto il lock, quindi un annuncio arrivato prima che
++ * il creatore si metta ad aspettare non va perso. */
++static int vrend_sync_avvio;
++
+ static int thread_sync(UNUSED void *arg)
+ {
+    virgl_gl_context gl_context = vrend_state.sync_context;
+@@ -7405,7 +7430,41 @@ static int thread_sync(UNUSED void *arg)
+    u_thread_setname("vrend-sync");
+ 
+    mtx_lock(&vrend_state.fence_mutex);
+-   vrend_clicbs->make_current_surfaceless(gl_context);
++
++   /* IL RITORNO SI CONTROLLA, e non e' pedanteria: senza questo un
++    * make_current fallito qui e' SILENZIOSO.
++    *
++    * virglrenderer ha gia' un assert su questo ritorno (virglrenderer.c,
++    * dentro virgl_renderer_make_current), ma scatta solo con le callback a
++    * versione >= 4. Su WGL la versione resta 3 -- deliberatamente, vedi il
++    * commento in hw/display/virtio-gpu-virgl.c -- quindi quell'assert non
++    * copre questo percorso. E in una build release b_ndebug spegne comunque
++    * gli assert.
++    *
++    * Senza contesto corrente, il glClientWaitSync di do_wait() piu' sotto
++    * non fallisce in modo rumoroso: epoxy risolve l'entry point sul contesto
++    * corrente, e senza contesto o aborta o restituisce zero -- e zero non e'
++    * GL_TIMEOUT_EXPIRED, quindi do_wait() conclude "fence pronta" e la
++    * ritira. Le fence verrebbero ritirate tutte all'istante, il guest
++    * vedrebbe "la GPU ha finito" quando non ha finito, e il sintomo sarebbe
++    * a schermo (tearing, frame vecchi, HUD) invece che nel registro.
++    *
++    * Meglio un thread che non parte e un errore leggibile: chi chiama torna
++    * al ramo sincrono, che e' lento ma corretto. */
++   if (vrend_clicbs->make_current_surfaceless(gl_context) != 0) {
++      virgl_error("sync thread: make_current_surfaceless failed, "
++                  "il thread esce -- si resta sul ritiro fence sincrono\n");
++      vrend_sync_avvio = -1;
++      cnd_broadcast(&vrend_state.fence_cond);
++      mtx_unlock(&vrend_state.fence_mutex);
++      return 0;
++   }
++
++   /* Riuscito: lo si dice al creatore, che sta aspettando questo. La
++    * cnd_wait del ciclo qui sotto rilascia il mutex, quindi il creatore puo'
++    * prenderlo e proseguire. */
++   vrend_sync_avvio = 1;
++   cnd_broadcast(&vrend_state.fence_cond);
+ 
+    while (!vrend_state.stop_sync_thread) {
+       if (list_is_empty(&vrend_state.fence_wait_list) &&
+@@ -7464,9 +7523,32 @@ static void vrend_renderer_use_threaded_sync(void)
+ 
+    assert(!vrend_state.sync_thread);
+ 
++   vrend_sync_avvio = 0;
+    vrend_state.sync_thread = u_thread_create(thread_sync, NULL);
++
++   /* Si aspetta che il thread dica se e' riuscito a rendere corrente il
++    * proprio contesto GL. Vedi il commento sopra vrend_sync_avvio: senza
++    * questa attesa un thread nato e morto subito lascerebbe il ritiro delle
++    * fence a nessuno. L'attesa dura quanto una make_current, una volta per
++    * processo. */
++   if (vrend_state.sync_thread) {
++      mtx_lock(&vrend_state.fence_mutex);
++      while (vrend_sync_avvio == 0) {
++         cnd_wait(&vrend_state.fence_cond, &vrend_state.fence_mutex);
++      }
++      mtx_unlock(&vrend_state.fence_mutex);
++
++      if (vrend_sync_avvio < 0) {
++         /* Il thread e' gia' uscito da se': si raccoglie e si azzera, cosi'
++          * il ripiego qui sotto e' lo STESSO percorso gia' collaudato del
++          * caso "u_thread_create ha fallito" -- un solo smontaggio, non due. */
++         thrd_join(vrend_state.sync_thread, NULL);
++         vrend_state.sync_thread = 0;
++      }
++   }
++
+    if (!vrend_state.sync_thread) {
+-      close(vrend_state.eventfd);
++      close_eventfd(vrend_state.eventfd);
+       vrend_state.eventfd = -1;
+       vrend_clicbs->destroy_gl_context_surfaceless(vrend_state.sync_context);
+       cnd_destroy(&vrend_state.fence_cond);
+@@ -7819,7 +7901,7 @@ vrend_renderer_fini(void)
+    vrend_state.finishing = true;
+ 
+    if (vrend_state.eventfd != -1) {
+-      close(vrend_state.eventfd);
++      close_eventfd(vrend_state.eventfd);
+       vrend_state.eventfd = -1;
+    }
+ 
+@@ -8016,8 +8098,10 @@ void vrend_destroy_context(struct vrend_context *ctx)
+ 
+    FREE(ctx);
+ 
++   /* WINQ_CTX_ALTRO: ripristino del contesto precedente dopo una distruzione,
++    * non force_ctx_0(). */
+    if (!switch_0 && cur)
+-      vrend_hw_switch_context(cur, true);
++      vrend_hw_switch_context(cur, WINQ_CTX_ALTRO, true);
+ }
+ 
+ struct vrend_context *vrend_create_context(int id, uint32_t nlen, const char *debug_name)
+@@ -10024,7 +10108,8 @@ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
+    if (!info->box)
+       return EINVAL;
+ 
+-   if (!vrend_hw_switch_context(ctx, true))
++   /* WINQ_CTX_ALTRO: i trasferimenti, non force_ctx_0(). */
++   if (!vrend_hw_switch_context(ctx, WINQ_CTX_ALTRO, true))
+       return EINVAL;
+ 
+    assert(check_transfer_iovec(res, info));
+@@ -11634,11 +11719,74 @@ static void vrend_renderer_check_queries(void)
+                 !list_is_empty(&vrend_state.waiting_query_list));
+ }
+ 
+-bool vrend_hw_switch_context(struct vrend_context *ctx, bool now)
+-{
++/* QUINTA CORREZIONE DELL'11/08/2026, dietro WINQ_GPU_DIAG: il primo
++ * consumatore del ciclo principale, misurato con la finestra e il thread
++ * corretti (i giri precedenti), non era SUBMIT_3D ma 0x202
++ * CTX_ATTACH_RESOURCE -- 923 us/chiamata contro 231 del detach, pur
++ * facendo lo stesso lavoro O(1) in tabella hash (vrend_ctx_resource_insert,
++ * niente scansioni, niente lock: l'ipotesi del lock condiviso col thread
++ * delle fence e' stata verificata e respinta, fence_mutex si rilascia prima
++ * di glClientWaitSync).
++ *
++ * Il sospetto, dedotto dal codice: virgl_renderer_force_ctx_0() (chiamata
++ * da QEMU incondizionatamente prima di OGNI comando,
++ * virtio_gpu_virgl_process_cmd, hw/display/virtio-gpu-virgl.c:1471) passa
++ * per vrend_renderer_force_ctx_0() (sotto in questo file), che azzera
++ * vrend_state.current_ctx/current_hw_ctx PRIMA di chiedere lo switch a
++ * ctx0. La scorciatoia qui sotto ("e' gia' il contesto giusto, non fare
++ * niente") non puo' quindi mai scattare per una richiesta arrivata da li':
++ * ogni chiamata da force_ctx_0() arriva sempre a
++ * vrend_finish_context_switch(), che arriva sempre a
++ * vrend_clicbs->make_current() -- anche quando il contesto GL a livello di
++ * sistema operativo era gia' quello giusto. L'asimmetria attach/detach si
++ * spiegherebbe con l'ordine dei comandi: SUBMIT_3D commuta al contesto
++ * dell'app (vrend_decode_ctx_submit_cmd), l'attach subito dopo trova
++ * quell'altro contesto e il suo force_ctx_0() paga lo switch vero verso
++ * ctx0, il detach lo trova gia' li' e il suo force_ctx_0() ritorna in
++ * fretta (anche se, come appena detto, "ritorna in fretta" e' una
++ * questione di wglMakeCurrent lato sistema operativo, non della
++ * scorciatoia qui sotto: quella e' comunque saltata da entrambi).
++ *
++ * DEDOTTO, NON MISURATO -- questo e' il conteggio che lo confermerebbe o lo
++ * smentirebbe. Origine (WINQ_CTX_FORCE0 contro WINQ_CTX_ALTRO) e' un
++ * parametro nuovo su questa funzione: e' interna al fork (dichiarata in
++ * vrend_renderer.h, non nella API pubblica virglrenderer.h), quindi
++ * aggiungerlo non tocca il confine con QEMU. I cinque chiamanti:
++ *   - vrend_decode.c:2062 (vrend_decode_ctx_submit_cmd, il percorso di
++ *     decodifica) -> WINQ_CTX_ALTRO;
++ *   - vrend_renderer.c, dentro vrend_destroy_context() (il ripristino del
++ *     contesto precedente dopo aver distrutto quello corrente) -> ALTRO;
++ *   - vrend_renderer.c, dentro vrend_renderer_transfer_internal() (i
++ *     trasferimenti) -> ALTRO;
++ *   - vrend_renderer_force_ctx_0() qui sotto -> FORCE0, l'unico;
++ *   - vrend_renderer_prepare_reset() (piu' in basso in questo file): chiama
++ *     vrend_hw_switch_context(ctx0, true) DIRETTAMENTE, non passando per
++ *     vrend_renderer_force_ctx_0() -- e' un evento di reset del renderer,
++ *     non il percorso caldo per-comando che il sospetto riguarda, quindi
++ *     -> ALTRO. L'origine segue "e' passato per force_ctx_0()?", non "il
++ *     contesto di destinazione e' ctx0?": sono domande diverse, e la
++ *     seconda avrebbe messo prepare_reset() nel secchio sbagliato.
++ *
++ * FUORI SCOPE, deliberatamente: vrend_hw_switch_context_with_sub() (usata
++ * solo da vrend_renderer_check_queries()) chiama
++ * vrend_finish_context_switch() direttamente, non attraverso questa
++ * funzione -- non e' "vrend_hw_switch_context", che e' esattamente cosa
++ * questa diagnostica misura, letteralmente. Le sue chiamate a make_current()
++ * non sono contate qui. Idem le chiamate DIRETTE a
++ * vrend_clicbs->make_current() dentro vrend_destroy_sub_context() e
++ * vrend_renderer_set_sub_ctx() (switch di SUB-contesto entro lo stesso
++ * vrend_context, un meccanismo diverso da questo). */
++bool vrend_hw_switch_context(struct vrend_context *ctx, int origine, bool now)
++{
++   int accesa = winq_glspia_accesa();
++
+    if (!ctx)
+       return false;
+ 
++   if (accesa) {
++      winq_glspia_ctx_richiesto(origine);
++   }
++
+    if (ctx == vrend_state.current_ctx && ctx->ctx_switch_pending == false)
+       return true;
+ 
+@@ -11648,24 +11796,30 @@ bool vrend_hw_switch_context(struct vrend_context *ctx, bool now)
+ 
+    ctx->ctx_switch_pending = true;
+    if (now == true) {
+-      vrend_finish_context_switch(ctx);
++      uint64_t t0 = accesa ? winq_glspia_ora() : 0;
++      bool vero = vrend_finish_context_switch(ctx);
++
++      if (t0 && vero) {
++         winq_glspia_ctx_vero(origine, winq_glspia_intervallo_ns(t0, winq_glspia_ora()));
++      }
+    }
+    vrend_state.current_ctx = ctx;
+    return true;
+ }
+ 
+-static void vrend_finish_context_switch(struct vrend_context *ctx)
++static bool vrend_finish_context_switch(struct vrend_context *ctx)
+ {
+    if (ctx->ctx_switch_pending == false)
+-      return;
++      return false;
+    ctx->ctx_switch_pending = false;
+ 
+    if (vrend_state.current_hw_ctx == ctx)
+-      return;
++      return false;
+ 
+    vrend_state.current_hw_ctx = ctx;
+ 
+    vrend_clicbs->make_current(ctx->sub->gl_context);
++   return true;
+ }
+ 
+ void
+@@ -13037,10 +13191,52 @@ void *vrend_renderer_get_cursor_contents(struct pipe_resource *pres,
+ 
+ void vrend_renderer_force_ctx_0(void)
+ {
++   /* WINQ_CTX0_SEMPRE=1 ripristina il comportamento di prima di questa
++    * correzione: azzera sempre lo stato e richiede sempre lo switch,
++    * anche quando siamo gia' su ctx0 -- serve solo per il confronto A/B
++    * con lo stesso binario. Il default e' la cura, non il vecchio
++    * comportamento: la misura in PRESTAZIONI.md ("La causa, misurata:
++    * 717 ms/s dentro wglMakeCurrent") non e' un esperimento da attivare
++    * a mano. Letta una volta e cachata: mai getenv sul percorso caldo,
++    * stesso idioma di winq_glspia_accesa() in winq-glspia-conta.c. */
++   static int sempre = -1;
++
+    TRACE_FUNC();
++
++   if (sempre < 0) {
++      const char *v = getenv("WINQ_CTX0_SEMPRE");
++      sempre = (v && *v == '1') ? 1 : 0;
++   }
++
++   /* Siamo GIA' su ctx0? Le stesse identiche condizioni dei due cancelli
++    * di vrend_hw_switch_context() (:11714) e vrend_finish_context_switch()
++    * (:11740), ctx_switch_pending compreso, valutate qui contro ctx0
++    * PRIMA di azzerare current_ctx/current_hw_ctx -- azzerarli e'
++    * esattamente cio' che sotto fa scattare sempre lo switch vero, perche'
++    * i due cancelli confrontano contro quelle due variabili e con NULL
++    * non possono mai coincidere. vrend_state.ctx0 e' creato all'avvio del
++    * renderer (vrend_renderer_init()) ben prima che QEMU possa chiamare
++    * questa funzione sul percorso per-comando; il controllo di non-NULL
++    * e' comunque qui per restare sicuro come vrend_hw_switch_context(),
++    * che gestisce un ctx NULL senza dereferenziarlo. */
++   if (!sempre &&
++       vrend_state.ctx0 != NULL &&
++       vrend_state.current_ctx == vrend_state.ctx0 &&
++       vrend_state.ctx0->ctx_switch_pending == false &&
++       vrend_state.current_hw_ctx == vrend_state.ctx0) {
++      /* Conta come richiesta -- il confronto prima/dopo nella diagnostica
++       * resta leggibile -- ma NON come switch vero: non si tocca GL. */
++      if (winq_glspia_accesa()) {
++         winq_glspia_ctx_richiesto(WINQ_CTX_FORCE0);
++      }
++      return;
++   }
++
+    vrend_state.current_ctx = NULL;
+    vrend_state.current_hw_ctx = NULL;
+-   vrend_hw_switch_context(vrend_state.ctx0, true);
++   /* WINQ_CTX_FORCE0: l'unico chiamante classificato cosi', vedi il commento
++    * sopra vrend_hw_switch_context(). */
++   vrend_hw_switch_context(vrend_state.ctx0, WINQ_CTX_FORCE0, true);
+ }
+ 
+ void vrend_renderer_get_rect(struct pipe_resource *pres,
+@@ -13319,7 +13515,10 @@ void vrend_renderer_prepare_reset(void)
+ {
+    /* make sure user contexts are no longer accessed */
+    vrend_free_sync_thread();
+-   vrend_hw_switch_context(vrend_state.ctx0, true);
++   /* WINQ_CTX_ALTRO: va a ctx0 come force_ctx_0(), ma non passa per
++    * quella funzione -- e' un evento di reset, non il percorso caldo
++    * per-comando. Vedi il commento sopra vrend_hw_switch_context(). */
++   vrend_hw_switch_context(vrend_state.ctx0, WINQ_CTX_ALTRO, true);
+ }
+ 
+ void vrend_renderer_reset(void)
+diff --git a/src/vrend/vrend_renderer.h b/src/vrend/vrend_renderer.h
+index adb1213..51cdcaa 100644
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -464,7 +464,12 @@ void vrend_renderer_check_fences(void);
+ int vrend_renderer_create_ctx0_fence(uint32_t fence_id);
+ int vrend_renderer_export_ctx0_fence(uint32_t fence_id, int* out_fd);
+ 
+-bool vrend_hw_switch_context(struct vrend_context *ctx, bool now);
++/* origine: WINQ_CTX_FORCE0 se la richiesta viene da vrend_renderer_force_ctx_0(),
++ * WINQ_CTX_ALTRO per ogni altro chiamante -- vedi il commento sopra la
++ * definizione (vrend_renderer.c) per l'elenco e il perche' della QUINTA
++ * CORREZIONE dell'11/08/2026. Parametro interno al fork: questa funzione
++ * non e' nella API pubblica di virglrenderer.h. */
++bool vrend_hw_switch_context(struct vrend_context *ctx, int origine, bool now);
+ uint32_t vrend_renderer_object_insert(struct vrend_context *ctx, void *data,
+                                       uint32_t handle, enum virgl_object_type type);
+ void vrend_renderer_object_destroy(struct vrend_context *ctx, uint32_t handle);
+diff --git a/src/winq-glspia-conta.c b/src/winq-glspia-conta.c
+new file mode 100644
+index 0000000..49f8d7c
+--- /dev/null
++++ b/src/winq-glspia-conta.c
+@@ -0,0 +1,422 @@
++/* winq-glspia-conta.c -- accumulo, orologio, taratura.
++ *
++ * Sul percorso caldo qui dentro succedono due somme e un confronto. Niente
++ * allocazioni, niente formattazione, niente lock: lo strumento deve costare
++ * meno di cio' che misura, e il cancello §7c della spec lo verifica.
++ *
++ * NIENTE GL IN QUESTO FILE. Vedi il commento in cima a winq-glspia-conta.h.
++ */
++#include "winq-glspia-conta.h"
++
++#include <stdlib.h>
++
++#ifdef _WIN32
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++#endif
++
++static struct winq_glspia spia;
++static uint64_t freq_hz;
++static int acceso = -1;
++
++/* Non e' parte di 'spia': non e' un accumulo al secondo che winq_glspia_leggi()
++ * fotografa e winq_glspia_azzera() ripulisce, e' lo stato del tratto
++ * cronometrato in corso -- vive quanto una submit, non quanto un secondo. */
++static int in_finestra;
++
++/* Come in_finestra: non e' un accumulo che azzera() ripulisce, e' la
++ * richiesta "sondare la prossima query aperta" che vive fra due letture.
++ * Parte armata (1) cosi' che il primo ciclo di riepilogo, non solo il
++ * secondo, contenga gia' un campione. */
++static int sonda_armata = 1;
++
++/* Solo per le prove (winq_glspia_thread_forza()): 0 vuol dire "usa il vero
++ * GetCurrentThreadId()", esattamente come freq_hz==0 vuol dire "non ancora
++ * tarata" -- 0 non e' mai un id di thread vero su Windows. */
++static uint64_t thread_forzato;
++
++int winq_glspia_accesa(void)
++{
++    if (acceso < 0) {
++        const char *v = getenv("WINQ_GPU_DIAG");
++
++        acceso = (v && *v == '1') ? 1 : 0;
++        if (acceso) {
++            winq_glspia_freq_vera();
++        }
++    }
++    return acceso;
++}
++
++void winq_glspia_freq_vera(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER f;
++
++    QueryPerformanceFrequency(&f);
++    freq_hz = (uint64_t)f.QuadPart;
++#else
++    freq_hz = 1000000000ull;
++#endif
++}
++
++void winq_glspia_freq_forza(uint64_t hz)
++{
++    freq_hz = hz;
++}
++
++uint64_t winq_glspia_ora(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER t;
++
++    QueryPerformanceCounter(&t);
++    return (uint64_t)t.QuadPart;
++#else
++    return 0;
++#endif
++}
++
++/* Converte un intervallo in tick di QueryPerformanceCounter in nanosecondi.
++ *
++ * Divide-prima-poi-resto: moltiplicare subito per un miliardo trabocca a 18
++ * secondi di tick su un orologio a 1 GHz. Il resto e' cio' che rende utile
++ * la misura, perche' i singoli intervalli sono microsecondi e la divisione
++ * secca li azzererebbe tutti.
++ *
++ * Se freq_hz e' ancora zero (nessuno ha chiamato winq_glspia_accesa() o
++ * winq_glspia_freq_forza()) restituisce 0 invece di dividere per zero: qui
++ * dentro non si decide se uno zero cosi' e' un campione da scartare o una
++ * taratura innocua, quella distinzione resta ai chiamanti. */
++static uint64_t winq_tick_a_ns(uint64_t tick)
++{
++    if (freq_hz == 0) {
++        return 0;
++    }
++    return (tick / freq_hz) * 1000000000ull +
++           (tick % freq_hz) * 1000000000ull / freq_hz;
++}
++
++uint64_t winq_glspia_thread_id(void)
++{
++    if (thread_forzato) {
++        return thread_forzato;
++    }
++#ifdef _WIN32
++    return (uint64_t)GetCurrentThreadId();
++#else
++    return 0;
++#endif
++}
++
++void winq_glspia_thread_forza(uint64_t tid)
++{
++    thread_forzato = tid;
++}
++
++void winq_glspia_thread_vero(void)
++{
++    thread_forzato = 0;
++}
++
++void winq_glspia_thread_azzera_registro(void)
++{
++    int i;
++
++    spia.thread_principale = 0;
++    spia.thread_altri_n = 0;
++    for (i = 0; i < WINQ_THREAD_TABELLA; i++) {
++        spia.thread_altri_id[i] = 0;
++    }
++    spia.thread_altri_fuori_tabella = 0;
++}
++
++/* Effetto collaterale se il thread corrente non e' il principale: lo
++ * registra nel piccolo insieme thread_altri_id[] se non e' gia' li' --
++ * scansione lineare di al piu' WINQ_THREAD_TABELLA elementi, il chiamante
++ * (winq-glspia.h) la fa una volta per chiamata GL avvolta, non di piu'. Se
++ * il thread e' nuovo e la tabella e' piena, non lo sappiamo distinguere da
++ * un thread gia' visto che non entrava: si conta la chiamata in
++ * thread_altri_fuori_tabella, non un'identita' -- stessa rinuncia di
++ * trova_o_crea() in winq-glspia-gpu.c quando WINQ_CONTESTI e' pieno. */
++int winq_glspia_thread_indice(void)
++{
++    uint64_t tid = winq_glspia_thread_id();
++    int n = (int)spia.thread_altri_n;
++    int i;
++
++    if (tid == spia.thread_principale) {
++        return WINQ_THREAD_PRINCIPALE;
++    }
++    for (i = 0; i < n; i++) {
++        if (spia.thread_altri_id[i] == tid) {
++            return WINQ_THREAD_ALTRI;
++        }
++    }
++    if (n < WINQ_THREAD_TABELLA) {
++        spia.thread_altri_id[n] = tid;
++        spia.thread_altri_n = (uint64_t)(n + 1);
++    } else {
++        spia.thread_altri_fuori_tabella++;
++    }
++    return WINQ_THREAD_ALTRI;
++}
++
++void winq_glspia_aggiungi(int thread, int secchio, uint64_t t0, uint64_t t1)
++{
++    uint64_t tick;
++
++    if (thread < 0 || thread >= WINQ_THREAD_N || secchio < 0 || secchio >= WINQ_SPIA_N) {
++        spia.assurde++;
++        return;
++    }
++    /* L'orologio puo' tornare indietro fra core su alcune macchine. Sottratto
++     * come unsigned, un intervallo negativo diventerebbe un numero enorme e
++     * un solo campione falserebbe l'intero secondo. */
++    if (t1 < t0) {
++        spia.assurde++;
++        return;
++    }
++    /* freq_hz e' zero finche' nessuno ha ancora chiamato winq_glspia_accesa()
++     * o winq_glspia_freq_forza(): succede se una chiamata GL arriva prima che
++     * lo shim si sia inizializzato. winq_tick_a_ns() da sola restituirebbe un
++     * innocuo zero, ma qui il campione va anche contato come assurdo e non
++     * come "zero secondi di lavoro GL": senza questo controllo esplicito la
++     * chiamata verrebbe conteggiata in spia.chiamate come se fosse valida. */
++    if (freq_hz == 0) {
++        spia.assurde++;
++        return;
++    }
++    tick = t1 - t0;
++
++    spia.ns[thread][secchio] += winq_tick_a_ns(tick);
++    spia.chiamate[thread][secchio]++;
++}
++
++uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1)
++{
++    /* Stessa guardia di aggiungi(): un orologio che torna indietro non deve
++     * diventare, sottratto come unsigned, un numero enorme. */
++    if (t1 < t0) {
++        return 0;
++    }
++    return winq_tick_a_ns(t1 - t0);
++}
++
++void winq_glspia_finestra_apri(void)
++{
++    /* Alla PRIMA chiamata, e solo alla prima: e' per definizione il thread
++     * che decodifica (vrend_decode_ctx_submit_cmd chiama solo questa
++     * funzione, mai da un altro thread -- vedi il commento sopra l'enum
++     * WINQ_THREAD_* in winq-glspia-conta.h). Chiamate successive non lo
++     * riscrivono: se lo facessero, un secondo thread che per qualche motivo
++     * chiamasse questa funzione soppianterebbe il principale vero. */
++    if (!spia.thread_principale) {
++        spia.thread_principale = winq_glspia_thread_id();
++    }
++    in_finestra = 1;
++}
++
++void winq_glspia_finestra_chiudi(void)
++{
++    in_finestra = 0;
++}
++
++int winq_glspia_in_finestra(void)
++{
++    return in_finestra;
++}
++
++/* Come aggiungi(), ma scrive in fuori_ns[secchio]/fuori_chiamate[secchio]
++ * invece di ns[secchio]/chiamate[secchio]: e' lavoro che virglrenderer fa
++ * fuori dalla finestra cronometrata, non dentro. Il secchio fuori bounds e'
++ * un errore di chi chiama (scriverebbe fuori dall'array senza questa
++ * guardia) e si conta come assurda, come in aggiungi(); l'orologio che torna
++ * indietro e la frequenza non tarata restano invece guardie silenziose: un
++ * campione scartato per quelle non e' un errore di misura, e' solo lavoro
++ * fuori perimetro che si perde senza toccare spia.assurde -- esattamente come
++ * dice il commento sopra la dichiarazione in winq-glspia-conta.h. */
++void winq_glspia_aggiungi_fuori(int thread, int secchio, uint64_t t0, uint64_t t1)
++{
++    uint64_t tick;
++
++    if (thread < 0 || thread >= WINQ_THREAD_N || secchio < 0 || secchio >= WINQ_SPIA_N) {
++        spia.assurde++;
++        return;
++    }
++    if (t1 < t0) {
++        return;
++    }
++    if (freq_hz == 0) {
++        return;
++    }
++    tick = t1 - t0;
++
++    spia.fuori_ns[thread][secchio] += winq_tick_a_ns(tick);
++    spia.fuori_chiamate[thread][secchio]++;
++}
++
++void winq_glspia_conta_saltata(void)
++{
++    spia.saltate++;
++}
++
++void winq_glspia_conta_assurda(void)
++{
++    spia.assurde++;
++}
++
++void winq_glspia_somma_gpu(uint64_t ns)
++{
++    /* Sempre WINQ_THREAD_PRINCIPALE, senza bisogno di chiedere: le query
++     * GL_TIME_ELAPSED si aprono solo dentro la finestra (winq-glspia-gpu.c),
++     * e la finestra la apre solo il thread che decodifica -- nessuna
++     * ambiguita' di thread da risolvere qui, a differenza di ns[]/chiamate[]
++     * degli altri secchi. */
++    spia.ns[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU] += ns;
++    spia.chiamate[WINQ_THREAD_PRINCIPALE][WINQ_SPIA_GPU]++;
++}
++
++/* ns e' gia' il tempo CPU della finestra, convertito da winq_glspia_intervallo_ns()
++ * sugli stessi t0/t1 che l'aggancio passa a winq_glspia_gpu_chiudi(): si
++ * somma senza passare da aggiungi(), che si aspetta tick grezzi e non ns
++ * gia' convertiti -- stessa ragione per cui somma_gpu() non usa aggiungi(). */
++void winq_glspia_somma_finestra(uint64_t ns)
++{
++    spia.finestra_ns += ns;
++}
++
++int winq_glspia_sonda_richiesta(void)
++{
++    return sonda_armata;
++}
++
++/* Non disarma: fine() lo fa, dopo che ANCHE il secondo glGetError() e' stato
++ * letto. Se disarmasse qui, un chiamante che leggesse la richiesta una
++ * seconda volta fra begin e end (invece di ricordare la risposta come dice
++ * il commento in winq-glspia-conta.h) la vedrebbe gia' falsa e salterebbe la
++ * sonda di fine -- ma il contratto e' "leggi una volta, ricorda", quindi qui
++ * non e' la guardia contro quel caso: e' solo che il disarmo logicamente
++ * appartiene alla fine del ciclo begin/end, non al suo inizio. */
++void winq_glspia_sonda_registra_inizio(uint64_t errore)
++{
++    spia.sonda_eseguita = 1;
++    spia.sonda_errore_inizio = errore;
++}
++
++void winq_glspia_sonda_registra_fine(uint64_t errore)
++{
++    spia.sonda_errore_fine = errore;
++    sonda_armata = 0;
++}
++
++/* Un'origine fuori bounds e' un errore di chi chiama (indice invalido),
++ * esattamente come un secchio o un thread fuori bounds in aggiungi(): si
++ * conta come assurda, non come richiesta. Il chiamante (vrend_hw_switch_context())
++ * e' gia' dietro winq_glspia_accesa(), quindi qui non c'e' bisogno di
++ * un'altra guardia sulla diagnostica. */
++void winq_glspia_ctx_richiesto(int origine)
++{
++    if (origine < 0 || origine >= WINQ_CTX_N) {
++        spia.assurde++;
++        return;
++    }
++    spia.ctx_richiesti[origine]++;
++}
++
++void winq_glspia_ctx_vero(int origine, uint64_t ns)
++{
++    if (origine < 0 || origine >= WINQ_CTX_N) {
++        spia.assurde++;
++        return;
++    }
++    spia.ctx_veri[origine]++;
++    spia.ctx_ns[origine] += ns;
++}
++
++void winq_glspia_azzera(void)
++{
++    int t, i;
++
++    for (t = 0; t < WINQ_THREAD_N; t++) {
++        for (i = 0; i < WINQ_SPIA_N; i++) {
++            spia.ns[t][i] = 0;
++            spia.chiamate[t][i] = 0;
++            spia.fuori_ns[t][i] = 0;
++            spia.fuori_chiamate[t][i] = 0;
++        }
++    }
++    spia.saltate = 0;
++    spia.assurde = 0;
++    spia.finestra_ns = 0;
++    spia.sonda_eseguita = 0;
++    spia.sonda_errore_inizio = 0;
++    spia.sonda_errore_fine = 0;
++    /* thread_principale/thread_altri_* NON si azzerano: vedi il commento
++     * sulla struct in winq-glspia-conta.h. Sono un registro per la vita del
++     * processo, non un accumulo al secondo. */
++    for (i = 0; i < WINQ_CTX_N; i++) {
++        spia.ctx_richiesti[i] = 0;
++        spia.ctx_veri[i] = 0;
++        spia.ctx_ns[i] = 0;
++    }
++}
++
++void winq_glspia_leggi(struct winq_glspia *fuori)
++{
++    *fuori = spia;
++    winq_glspia_azzera();
++    /* Riarma per il ciclo che comincia ora: senza questo, dopo il primo
++     * campione la sonda si disarmerebbe per sempre (fine() la disarma, e
++     * nessuno la rialzerebbe piu'). */
++    sonda_armata = 1;
++}
++
++/* Un milione di iterazioni a vuoto, senza niente in mezzo: e' il costo che lo
++ * strumento aggiunge a ogni chiamata GL avvolta. Va confrontato con t_virgl
++ * (spec §7c): se e' dello stesso ordine, la misura non regge e la lista
++ * delle funzioni avvolte va accorciata.
++ *
++ * QUARTA CORREZIONE DELL'11/08/2026: il ciclo ora legge anche
++ * winq_glspia_thread_id() insieme alle due letture dell'orologio, perche' da
++ * questa correzione in poi e' quello che il percorso caldo fa davvero a ogni
++ * chiamata avvolta (via winq_glspia_thread_indice(), che pero' NON e' quello
++ * che si chiama qui: quella ha l'effetto collaterale di registrare il thread
++ * nel registro, e chiamarla un milione di volte da un thread "forzato" o
++ * vero riempirebbe o sporcherebbe il registro. thread_id() e' la primitiva
++ * pura sotto, senza effetti collaterali, e misura lo stesso costo perche' e'
++ * la stessa chiamata a GetCurrentThreadId() -- solo il confronto e la
++ * scansione della tabella, che thread_indice() fa in piu', non sono qui:
++ * quel costo e' un confronto e una scansione di al piu' 8 elementi, ordini
++ * di grandezza sotto una lettura del TEB). */
++uint64_t winq_glspia_taratura_ns(void)
++{
++    const uint64_t giri = 1000000;
++    uint64_t i, a, b, tick;
++    /* Accumulatore locale per impedire al compilatore di buttare via le
++     * letture del ciclo: volatile forza una scrittura in memoria a ogni
++     * iterazione, quindi le chiamate a winq_glspia_ora()/thread_id() non
++     * sono eliminabili come codice morto. Locale e non spia.assurde: la
++     * taratura e' una misura, non un evento da contare nelle statistiche di
++     * produzione che QEMU legge. */
++    volatile uint64_t anti_ottimizzazione = 0;
++
++    a = winq_glspia_ora();
++    for (i = 0; i < giri; i++) {
++        uint64_t x = winq_glspia_ora();
++        uint64_t y = winq_glspia_ora();
++        uint64_t t = winq_glspia_thread_id();
++
++        if (y < x || t == 0) {
++            anti_ottimizzazione++;
++        }
++    }
++    (void)anti_ottimizzazione;
++    b = winq_glspia_ora();
++    tick = b - a;
++
++    /* freq_hz a zero qui non e' un campione assurdo da contare: e' solo una
++     * taratura chiamata troppo presto. winq_tick_a_ns() restituisce 0 in quel
++     * caso, senza toccare spia. */
++    return winq_tick_a_ns(tick) / giri;
++}
+diff --git a/src/winq-glspia-conta.h b/src/winq-glspia-conta.h
+new file mode 100644
+index 0000000..52e2609
+--- /dev/null
++++ b/src/winq-glspia-conta.h
+@@ -0,0 +1,330 @@
++/* winq-glspia-conta.h -- i contatori dello shim GL.
++ *
++ * Nessun GL qui dentro, e nemmeno in winq-glspia-conta.c: e' cio' che rende
++ * questa parte provabile senza contesto grafico (research/scripts/test-glspia.sh).
++ * Le macro che avvolgono le entry point stanno in winq-glspia.h, che invece
++ * include epoxy.
++ *
++ * Spec: docs/superpowers/specs/2026-08-11-attribuzione-tempo-gpu-design.md
++ */
++#ifndef WINQ_GLSPIA_CONTA_H
++#define WINQ_GLSPIA_CONTA_H
++
++#include <stdint.h>
++
++/* WINQ_SPIA_ESPORTA -- NON rimetterci __declspec(dllexport) su _WIN32, e non
++ * lasciarla vuota: la causa vera e' piu' a fondo di "dllexport spegne
++ * l'auto-export", ed entrambi gli errori la mancano.
++ *
++ * Questo albero compila con -fvisibility=hidden (research/winq-virgl/meson.build:74),
++ * globale, tutte le piattaforme. Sotto -fvisibility=hidden ogni simbolo e'
++ * nascosto per default: su MinGW/Clang questo si traduce, per ciascun
++ * simbolo senza visibilita' esplicita, in una direttiva
++ * "-exclude-symbols:<nome>" scritta nella sezione .drectve dell'oggetto --
++ * verificato con objdump -s -j .drectve sull'oggetto compilato. Quella
++ * direttiva dice al linker "non esportare questo, MAI", indipendentemente
++ * da dllexport o dall'auto-export di ld/lld: e' per questo che togliere
++ * dllexport da solo NON basta, e winq_glspia_leggi resta escluso comunque
++ * (verificato: la DLL ricompilata senza dllexport aveva ancora zero
++ * occorrenze di winq_glspia_leggi nella sua Export Table).
++ *
++ * Le 49 virgl_renderer_* arrivano a QEMU non per l'auto-export di ld/lld ma
++ * perche' sono marcate VIRGL_EXPORT (virglrenderer.h), che e'
++ * __attribute__((visibility("default"))) su ogni piattaforma: quell'oggetto
++ * (virglrenderer.c.obj) non ha nessuna sezione .drectve, perche' Clang non
++ * genera "-exclude-symbols" per un simbolo che ha visibilita' esplicita.
++ * WINQ_SPIA_ESPORTA deve fare la STESSA cosa, con lo stesso meccanismo, non
++ * un secondo meccanismo (dllexport) che in piu' spegneva l'auto-export per
++ * tutti gli altri quando c'era. */
++#define WINQ_SPIA_ESPORTA __attribute__((visibility("default")))
++
++/* TERZA CORREZIONE DELL'11/08/2026: lo split di "fuori" ha detto che dentro
++ * quel 62% del secondo, fuori/gl e fuori/shader sono zero e fuori/attesa e'
++ * 645,3 ms/s da solo. ATTESA sommava glFlush, glFinish e glClientWaitSync:
++ * tre primitive con tre cause diverse (presentazione, GPU, fence), un solo
++ * numero. Non serve un secchio nuovo con macchineria nuova: si allunga
++ * l'enum, e ns[]/chiamate[]/fuori_ns[]/fuori_chiamate[] (tutti dimensionati
++ * su WINQ_SPIA_N) portano la scomposizione da soli. ATTESA come nome sparisce
++ * dall'enum; nella sottrazione e nelle righe di riepilogo torna come somma di
++ * FLUSH+FINISH+WAITSYNC (vedi hw/display/virtio-gpu-virgl.c). */
++enum {
++    WINQ_SPIA_GL = 0,      /* disegno, buffer, texture: lavoro del driver */
++    WINQ_SPIA_SHADER,      /* glCompileShader, glLinkProgram: DXIL + PSO */
++    WINQ_SPIA_FLUSH,       /* glFlush: manda in coda, non aspetta */
++    WINQ_SPIA_FINISH,      /* glFinish (e le due letture all'indietro, vedi winq-glspia.h) */
++    WINQ_SPIA_WAITSYNC,    /* glClientWaitSync: attesa su una fence esplicita */
++    WINQ_SPIA_GPU,         /* GL_TIME_ELAPSED: lavoro vero della Adreno */
++    WINQ_SPIA_N
++};
++
++/* QUARTA CORREZIONE DELL'11/08/2026, la piu' seria delle quattro: i contatori
++ * sono static globali SENZA affinita' di thread, e in_finestra lo alzano e
++ * abbassano solo winq_glspia_finestra_apri()/chiudi(), chiamate solo dal
++ * thread che decodifica (vrend_decode_ctx_submit_cmd). Due conseguenze:
++ *
++ * 1. "fuori dalla finestra" non vuol dire "sul thread principale": vuol dire
++ *    "mentre il thread principale non stava decodificando". Qualunque altro
++ *    thread che chiami una entry point avvolta -- in questo fork, il thread
++ *    dedicato "vrend-sync" che fa i wait bloccanti veri su glClientWaitSync
++ *    (vrend_renderer.c:7312, do_wait con can_block=true; il thread principale
++ *    ci arriva solo con can_block=false e timeout zero via
++ *    vrend_renderer_check_fences) -- finisce in fuori_ns/fuori_chiamate,
++ *    attribuendo al "fuori" del thread principale un tempo che non e' suo.
++ * 2. Anche i secchi "dentro" sono contaminati: se il thread di sync chiama un
++ *    wrapper mentre il thread principale tiene la finestra aperta, quel
++ *    tempo finisce in ns[]/chiamate[] -- il flag e' globale, non sa quale
++ *    thread lo sta leggendo.
++ *
++ * Percio' ogni secchio (dentro E fuori) si sdoppia per thread:
++ * WINQ_THREAD_PRINCIPALE e WINQ_THREAD_ALTRI. Non un terzo, un quarto... per
++ * ogni thread reale: quello risponderebbe a "quale thread" con una
++ * granularita' che nessuno ha chiesto e complicherebbe la struct (e la sua
++ * ridichiarazione a mano in QEMU) senza necessita' -- la domanda che conta e'
++ * "principale o non principale", perche' solo il thread principale possiede
++ * la finestra e solo i suoi campioni "dentro" hanno senso nella sottrazione
++ * (vedi virgl in hw/display/virtio-gpu-virgl.c). "Quali sono gli altri" e
++ * "quanti sono" restano una domanda aperta, a cui risponde il piccolo
++ * registro thread_altri_* piu' sotto, non un secchio per identita'. */
++enum {
++    WINQ_THREAD_PRINCIPALE = 0,
++    WINQ_THREAD_ALTRI,
++    WINQ_THREAD_N
++};
++
++/* Quante identita' di thread "altri" il registro (sotto) ricorda per nome.
++ * Oggi si conosce un solo candidato (vrend-sync); 8 lascia spazio a scoprirne
++ * altri senza inseguire un numero esatto. Se thread_altri_fuori_tabella nella
++ * riga di riepilogo e' > 0 vuol dire che ce ne sono di piu' di 8, e questo
++ * numero va alzato -- stessa logica di WINQ_CONTESTI in winq-glspia-gpu.c. */
++#define WINQ_THREAD_TABELLA 8
++
++/* QUINTA CORREZIONE DELL'11/08/2026: chi ha richiesto lo switch di contesto
++ * GL, non "quale contesto" -- il sospetto e' su una funzione chiamante
++ * (vrend_renderer_force_ctx_0(), invocata da QEMU prima di ogni comando),
++ * non su un contesto target. WINQ_CTX_FORCE0 marca esclusivamente le
++ * richieste che passano per quella funzione; ogni altro chiamante di
++ * vrend_hw_switch_context() (il percorso di decodifica, i trasferimenti, il
++ * ripristino dopo la distruzione di un contesto) e' WINQ_CTX_ALTRO -- vedi
++ * il commento sopra vrend_hw_switch_context() in vrend_renderer.c per
++ * l'elenco esatto dei chiamanti e la loro classificazione. */
++enum {
++    WINQ_CTX_FORCE0 = 0,
++    WINQ_CTX_ALTRO,
++    WINQ_CTX_N
++};
++
++struct winq_glspia {
++    uint64_t ns[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t chiamate[WINQ_THREAD_N][WINQ_SPIA_N];
++    uint64_t saltate;   /* query GPU non pronte quando la casella serviva */
++    uint64_t assurde;   /* campioni fuori banda o intervalli negativi */
++    /* CORREZIONE DELL'11/08/2026: la sottrazione virgl = cpu - gl - shader -
++     * attesa presupponeva che ogni chiamata GL avvolta cadesse dentro la
++     * finestra che "cpu" misura. Falso: virglrenderer chiama GL anche fuori
++     * da vrend_decode_ctx_submit_cmd (attesa sulle fence, trasferimenti,
++     * creazione di oggetti), e quel tempo veniva sottratto da un "cpu" che
++     * non lo includeva mai -- la causa dei 9 campioni su 10 con virgl=0. I
++     * tre campi sotto chiudono il buco: fuori_ns/fuori_chiamate contano cio'
++     * che i wrapper vedono a finestra chiusa (non e' un errore, quindi non
++     * passa da "assurde"), finestra_ns e' il tempo CPU dello stesso tratto
++     * che i secchi sopra misurano, cosi' che QEMU possa sottrarre da un
++     * denominatore che copre lo stesso perimetro del numeratore. Vedi
++     * winq_glspia_finestra_apri()/chiudi() e l'aggancio in vrend_decode.c.
++     *
++     * SECONDA CORREZIONE, STESSO GIORNO: la prima raccolta vera con la
++     * finestra corretta ha detto che "fuori" e' il 62% del secondo
++     * (623,9 ms/s contro 19,0 ms/s dentro, ~1.400 chiamate, 445 us/chiamata
++     * contro 2,7 us dentro) -- ma essendo fuori_ns/fuori_chiamate scalari,
++     * quel numero diceva solo QUANTO, non COSA. Ora sono array, PARALLELI a
++     * ns[]/chiamate[] con la stessa indicizzazione: fuori_ns[WINQ_SPIA_GL] e'
++     * il lavoro di disegno/buffer/texture visto a finestra chiusa,
++     * fuori_ns[WINQ_SPIA_SHADER] la compilazione shader fuori finestra, ecc.
++     * fuori_ns[WINQ_SPIA_GPU] resta sempre zero: le query GL_TIME_ELAPSED si
++     * aprono solo dentro la finestra (winq-glspia-gpu.c), quindi per quel
++     * secchio "fuori" non esiste come concetto -- non un buco, una riga
++     * dell'array semplicemente mai scritta. */
++    uint64_t fuori_ns[WINQ_THREAD_N][WINQ_SPIA_N];       /* lavoro GL per thread e secchio, a finestra chiusa */
++    uint64_t fuori_chiamate[WINQ_THREAD_N][WINQ_SPIA_N]; /* numero di quelle chiamate */
++    uint64_t finestra_ns;    /* tempo CPU del tratto cronometrato (decodifica) */
++    /* SONDA glGetError, aggiunta l'11/08/2026: t_gpu non si raccoglie quasi
++     * mai (saltate resta alto anche con l'anello a 256 caselle, smentendo
++     * l'ipotesi che fosse solo un problema di dimensione), e uno dei sospetti
++     * rimasti e' che glBeginQuery/glEndQuery falliscano in silenzio. Letta
++     * UNA volta per ciclo di riepilogo (non per submit: vedi
++     * winq_glspia_sonda_richiesta() e il commento in winq-glspia-gpu.c), non
++     * per ogni chiamata -- sarebbe percorso caldo altrimenti. sonda_eseguita
++     * dice se il ciclo appena letto ne conteneva una (0/1): senza questo
++     * campo un ciclo senza sonda e uno con GL_NO_ERROR (0) sarebbero
++     * indistinguibili leggendo solo i codici. */
++    uint64_t sonda_eseguita;
++    uint64_t sonda_errore_inizio; /* glGetError() subito dopo glBeginQuery */
++    uint64_t sonda_errore_fine;   /* glGetError() subito dopo glEndQuery */
++    /* QUARTA CORREZIONE DELL'11/08/2026: il registro dei thread. A differenza
++     * dei campi sopra, questi NON si azzerano a ogni lettura (winq_glspia_azzera()
++     * li salta apposta): sono un'identita' di processo, non un accumulo al
++     * secondo -- azzerarli ogni ciclo farebbe "sparire" dalla riga di
++     * riepilogo un thread visto nel ciclo precedente ma silente in questo. */
++    uint64_t thread_principale;      /* id, 0 = non ancora registrato */
++    uint64_t thread_altri_n;         /* quanti "altri" thread distinti in thread_altri_id[] */
++    uint64_t thread_altri_id[WINQ_THREAD_TABELLA]; /* i loro id; 0 = casella non usata */
++    uint64_t thread_altri_fuori_tabella; /* chiamate da un "altro" thread non riconosciuto a tabella piena */
++    /* QUINTA CORREZIONE DELL'11/08/2026: il primo consumatore del ciclo
++     * principale non era SUBMIT_3D ma 0x202 CTX_ATTACH_RESOURCE (923 us/
++     * chiamata), con un'asimmetria netta rispetto al detach (231 us) pur
++     * facendo lo stesso lavoro O(1) in tabella hash. Il sospetto, dedotto dal
++     * codice non misurato: virgl_renderer_force_ctx_0() (chiamata da QEMU
++     * incondizionatamente prima di OGNI comando, virtio-gpu-virgl.c:1471)
++     * azzera current_ctx/current_hw_ctx PRIMA di richiedere lo switch a ctx0
++     * -- quindi vrend_hw_switch_context() non puo' mai prendere la sua
++     * scorciatoia "e' gia' il contesto giusto", e vrend_finish_context_switch()
++     * chiama sempre wglMakeCurrent(), anche quando il contesto GL a livello
++     * di sistema operativo era gia' quello giusto (nel qual caso l'OS/driver
++     * puo' comunque farla franca in fretta -- questi contatori misurano il
++     * lato virglrenderer della storia, non il costo vero di wglMakeCurrent()).
++     * ctx_richiesti conta ogni chiamata a vrend_hw_switch_context();
++     * ctx_veri conta quante di quelle arrivano davvero a
++     * vrend_clicbs->make_current() (non scorciatoiate); ctx_ns e' il tempo
++     * cumulativo dentro quella chiamata. Tutti e tre per origine
++     * (WINQ_CTX_FORCE0/WINQ_CTX_ALTRO): il discriminante che decide se la
++     * cura sta in force_ctx_0() o altrove. */
++    uint64_t ctx_richiesti[WINQ_CTX_N];
++    uint64_t ctx_veri[WINQ_CTX_N];
++    uint64_t ctx_ns[WINQ_CTX_N];
++};
++
++/* Letta una volta sola dalla variabile WINQ_GPU_DIAG. Sul percorso caldo si
++ * legge questa, non getenv: getenv per chiamata GL costerebbe piu' della
++ * chiamata stessa. */
++int winq_glspia_accesa(void);
++
++uint64_t winq_glspia_ora(void);
++
++/* Il thread corrente, per l'etichetta dentro/altri della quarta correzione
++ * dell'11/08/2026 (vedi il commento sopra l'enum WINQ_THREAD_*). Lettura pura
++ * del TEB via GetCurrentThreadId(), NESSUN effetto collaterale -- a
++ * differenza di winq_glspia_thread_indice() sotto, non tocca il registro. E'
++ * la primitiva che sia il percorso caldo (via thread_indice()) sia
++ * winq_glspia_taratura_ns() chiamano, cosi' il costo che la taratura riporta
++ * e' lo stesso che il percorso caldo paga davvero. */
++uint64_t winq_glspia_thread_id(void);
++
++/* WINQ_THREAD_PRINCIPALE se il thread corrente e' quello registrato da
++ * winq_glspia_finestra_apri(), WINQ_THREAD_ALTRI altrimenti. Effetto
++ * collaterale se altri: registra l'id nel registro (struct winq_glspia,
++ * thread_altri_*) se non gia' visto -- una scansione di al piu'
++ * WINQ_THREAD_TABELLA elementi, niente allocazione, niente I/O. Chiamata una
++ * volta per chiamata GL avvolta (winq-glspia.h), non due: il chiamante passa
++ * il risultato ad aggiungi() o aggiungi_fuori(), non richiama questa. */
++int winq_glspia_thread_indice(void);
++
++void winq_glspia_aggiungi(int thread, int secchio, uint64_t t0, uint64_t t1);
++/* Come aggiungi(), converte un intervallo fra due letture di winq_glspia_ora()
++ * in nanosecondi -- ma senza sommarlo in un secchio: serve a chi ha bisogno
++ * del solo numero. L'aggancio di virgl_renderer_submit_cmd lo usa per passare
++ * a winq_glspia_gpu_chiudi() il tempo CPU vero in nanosecondi, non i tick
++ * grezzi di QueryPerformanceCounter: la banda di plausibilita' di
++ * winq-glspia-gpu.c confronta questo numero con i nanosecondi veri della
++ * query GL, e su Windows un tick non e' un nanosecondo (vedi
++ * qemu/probe/sonda-gltimer.c, che fa la stessa conversione per lo stesso
++ * motivo). Stessa guardia di aggiungi() sull'orologio che torna indietro:
++ * intervallo negativo -> 0, non un numero enorme. */
++uint64_t winq_glspia_intervallo_ns(uint64_t t0, uint64_t t1);
++
++/* L'interruttore di finestra. winq_glspia_finestra_apri()/chiudi() li alza e
++ * li abbassa l'aggancio in vrend_decode.c, sugli stessi confini di
++ * winq_glspia_gpu_apri()/gpu_chiudi(): e' lo stesso tratto, la stessa
++ * garanzia sul contesto GL corrente (vedi il commento in cima a
++ * vrend_decode_ctx_submit_cmd). winq_glspia_in_finestra() e' letta dalle
++ * macro di winq-glspia.h a ogni chiamata GL avvolta -- una lettura di
++ * variabile, niente di piu', per restare sul percorso caldo. */
++void winq_glspia_finestra_apri(void);
++void winq_glspia_finestra_chiudi(void);
++int winq_glspia_in_finestra(void);
++
++void winq_glspia_conta_saltata(void);
++void winq_glspia_conta_assurda(void);
++/* Come aggiungi(), stesso thread e stesso secchio, ma per il lavoro GL visto
++ * a finestra chiusa: scrive in fuori_ns[thread][secchio]/
++ * fuori_chiamate[thread][secchio] invece di ns[thread][secchio]/
++ * chiamate[thread][secchio]. Un thread o un secchio fuori bounds (indice
++ * invalido, un errore di chi chiama) si conta come assurda, esattamente come
++ * in aggiungi() -- la struttura e' un array a due dimensioni, e un indice
++ * sbagliato su uno dei due assi scriverebbe fuori dai bordi senza quella
++ * guardia. Le altre due guardie di aggiungi() (orologio indietro, frequenza
++ * non tarata) restano invece guardie silenziose qui: un campione scartato
++ * per quelle non e' un errore, e' lavoro fuori perimetro, e non tocca
++ * spia.assurde. */
++void winq_glspia_aggiungi_fuori(int thread, int secchio, uint64_t t0, uint64_t t1);
++/* I nanosecondi arrivano gia' convertiti dalla query GL, quindi non passano
++ * per aggiungi(), che converte da tick. */
++void winq_glspia_somma_gpu(uint64_t ns);
++/* Il tempo CPU della finestra di decodifica: stesso ns che l'aggancio passa a
++ * winq_glspia_gpu_chiudi() per la banda di plausibilita', sommato qui perche'
++ * QEMU lo legga e sottragga da un denominatore che copre lo stesso perimetro
++ * dei secchi sopra -- invece del proprio "cpu" misurato attorno a
++ * virgl_renderer_submit_cmd, che e' piu' largo della finestra (vedi la nota
++ * sulla struct winq_glspia). */
++void winq_glspia_somma_finestra(uint64_t ns);
++
++/* La sonda glGetError, letta una volta per ciclo di riepilogo. Il ciclo di
++ * vita, per chi implementa il lato GL (winq-glspia-gpu.c):
++ *   1. winq_glspia_leggi() arma la richiesta (per il ciclo che comincia ora).
++ *   2. Il primo gpu_apri() dopo l'armamento vede winq_glspia_sonda_richiesta()
++ *      vera, e chiama davvero epoxy_glGetError() subito dopo glBeginQuery --
++ *      passandone il risultato a winq_glspia_sonda_registra_inizio().
++ *   3. Lo stesso submit, in gpu_chiudi(), chiama epoxy_glGetError() subito
++ *      dopo glEndQuery e lo passa a winq_glspia_sonda_registra_fine(), che
++ *      DISARMA la richiesta: nessun altro submit la vedra' vera finche' la
++ *      prossima winq_glspia_leggi() non la riarma.
++ * Il chiamante deve leggere winq_glspia_sonda_richiesta() una volta in
++ * gpu_apri() e ricordare la risposta (es. in un campo della propria tabella
++ * per contesto) invece di richiamarla in gpu_chiudi(): la richiesta resta
++ * vera fra le due, ma un secondo contesto che si intromettesse nel frattempo
++ * (gpu_apri()/gpu_chiudi() di un'altra submit) altrimenti la vedrebbe vera
++ * anche lui e la sonderebbe due volte nello stesso ciclo. */
++int winq_glspia_sonda_richiesta(void);
++void winq_glspia_sonda_registra_inizio(uint64_t errore);
++void winq_glspia_sonda_registra_fine(uint64_t errore);
++
++/* Diagnostica dello switch di contesto GL, aggiunta l'11/08/2026 -- vedi il
++ * commento sopra l'enum WINQ_CTX_* e sulla struct. Chiamate da
++ * vrend_hw_switch_context() (vrend_renderer.c), gia' dietro
++ * winq_glspia_accesa() nel chiamante: qui dentro non c'e' un'altra guardia
++ * sulla diagnostica, solo sui bordi dell'array, come per aggiungi(). Un
++ * origine fuori bounds e' un errore di chi chiama (indice invalido) e si
++ * conta come assurda, non come richiesta o switch vero. */
++void winq_glspia_ctx_richiesto(int origine);
++/* ns e' il tempo dentro vrend_clicbs->make_current(), gia' convertito --
++ * stessa forma di somma_gpu()/somma_finestra(), non passa da aggiungi(). */
++void winq_glspia_ctx_vero(int origine, uint64_t ns);
++
++void winq_glspia_azzera(void);
++uint64_t winq_glspia_taratura_ns(void);
++
++/* Fotografia che azzera. Esportata: la chiama QEMU con GetProcAddress. */
++WINQ_SPIA_ESPORTA void winq_glspia_leggi(struct winq_glspia *fuori);
++
++/* Solo per le prove: rendono deterministica la conversione tick -> ns. */
++void winq_glspia_freq_forza(uint64_t hz);
++void winq_glspia_freq_vera(void);
++
++/* Solo per le prove: rendono deterministico il thread "corrente" che
++ * winq_glspia_thread_id() restituisce, senza dover creare un secondo thread
++ * vero per simulare "altri" -- stesso schema di freq_forza()/freq_vera().
++ * tid == 0 in winq_glspia_thread_forza() equivale a chiamare
++ * winq_glspia_thread_vero(): 0 non e' mai un id di thread vero su Windows,
++ * la stessa sentinella che thread_principale usa per "non registrato". */
++void winq_glspia_thread_forza(uint64_t tid);
++void winq_glspia_thread_vero(void);
++/* Solo per le prove: in produzione il registro (thread_principale e
++ * thread_altri_*) non si azzera mai -- vedi il commento sulla struct. Le
++ * prove hanno bisogno di uno stato di partenza noto fra un caso e l'altro. */
++void winq_glspia_thread_azzera_registro(void);
++
++/* L'anello delle query GL_TIME_ELAPSED. Vive in winq-glspia-gpu.c, che e'
++ * l'unico file dello shim che tocca GL -- percio' le prove di
++ * research/scripts/test-glspia.sh non lo compilano. */
++void winq_glspia_gpu_apri(void);
++void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns);
++
++#endif /* WINQ_GLSPIA_CONTA_H */
+diff --git a/src/winq-glspia-gpu.c b/src/winq-glspia-gpu.c
+new file mode 100644
+index 0000000..96fdb17
+--- /dev/null
++++ b/src/winq-glspia-gpu.c
+@@ -0,0 +1,280 @@
++/* winq-glspia-gpu.c -- l'anello delle query GL_TIME_ELAPSED, per contesto GL.
++ *
++ * PERCHE' PER CONTESTO E NON PER PROCESSO. Un query object GL non si
++ * condivide fra contesti (a differenza di texture e buffer, non fa parte del
++ * gruppo di condivisione): un id generato nel contesto A e' invalido nel
++ * contesto B, e glBeginQuery su un contesto che non e' quello per cui l'id
++ * fu creato fallisce con GL_INVALID_OPERATION -- che nessuno legge. Ogni
++ * vrend_sub_context ha il proprio HGLRC (vrend_renderer.c, vrend_create_sub_ctx)
++ * e su Android piu' contesti si alternano a ogni frame: non e' un caso
++ * limite, e' la normalita'. Percio' l'anello, l'inizializzazione
++ * dell'estensione e lo stato "query in corso" sono per contesto, indicizzati
++ * dall'HGLRC restituito da wglGetCurrentContext().
++ *
++ * PERCHE' UN ANELLO E NON UNA LETTURA DIRETTA. Leggere GL_QUERY_RESULT subito
++ * dopo glEndQuery blocca finche' la GPU non ha finito: serializzerebbe la
++ * catena e cambierebbe la cosa che si sta misurando, restituendo numeri
++ * plausibili e falsi. Si apre la casella i, e prima di riusarla si guarda se
++ * il risultato di allora e' pronto. Se non lo e' si SALTA e si conta -- non si
++ * aspetta mai.
++ *
++ * PERCHE' NIENTE GUARDIA "DISGIUNTO". GL_GPU_DISJOINT appartiene a
++ * EXT_disjoint_timer_query, che e' un'estensione di OpenGL ES. Qui il contesto
++ * dell'host e' desktop 4.6 core via WGL (qemu/WGL.md) e GL_ARB_timer_query non
++ * offre alcun segnale di disgiunzione. Al suo posto una banda di plausibilita':
++ * zero, o piu' di dieci volte il tempo CPU della submit, e' un campione che si
++ * butta contandolo.
++ */
++#include "winq-glspia-conta.h"
++
++#include <epoxy/gl.h>
++/* epoxy/wgl.h e non <windows.h> a mano: risolve wglGetCurrentContext() come
++ * epoxy_wglGetCurrentContext() (dispatch pigro di epoxy, wgl_generated.h),
++ * la stessa via che questo shim usa gia' per ogni altra chiamata GL -- niente
++ * dipendenza di collegamento nuova verso opengl32.lib da giustificare in una
++ * patch che vive sopra l'upstream. Porta con se' <windows.h> (per HGLRC),
++ * quindi non va incluso a parte. */
++#include <epoxy/wgl.h>
++
++/* WINQ_ANELLO: quante caselle nell'anello per contesto, cioe' ogni quante
++ * submit una casella viene riusata (raccogli() sulla casella piu' vecchia,
++ * poi glBeginQuery ci riapre sopra -- vedi gpu_apri() sotto).
++ *
++ * DIMENSIONATO L'11/08/2026 sulla misura di produzione, dopo la correzione
++ * della finestra: submit=609/s. Con il valore precedente (8 caselle)
++ * l'intervallo di riuso era 8/609 s ~= 13,1 ms -- troppo poco perche' la
++ * query GL_TIME_ELAPSED fosse quasi mai pronta: saltate=487/s, assurde=96/s,
++ * 9-13 campioni raccolti su 609 (1,5-2%). t_gpu non era utilizzabile come
++ * aggregato.
++ *
++ * 256 caselle portano l'intervallo di riuso a 256/609 s ~= 420 ms, ~32 volte
++ * quello che falliva: margine ampio anche per code GPU sotto carico. Preferito
++ * ad allungare l'intervallo campionando una submit ogni N (che avrebbe
++ * scartato lavoro a monte, non solo risultati in ritardo) perche' qui il
++ * costo e' solo memoria, non rappresentativita': ogni submit apre ancora la
++ * sua query, nessuna viene saltata all'apertura per campionamento. Il costo:
++ * sizeof(GLuint) + sizeof(uint64_t) + sizeof(int) = 4 + 8 + 4 = 16 byte per
++ * casella (vedi i tre array in struct winq_ctx sotto), quindi 256 * 16 = 4 KB
++ * per contesto, 32 KB su WINQ_CONTESTI (8) contesti, e nel caso peggiore
++ * 256 * 8 = 2048 query object GL in tutto -- trascurabile per un driver che
++ * ne supporta tipicamente migliaia. Se una futura misura mostrasse ancora
++ * "saltati" > 0 a un tasso di submit piu' alto di questo, va rifatto lo
++ * stesso conto con il nuovo tasso, non alzato a occhio. */
++#define WINQ_ANELLO 256
++#define WINQ_BANDA  10   /* t_gpu oltre 10 x t_cpu non e' un numero, e' un errore */
++
++/* WINQ_CONTESTI: quanti contesti GL distinti questo shim puo' cronometrare
++ * contemporaneamente. Ogni vrend_sub_context ha il proprio HGLRC e su
++ * Android piu' contesti si alternano a ogni frame (vedi il commento in cima
++ * al file): 8 copre comodamente un client con piu' sub-contesti vivi insieme
++ * senza riservare memoria per un caso mai osservato. Se la riga di riepilogo
++ * mostra "contesti saltati" > 0, questo numero va alzato, non ignorato --
++ * vedi trova_o_crea() sotto. */
++#define WINQ_CONTESTI 8
++
++struct winq_ctx {
++    HGLRC contesto;                     /* NULL = voce libera */
++    GLuint query[WINQ_ANELLO];
++    uint64_t cpu_ns[WINQ_ANELLO];       /* il t_cpu della submit di quella casella */
++    int aperta[WINQ_ANELLO];
++    int prossima;
++    int pronto;      /* -1 = estensione assente PER QUESTO contesto, 0 = da inizializzare, 1 = ok */
++    int in_corso;
++    /* SONDA glGetError, aggiunta l'11/08/2026 (vedi il commento sopra
++     * winq_glspia_sonda_richiesta() in winq-glspia-conta.h). Deciso qui, non
++     * riletto in gpu_chiudi(): la richiesta resta vera fra apri() e chiudi()
++     * della stessa submit, ma rileggerla in chiudi() invece di ricordare la
++     * risposta di apri() rischierebbe di sondare due volte se un'altra
++     * submit (altro contesto) si intromettesse nel frattempo e vedesse la
++     * stessa richiesta ancora armata. */
++    int sonda_in_corso;
++};
++
++static struct winq_ctx tabella[WINQ_CONTESTI];
++
++/* Trova la voce di 'corrente' nella tabella, o ne assegna una libera se
++ * 'corrente' e' un contesto mai visto. Restituisce NULL se il contesto non
++ * c'era e la tabella e' piena: il chiamante conta il fatto e rinuncia, non
++ * apre query per i contesti in eccesso.
++ *
++ * NIENTE liberazione di voci alla distruzione di un contesto: questo file
++ * non ha un aggancio per sapere quando un HGLRC muore (vrend_destroy_sub_context
++ * non chiama nulla di winq), e un pugno di query object persi a fine sessione
++ * -- al piu' WINQ_CONTESTI * WINQ_ANELLO, liberati dal driver alla chiusura
++ * del processo -- non e' un problema che giustifichi l'aggancio. Decisione
++ * esplicita, non una svista: vedi la review che ha introdotto questo file. */
++static struct winq_ctx *trova_o_crea(HGLRC corrente)
++{
++    int libera = -1;
++    int i;
++
++    for (i = 0; i < WINQ_CONTESTI; i++) {
++        if (tabella[i].contesto == corrente)
++            return &tabella[i];
++        if (libera < 0 && tabella[i].contesto == NULL)
++            libera = i;
++    }
++    if (libera < 0)
++        return NULL;
++
++    tabella[libera].contesto = corrente;
++    return &tabella[libera];
++}
++
++static int inizializza(struct winq_ctx *c)
++{
++    if (c->pronto) {
++        return c->pronto > 0;
++    }
++    /* Per contesto e non per processo: contesti diversi (driver diversi, o
++     * lo stesso driver con capacita' negoziate diversamente) possono in
++     * teoria esporre insiemi diversi di estensioni. */
++    if (!epoxy_has_gl_extension("GL_ARB_timer_query")) {
++        c->pronto = -1;
++        return 0;
++    }
++    /* epoxy_glGenQueries e non glGenQueries: winq-glspia.h non avvolge questa
++     * funzione, ma scriverla per esteso rende il file leggibile da solo. */
++    epoxy_glGenQueries(WINQ_ANELLO, c->query);
++    c->pronto = 1;
++    return 1;
++}
++
++/* Raccoglie il risultato della casella, se c'e'. Non aspetta mai. */
++static void raccogli(struct winq_ctx *c, int i)
++{
++    GLint disponibile = 0;
++    GLuint64 ns = 0;
++
++    if (!c->aperta[i]) {
++        return;
++    }
++    epoxy_glGetQueryObjectiv(c->query[i], GL_QUERY_RESULT_AVAILABLE, &disponibile);
++    if (!disponibile) {
++        winq_glspia_conta_saltata();
++        c->aperta[i] = 0;
++        return;
++    }
++    epoxy_glGetQueryObjectui64v(c->query[i], GL_QUERY_RESULT, &ns);
++    c->aperta[i] = 0;
++
++    /* cpu_ns[i] == 0 capita quando l'orologio e' tornato indietro fra apri()
++     * e chiudi() di quella casella (guardia di winq_glspia_intervallo_ns) o
++     * quando la submit e' stata piu' veloce della risoluzione del tick: in
++     * entrambi i casi non c'e' un t_cpu valido con cui giudicare la
++     * plausibilita' del campione GPU. Si SCARTA anziche' accettarlo senza
++     * controllo superiore -- la banda esiste per contare i campioni assurdi,
++     * non per lasciare un varco dove non sa rispondere. */
++    if (ns == 0 || c->cpu_ns[i] == 0 || ns > c->cpu_ns[i] * WINQ_BANDA) {
++        winq_glspia_conta_assurda();
++        return;
++    }
++    /* aggiungi vuole due tick e converte; qui i nanosecondi ci sono gia'.
++     * Con la frequenza forzata a un miliardo il tick E' il nanosecondo, ma
++     * forzarla qui romperebbe gli altri secchi: si passa 0 e ns come istanti,
++     * il che e' esatto solo se la frequenza e' 1 GHz. Percio' NON si usa
++     * aggiungi: si somma direttamente nel secchio dedicato. */
++    winq_glspia_somma_gpu(ns);
++}
++
++void winq_glspia_gpu_apri(void)
++{
++    HGLRC corrente;
++    struct winq_ctx *c;
++
++    if (!winq_glspia_accesa()) {
++        return;
++    }
++
++    corrente = wglGetCurrentContext();
++    if (!corrente) {
++        /* Nessun contesto corrente: aprire una query qui sarebbe esattamente
++         * il difetto trovato in review (glBeginQuery sul contesto lasciato
++         * dalla submit precedente, o su nessuno alla primissima chiamata).
++         * Si conta come un salto: un campione perso, non un errore da
++         * nascondere. */
++        winq_glspia_conta_saltata();
++        return;
++    }
++
++    c = trova_o_crea(corrente);
++    if (!c) {
++        /* Tabella piena: questo contesto resta senza cronometraggio. Si
++         * conta con lo stesso contatore dei salti -- e' un campione perso
++         * per lo stesso motivo di fondo (nessuna casella disponibile), non
++         * un evento diverso da distinguere in questa fase. */
++        winq_glspia_conta_saltata();
++        return;
++    }
++
++    if (!inizializza(c) || c->in_corso) {
++        return;
++    }
++    raccogli(c, c->prossima);
++    /* Letta una volta, ricordata in c->sonda_in_corso: chiudi() la user
++     * senza richiamare winq_glspia_sonda_richiesta(), vedi il commento sul
++     * campo in struct winq_ctx sopra. Il costo a diagnostica accesa e' una
++     * lettura di variabile per submit, come winq_glspia_in_finestra(); le
++     * due chiamate GL vere a glGetError() (sotto e in chiudi()) scattano
++     * solo sulla submit che trova la richiesta armata, una volta per ciclo
++     * di riepilogo. */
++    c->sonda_in_corso = winq_glspia_sonda_richiesta();
++    epoxy_glBeginQuery(GL_TIME_ELAPSED, c->query[c->prossima]);
++    if (c->sonda_in_corso) {
++        winq_glspia_sonda_registra_inizio((uint64_t)epoxy_glGetError());
++    }
++    c->aperta[c->prossima] = 1;
++    c->in_corso = 1;
++}
++
++/* La guardia winq_glspia_accesa() qui in cima e' asimmetrica rispetto ad
++ * apri(), che ce l'ha da sempre (vedi :185): AGGIUNTA perche' mancava, ed era
++ * un effetto collaterale di STATO a diagnostica completamente spenta.
++ * Senza di essa questa funzione, chiamata incondizionatamente da
++ * vrend_decode_ctx_submit_cmd (vrend_decode.c) a ogni submit, eseguiva
++ * comunque wglGetCurrentContext() e soprattutto trova_o_crea(), che CREA
++ * voci: la tabella dei WINQ_CONTESTI (8) si riempiva anche in una corsa senza
++ * WINQ_GPU_DIAG. E poiche' le voci non si liberano mai (dichiarato sopra
++ * trova_o_crea), da quel momento ogni contesto nuovo era senza
++ * cronometraggio -- comprese le corse in cui la diagnostica veniva accesa
++ * dopo. Uno strumento spento non deve lasciare tracce, men che meno tracce
++ * che rompono lo strumento acceso.
++ *
++ * DIFETTO NOTO, NON RIPARATO QUI, e va scritto perche' non si perda. I due
++ * ritorni silenziosi qui sotto (nessun contesto corrente, oppure contesto
++ * diverso da quello che aveva aperto) lasciano c->in_corso a 1 sulla voce di
++ * QUEL contesto: da quel momento ogni apri() su di esso esce a :210 senza
++ * aprire nulla, per sempre. E' un candidato per il fatto misurato che t_gpu
++ * riporti zero campioni su 769 cicli consecutivi -- l'altro candidato e' la
++ * tabella piena a WINQ_CONTESTI (8), che non si libera mai. I due si
++ * distinguono solo sdoppiando il contatore "saltate" nelle sue cause, che
++ * richiede campi nuovi nella struttura e non entra in questa patch. Sbloccare
++ * a tappeto NON e' il rimedio: la query GL_TIME_ELAPSED su quel contesto
++ * resterebbe aperta, e il glBeginQuery successivo fallirebbe con
++ * GL_INVALID_OPERATION -- si sposterebbe il guasto, non lo si toglierebbe. */
++void winq_glspia_gpu_chiudi(uint64_t t_cpu_ns)
++{
++    HGLRC corrente;
++    struct winq_ctx *c;
++
++    if (!winq_glspia_accesa()) {
++        return;
++    }
++
++    corrente = wglGetCurrentContext();
++    if (!corrente) {
++        return;
++    }
++    c = trova_o_crea(corrente);
++    if (!c || !c->in_corso) {
++        return;
++    }
++    epoxy_glEndQuery(GL_TIME_ELAPSED);
++    if (c->sonda_in_corso) {
++        winq_glspia_sonda_registra_fine((uint64_t)epoxy_glGetError());
++        c->sonda_in_corso = 0;
++    }
++    c->cpu_ns[c->prossima] = t_cpu_ns;
++    c->prossima = (c->prossima + 1) % WINQ_ANELLO;
++    c->in_corso = 0;
++}
+diff --git a/src/winq-glspia.h b/src/winq-glspia.h
+new file mode 100644
+index 0000000..bc77e70
+--- /dev/null
++++ b/src/winq-glspia.h
+@@ -0,0 +1,490 @@
++/* winq-glspia.h -- cronometra le entry point GL calde.
++ *
++ * COME FUNZIONA. virglrenderer chiama GL attraverso libepoxy, dove ogni glFoo
++ * e' gia' una macro verso epoxy_glFoo (verificato: meson.build:88 dichiara
++ * dependency('epoxy', >= 1.5.4), src/meson.build:172 la lega, ed epoxy/gl.h e'
++ * incluso da virglrenderer.c, vrend/vrend_decode.c, vrend/vrend_renderer.h).
++ * Si toglie quella macro e se ne mette una che chiama epoxy_glFoo in mezzo a
++ * due letture dell'orologio. Nessun sito di chiamata cambia.
++ *
++ * Questo file viene FORCE-INCLUSO da src/meson.build con -include, quindi
++ * arriva prima di qualunque #include del file compilato. epoxy/gl.h ha le
++ * proprie guardie, percio' l'inclusione successiva nei sorgenti e' innocua.
++ *
++ * PERCHE' PIU' SECCHI E NON UNO. glFinish, glFlush e glClientWaitSync non
++ * sono lavoro: sono attesa, e per giunta attesa su tre cose diverse
++ * (rispettivamente: che la GPU smaltisca la coda, niente -- non aspetta --,
++ * una fence esplicita). Sommarle a glDrawElements gonfierebbe il costo del
++ * driver con tempo speso fermi, e la sottrazione della spec §3 attribuirebbe
++ * a virglrenderer un tempo che non ha speso lui; sommarle fra loro (com'era
++ * fino alla correzione dell'11/08/2026, un solo secchio ATTESA) nascondeva
++ * quale delle tre dominasse -- e lo split di "fuori" aveva appena mostrato
++ * che il grosso del secondo (64%, fuori/attesa) sta in una di queste tre,
++ * senza dire quale: la scomposizione qui e' apposta per rispondere a quella
++ * domanda, non per confermare un sospetto gia' deciso. glCompileShader e
++ * glLinkProgram sono lavoro ma di prima volta, e mescolarle al regime
++ * nasconderebbe proprio il fenomeno che si vuole vedere.
++ *
++ * PERCHE' PROPRIO QUESTI NOMI. Il criterio non e' "il nome inizia per glDraw"
++ * ne' un elenco copiato dall'API GL generica: e' "e' lavoro caldo del driver
++ * che oggi, se non avvolto, cade dentro t_virgl per sottrazione (spec §3) pur
++ * non essendo tempo speso da virglrenderer". Questo copre il dispatch del
++ * disegno (glDraw* e glMultiDraw*), il dispatch del calcolo (glDispatchCompute*,
++ * stesso ruolo del disegno ma per gli shader di calcolo), l'aggancio delle
++ * render target (glFramebufferTexture*, glFramebufferRenderbuffer,
++ * glRenderbufferStorageMultisampleEXT, glCheckFramebufferStatus: scattano a
++ * ogni cambio di framebuffer, non solo alla creazione, vedi il commento sopra
++ * quelle macro per la catena di chiamata verificata), il trasferimento dati
++ * guest -> host che passa da buffer/texture reali (glBufferSubData,
++ * glTexSubImage*, glCopyBufferSubData: dati veri che si spostano, non
++ * allocazione di storage con puntatore NULL), l'azzeramento di un target
++ * (glClear e sorelle, glClearTexSubImage: lavoro reale sullo stesso piano
++ * CPU del disegno, non solo impostazione di stato) e la lettura all'indietro
++ * host <- GPU (glGetTexImage, glReadPixels), messa in FINISH come
++ * approssimazione dichiarata: vedi il commento sopra quelle due macro, piu'
++ * sotto, per il perche'. Non copre invece la sola creazione di risorse
++ * (glTexStorage*, glTexImage* usate qui solo per allocare senza dati,
++ * glBufferStorage -- quasi sempre una tantum, con un'eccezione stretta
++ * documentata in fondo al file) ne' le barriere di sincronizzazione: vedi in
++ * fondo al file la lista di esclusioni motivate, con il sito di chiamata che
++ * giustifica ciascuna.
++ *
++ * Ogni nome qui sotto e' verificato sui siti di chiamata reali sotto
++ * src/vrend/ (non ricavato a memoria ne' copiato da un elenco di
++ * riferimento). Se il fork cambia -- una nuova estensione usata da
++ * vrend_renderer.c, un percorso di disegno o di trasferimento diverso --
++ * questo elenco va riverificato con una ricerca dei siti di chiamata e
++ * rivalutato con lo stesso criterio, non esteso a occhio rimettendo i nomi
++ * "ovvi" (es. glDrawArraysInstanced, o glTexStorage2D per simmetria con
++ * glTexImage2D) ne' escluso a occhio con una motivazione di categoria o di
++ * frequenza non verificata sul sito di chiamata: l'elenco e' gia' stato
++ * sbagliato piu' volte cosi', sia per difetto (nomi mancanti) sia per
++ * eccesso (esclusioni con la ragione sbagliata).
++ */
++#ifndef WINQ_GLSPIA_H
++#define WINQ_GLSPIA_H
++
++#include <epoxy/gl.h>
++#include "winq-glspia-conta.h"
++
++/* Le espressioni di statement sono un'estensione GNU, e questo albero si
++ * compila con clang in modalita' gnu11: sono disponibili. Servono perche' le
++ * funzioni GL avvolte hanno tipi di ritorno diversi e il wrapper deve
++ * restituirne il valore senza conoscerlo.
++ *
++ * LA SENTINELLA E' LO ZERO. winq_t0_ == 0 vuol dire "diagnostica spenta, non
++ * cronometrare". E' sicuro perche' winq_glspia_ora() legge QueryPerformanceCounter,
++ * che conta i tick da un riferimento fisso all'avvio del sistema: su hardware
++ * reale non e' mai zero, quindi una lettura vera con la diagnostica accesa non
++ * puo' mai essere scambiata per "spenta". Se in futuro winq_glspia_ora() venisse
++ * ricollegata a un orologio che *puo'* restituire zero, questa sentinella
++ * andrebbe rivista insieme a lei.
++ *
++ * CORREZIONE DELL'11/08/2026: la chiamata avvolta si cronometra sempre (se la
++ * diagnostica e' accesa), ma il risultato va nel secchio del suo gruppo solo
++ * se winq_glspia_in_finestra() dice che siamo dentro il tratto che
++ * vrend_decode_ctx_submit_cmd cronometra (vrend_decode.c, fra
++ * winq_glspia_finestra_apri() e finestra_chiudi()). Fuori da li' virglrenderer
++ * chiama GL comunque -- attesa sulle fence, trasferimenti di risorse,
++ * creazione di oggetti -- e quel tempo cadeva silenziosamente nel "cpu" che la
++ * riga di riepilogo sottrae, senza mai essere stato incluso: la causa della
++ * maggioranza dei campioni con virgl=0. winq_glspia_aggiungi_fuori() lo conta
++ * a parte, nello stesso secchio del gruppo ma nell'array "fuori" (vedi la
++ * struct in winq-glspia-conta.h): non e' un errore da scartare, e' lavoro
++ * fuori perimetro, e la seconda correzione dell'11/08/2026 l'ha reso
++ * distinto per GL/SHADER/ATTESA invece di un unico contenitore cieco.
++ *
++ * QUARTA CORREZIONE, STESSO GIORNO, LA PIU' SERIA: in_finestra e' un flag
++ * GLOBALE, alzato e abbassato solo dal thread che decodifica -- ma qualunque
++ * thread puo' chiamare una di queste macro. "Fuori" non vuol dire "sul thread
++ * principale", vuol dire "mentre il principale non decodificava"; e "dentro"
++ * non vuol dire "e' il principale che ha lavorato", vuol dire "e' successo
++ * mentre il principale teneva la finestra aperta" -- un altro thread (in
++ * questo fork, vrend-sync) che chiami nel frattempo finisce comunque in
++ * ns[]/chiamate[], contaminandoli. winq_glspia_thread_indice() risolve
++ * l'ambiguita': dice se il thread corrente e' quello registrato da
++ * winq_glspia_finestra_apri() o no, e il risultato va ad aggiungi()/
++ * aggiungi_fuori() come indice aggiuntivo, non come un secchio in piu' --
++ * vedi l'enum WINQ_THREAD_* in winq-glspia-conta.h. */
++#define WINQ_SPIA_VAL(secchio, espr) __extension__({                        \
++    uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
++    __typeof__(espr) winq_r_ = (espr);                                      \
++    if (winq_t0_) {                                                         \
++        uint64_t winq_t1_ = winq_glspia_ora();                              \
++        int winq_th_ = winq_glspia_thread_indice();                        \
++        if (winq_glspia_in_finestra()) {                                    \
++            winq_glspia_aggiungi(winq_th_, (secchio), winq_t0_, winq_t1_);  \
++        } else {                                                            \
++            winq_glspia_aggiungi_fuori(winq_th_, (secchio), winq_t0_, winq_t1_); \
++        }                                                                    \
++    }                                                                       \
++    winq_r_;                                                                \
++})
++
++#define WINQ_SPIA_VOID(secchio, espr) do {                                  \
++    uint64_t winq_t0_ = winq_glspia_accesa() ? winq_glspia_ora() : 0;       \
++    (espr);                                                                 \
++    if (winq_t0_) {                                                         \
++        uint64_t winq_t1_ = winq_glspia_ora();                              \
++        int winq_th_ = winq_glspia_thread_indice();                        \
++        if (winq_glspia_in_finestra()) {                                    \
++            winq_glspia_aggiungi(winq_th_, (secchio), winq_t0_, winq_t1_);  \
++        } else {                                                            \
++            winq_glspia_aggiungi_fuori(winq_th_, (secchio), winq_t0_, winq_t1_); \
++        }                                                                    \
++    }                                                                       \
++} while (0)
++
++/* --- disegno: il grosso del lavoro, e dove il driver valida lo stato ------ *
++ * Elenco ricavato dai siti di chiamata reali in src/vrend/vrend_renderer.c
++ * (il dispatch di vrend_draw_vbo attorno alla riga 6130) e src/vrend/vrend_blitter.c,
++ * vrend_formats.c, vrend_video.c. glDrawArraysInstanced e glDrawElementsInstanced
++ * NON compaiono: questo fork chiama sempre le varianti ARB/BaseInstance/BaseVertex,
++ * mai la forma "base" dell'API. */
++#undef glDrawArrays
++#define glDrawArrays(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArrays(__VA_ARGS__))
++#undef glDrawElements
++#define glDrawElements(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElements(__VA_ARGS__))
++#undef glDrawArraysIndirect
++#define glDrawArraysIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysIndirect(__VA_ARGS__))
++#undef glDrawArraysInstancedARB
++#define glDrawArraysInstancedARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysInstancedARB(__VA_ARGS__))
++#undef glDrawArraysInstancedBaseInstance
++#define glDrawArraysInstancedBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawArraysInstancedBaseInstance(__VA_ARGS__))
++#undef glDrawElementsBaseVertex
++#define glDrawElementsBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsBaseVertex(__VA_ARGS__))
++#undef glDrawElementsIndirect
++#define glDrawElementsIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsIndirect(__VA_ARGS__))
++#undef glDrawElementsInstancedARB
++#define glDrawElementsInstancedARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedARB(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseInstance
++#define glDrawElementsInstancedBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseInstance(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseVertex
++#define glDrawElementsInstancedBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseVertex(__VA_ARGS__))
++#undef glDrawElementsInstancedBaseVertexBaseInstance
++#define glDrawElementsInstancedBaseVertexBaseInstance(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawElementsInstancedBaseVertexBaseInstance(__VA_ARGS__))
++#undef glDrawRangeElements
++#define glDrawRangeElements(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawRangeElements(__VA_ARGS__))
++#undef glDrawRangeElementsBaseVertex
++#define glDrawRangeElementsBaseVertex(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawRangeElementsBaseVertex(__VA_ARGS__))
++#undef glDrawBuffers
++#define glDrawBuffers(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawBuffers(__VA_ARGS__))
++#undef glDrawPixels
++#define glDrawPixels(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDrawPixels(__VA_ARGS__))
++#undef glMultiDrawArraysIndirect
++#define glMultiDrawArraysIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawArraysIndirect(__VA_ARGS__))
++#undef glMultiDrawArraysIndirectCountARB
++#define glMultiDrawArraysIndirectCountARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawArraysIndirectCountARB(__VA_ARGS__))
++#undef glMultiDrawElementsIndirect
++#define glMultiDrawElementsIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawElementsIndirect(__VA_ARGS__))
++#undef glMultiDrawElementsIndirectCountARB
++#define glMultiDrawElementsIndirectCountARB(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glMultiDrawElementsIndirectCountARB(__VA_ARGS__))
++
++/* --- calcolo: stesso ruolo del disegno, ma per gli shader di calcolo ----- *
++ * vrend_launch_grid (vrend_renderer.c riga ~6297) e' il dispatch del calcolo
++ * cosi' come vrend_draw_vbo lo e' per il disegno: stessa sottrazione, stesso
++ * rischio di finire in t_virgl se non avvolto. */
++#undef glDispatchCompute
++#define glDispatchCompute(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDispatchCompute(__VA_ARGS__))
++#undef glDispatchComputeIndirect
++#define glDispatchComputeIndirect(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glDispatchComputeIndirect(__VA_ARGS__))
++
++/* --- framebuffer: l'aggancio delle render target, a ogni cambio ---------- *
++ * Rilievo verificato dal coordinatore: glFramebufferTexture2DMultisampleEXT
++ * e glRenderbufferStorageMultisampleEXT erano finite fra le esclusioni come
++ * "creazione di risorse, una tantum". Falso: la catena e'
++ * vrend_set_framebuffer_state (riga 3183, il gestore del comando guest "set
++ * framebuffer state") -> vrend_hw_set_zsurf_texture/vrend_hw_set_color_surface
++ * (righe 3076/3093) -> vrend_fb_bind_texture_id (riga 2992) ->
++ * vrend_framebuffer_texture_2d (riga 2931, dove stanno le due macro). Scatta
++ * a ogni cambio di render target, non alla creazione. Peggio: dentro la
++ * stessa funzione, glGenRenderbuffers (riga 2949) e' incondizionato -- non
++ * controlla mai res->rbo_id prima di generarne uno nuovo -- quindi rialloca
++ * un renderbuffer ogni volta che ci passa (bug di risorse a se', fuori
++ * scope per questo file: segnalato separatamente, non toccato qui).
++ *
++ * Spostate qui, in WINQ_SPIA_GL. Con loro le sorelle dirette nello stesso
++ * sito, incluse per lo stesso motivo per cui i giri precedenti hanno chiuso
++ * i buchi analoghi su glDraw* e glTexSubImage* (non lasciare una sorella
++ * scoperta sullo stesso dispatch): glFramebufferTexture2D (la stessa
++ * funzione, ramo non-MSAA, di gran lunga il piu' usato), glFramebufferTexture/
++ * glFramebufferTextureLayer/glFramebufferTexture1D/glFramebufferTexture3D/
++ * glFramebufferTexture3DOES (vrend_fb_bind_texture_id, righe 3017-3057, il
++ * dispatch per target array/cubemap/3D/1D), glFramebufferRenderbuffer (riga
++ * 2954, tre righe sotto la Multisample, stesso ramo). glCheckFramebufferStatus
++ * (riga 3273 qui, anche in vrend_formats.c) e' incluso perche' e' letteralmente
++ * "il driver valida lo stato" -- la stessa frase che il commento del secchio
++ * disegno usa per giustificare se stesso; ritorna GLenum, quindi WINQ_SPIA_VAL.
++ *
++ * NON incluse, con la ragione vera e non una frequenza indovinata:
++ * glGenRenderbuffers (genera solo un nome intero, l'allocazione vera e'
++ * glRenderbufferStorageMultisampleEXT tre righe sotto, gia' inclusa -- stessa
++ * ragione per cui glGenBuffersARB/glGenFramebuffers/glGenTextures non sono
++ * mai stati in questo file), glBindRenderbuffer/glBindFramebuffer (bind,
++ * scambiano un puntatore di stato, non validano ne' allocano -- stessa
++ * ragione di glBindBuffer/glBindTexture altrove nel file, mai avvolte),
++ * glReadBuffer (imposta quale buffer leggere, puntatore di stato come i
++ * bind, non esegue lavoro). */
++#undef glFramebufferTexture2D
++#define glFramebufferTexture2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture2D(__VA_ARGS__))
++#undef glFramebufferTexture2DMultisampleEXT
++#define glFramebufferTexture2DMultisampleEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture2DMultisampleEXT(__VA_ARGS__))
++#undef glFramebufferTexture
++#define glFramebufferTexture(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture(__VA_ARGS__))
++#undef glFramebufferTextureLayer
++#define glFramebufferTextureLayer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTextureLayer(__VA_ARGS__))
++#undef glFramebufferTexture1D
++#define glFramebufferTexture1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture1D(__VA_ARGS__))
++#undef glFramebufferTexture3D
++#define glFramebufferTexture3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture3D(__VA_ARGS__))
++#undef glFramebufferTexture3DOES
++#define glFramebufferTexture3DOES(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferTexture3DOES(__VA_ARGS__))
++#undef glFramebufferRenderbuffer
++#define glFramebufferRenderbuffer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glFramebufferRenderbuffer(__VA_ARGS__))
++#undef glRenderbufferStorageMultisampleEXT
++#define glRenderbufferStorageMultisampleEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glRenderbufferStorageMultisampleEXT(__VA_ARGS__))
++#undef glCheckFramebufferStatus
++#define glCheckFramebufferStatus(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glCheckFramebufferStatus(__VA_ARGS__))
++
++/* --- buffer: il traffico di dati guest -> host --------------------------- */
++#undef glBufferData
++#define glBufferData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBufferData(__VA_ARGS__))
++#undef glBufferSubData
++#define glBufferSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBufferSubData(__VA_ARGS__))
++#undef glMapBufferRange
++#define glMapBufferRange(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glMapBufferRange(__VA_ARGS__))
++#undef glUnmapBuffer
++#define glUnmapBuffer(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_GL, epoxy_glUnmapBuffer(__VA_ARGS__))
++#undef glCopyBufferSubData
++#define glCopyBufferSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCopyBufferSubData(__VA_ARGS__))
++
++/* --- texture: le copie, che su d3d12 possono diventare passaggi interi ---- *
++ * Solo le entry point che spostano dati guest veri (glTexSubImage*, le
++ * varianti compresse). glTexImage2D resta perche' era gia' nell'elenco
++ * originale; le sue sorelle di sola allocazione (glTexImage1D/3D,
++ * glTexStorage*) NON ci sono per scelta, vedi la nota di testa al file. */
++#undef glTexImage2D
++#define glTexImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexImage2D(__VA_ARGS__))
++#undef glTexSubImage1D
++#define glTexSubImage1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage1D(__VA_ARGS__))
++#undef glTexSubImage2D
++#define glTexSubImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage2D(__VA_ARGS__))
++#undef glTexSubImage3D
++#define glTexSubImage3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glTexSubImage3D(__VA_ARGS__))
++#undef glCompressedTexSubImage1D
++#define glCompressedTexSubImage1D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage1D(__VA_ARGS__))
++#undef glCompressedTexSubImage2D
++#define glCompressedTexSubImage2D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage2D(__VA_ARGS__))
++#undef glCompressedTexSubImage3D
++#define glCompressedTexSubImage3D(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCompressedTexSubImage3D(__VA_ARGS__))
++#undef glCopyImageSubData
++#define glCopyImageSubData(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glCopyImageSubData(__VA_ARGS__))
++#undef glBlitFramebuffer
++#define glBlitFramebuffer(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glBlitFramebuffer(__VA_ARGS__))
++
++/* --- clear: azzerare un target e' lavoro reale, non solo stato ----------- *
++ * glClear stava fra le esclusioni con la motivazione "non e' ne' dispatch
++ * ne' trasferimento dati": vera, ma e' una motivazione di categoria, non di
++ * evidenza, e non risponde alla domanda che conta. glClear vive in
++ * vrend_clear (riga 4828, il gestore del comando guest CLEAR) e glClear
++ * ricompare in vrend_clear_surface (riga 4929, comando CLEAR_SURFACE): due
++ * gestori di comando di primo livello, non dettagli interni, chiamati a ogni
++ * clear di un render target -- una o piu' volte a frame come glDraw* e
++ * glDispatchCompute*, che sono gia' incluse. E' comunque una chiamata GL con
++ * validazione di stato lato driver, sullo stesso piano CPU delle altre:
++ * la ragione vera per includerla, non la categoria "clear" in se'.
++ *
++ * Incluse le sorelle dirette nello stesso sito: glClearBufferuiv/iv/fv
++ * (vrend_clear, righe 4871/4875/4877) sono i rami alternativi dello stesso
++ * if quando i colorbuffer hanno formati diversi da quello atteso da
++ * glClear(bits). glClearTexSubImage (vrend_clear_texture, riga 4921) e la
++ * sua variante GLES glClearTexSubImageEXT (riga 4916) scrivono dati veri in
++ * una regione di texture: stessa natura di glTexSubImage*, gia' incluse.
++ *
++ * NON incluse: glClearColor/glClearDepth/glClearStencil (vrend_clear_prepare,
++ * righe 4737-4774) impostano il VALORE da usare al prossimo clear, non
++ * eseguono il clear -- puntatori di stato come i bind, non lavoro. */
++#undef glClear
++#define glClear(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClear(__VA_ARGS__))
++#undef glClearBufferuiv
++#define glClearBufferuiv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferuiv(__VA_ARGS__))
++#undef glClearBufferiv
++#define glClearBufferiv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferiv(__VA_ARGS__))
++#undef glClearBufferfv
++#define glClearBufferfv(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearBufferfv(__VA_ARGS__))
++#undef glClearTexSubImage
++#define glClearTexSubImage(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearTexSubImage(__VA_ARGS__))
++#undef glClearTexSubImageEXT
++#define glClearTexSubImageEXT(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_GL, epoxy_glClearTexSubImageEXT(__VA_ARGS__))
++
++/* --- sincronizzazione: ATTESA, non lavoro --------------------------------
++ * TERZA CORREZIONE DELL'11/08/2026: ATTESA sommava tre primitive con tre
++ * cause diverse -- glFlush manda in coda senza aspettare (presentazione),
++ * glFinish blocca finche' la GPU non ha smaltito tutto (GPU), glClientWaitSync
++ * blocca su una fence esplicita (fence) -- e lo split di "fuori" aveva appena
++ * mostrato che il grosso del tempo sta proprio qui dentro, senza dire quale
++ * dei tre. Ora tre secchi distinti, non uno: vedi l'enum in
++ * winq-glspia-conta.h. */
++#undef glFlush
++#define glFlush(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_FLUSH, epoxy_glFlush(__VA_ARGS__))
++#undef glFinish
++#define glFinish(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glFinish(__VA_ARGS__))
++#undef glClientWaitSync
++#define glClientWaitSync(...) \
++    WINQ_SPIA_VAL(WINQ_SPIA_WAITSYNC, epoxy_glClientWaitSync(__VA_ARGS__))
++
++/* --- lettura all'indietro: FINISH, per approssimazione dichiarata -------- *
++ * glReadPixels e glGetTexImage sono sincrone: un readback e' insieme una
++ * copia (lavoro) e un blocco finche' la coda GPU non arriva a quel punto
++ * (attesa), e i secchi non hanno una casella per "tutti e due". Le mettiamo
++ * intere in attesa, non in GL, perche' delle due componenti l'attesa domina
++ * largamente: la copia costa microsecondi, il blocco costa quanto ci mette
++ * la GPU a smaltire la coda davanti. L'alternativa vera qui non e' "attesa
++ * oppure GL": e' "attesa oppure NIENTE", perche' senza questo wrapper le due
++ * chiamate cadrebbero in t_virgl per sottrazione, attribuendo tempo di
++ * blocco alla traduzione di virglrenderer -- la distorsione peggiore delle
++ * due, e proprio quella per cui esistono questi giri di correzione.
++ *
++ * TERZA CORREZIONE DELL'11/08/2026: con ATTESA sparita dall'enum, queste due
++ * vanno in uno dei tre secchi nuovi. FINISH, non FLUSH ne' WAITSYNC: un
++ * readback sincrono blocca la CPU finche' la GPU non ha smaltito la coda
++ * fino a quel punto -- la stessa semantica di "aspetta che la GPU finisca"
++ * di glFinish, non il "manda e non aspettare" di glFlush ne' l'attesa su una
++ * fence esplicita di glClientWaitSync. E' la scelta piu' vicina fra tre
++ * caselle nate per altro, non una quarta primitiva reale: chi legge i numeri
++ * deve sapere che, per queste due funzioni soltanto, il secchio FINISH
++ * include anche del lavoro di copia. Un quinto secchio "lettura all'indietro"
++ * sarebbe piu' preciso, ma cambierebbe di nuovo l'aritmetica e il formato
++ * della riga di riepilogo, quindi non si introduce qui. */
++#undef glReadPixels
++#define glReadPixels(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glReadPixels(__VA_ARGS__))
++#undef glGetTexImage
++#define glGetTexImage(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_FINISH, epoxy_glGetTexImage(__VA_ARGS__))
++
++/* --- shader: DXIL + PSO, costo di prima volta ---------------------------- */
++#undef glCompileShader
++#define glCompileShader(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_SHADER, epoxy_glCompileShader(__VA_ARGS__))
++#undef glLinkProgram
++#define glLinkProgram(...) \
++    WINQ_SPIA_VOID(WINQ_SPIA_SHADER, epoxy_glLinkProgram(__VA_ARGS__))
++
++/* --- esclusioni motivate ---------------------------------------------------
++ * Chiamate davvero presenti in src/vrend/ e scartate di proposito, non per
++ * dimenticanza. Ogni esclusione qui sotto cita il sito di chiamata che la
++ * giustifica, non solo una categoria o una frequenza presunta -- due
++ * esclusioni di un giro precedente si reggevano su "una tantum" che il
++ * grafo delle chiamate smentiva (vedi la sezione framebuffer sopra), quindi
++ * questo elenco e' stato riverificato riga per riga. Se una di queste va
++ * rivista, cambiare qui il ragionamento, non solo l'elenco sopra.
++ *
++ * Creazione di buffer (allocano storage, non spostano dati): glBufferStorage,
++ * glBufferStorageMemEXT. Verificato: unico chiamante e' vrend_create_buffer
++ * (riga 8324), a sua volta chiamata solo da vrend_resource_alloc_buffer
++ * (riga 8394), a sua volta chiamata solo dal dispatch di resource-create
++ * (riga 8926, dentro la funzione invocata da vrend_renderer_pipe_resource_create
++ * / vrend_decode.c:1598, un gestore di comando guest RESOURCE_CREATE). Un solo
++ * chiamante, un solo comando: davvero una tantum per risorsa.
++ *
++ * Creazione di texture: glTexImage1D/3D, glTexImage2DMultisample/3DMultisample,
++ * glTexStorage1D/2D/3D, glTexStorage2DMultisample/3DMultisample,
++ * glTexStorageMem2DEXT. Vivono in vrend_resource_alloc_texture (riga 8694).
++ * Qui la frequenza NON e' pulita come per i buffer: il chiamante principale
++ * (riga 8929, dispatch di resource-create, stesso comando guest di sopra) e'
++ * una tantum per risorsa, ma esiste un'eccezione stretta in
++ * vrend_renderer_blit_fbo (riga 11084): quando GLES + blit con maschera
++ * depth/stencil + campionamento multisample diverso fra sorgente e
++ * destinazione + rettangoli non coincidenti, alloca una texture "intermediate_copy"
++ * a ogni blit che soddisfa quella condizione, non alla creazione della
++ * risorsa. E' un fallback di workaround (vedi il commento alle righe
++ * 11045-11054), non il percorso comune del disegno: restano escluse, ma la
++ * riga precedente che diceva "chiamate una volta per risorsa, non ad ogni
++ * frame" senza qualificarla era essa stessa il tipo di affermazione che
++ * questo giro doveva controllare. Se quel percorso GLES risultasse piu'
++ * caldo del previsto, va misurato separatamente, non infilato qui dentro.
++ * (glTexImage2D e' gia' nell'elenco incluso sopra pur passando anch'essa da
++ * questa stessa funzione: e' dell'elenco originale, non toccata da questo
++ * giro di correzioni.)
++ *
++ * glGetTexImage e glReadPixels NON sono escluse: sono in ATTESA, vedi il
++ * commento sopra a quelle due macro per il ragionamento (approssimazione
++ * dichiarata, decisa esplicitamente e non scelta qui in silenzio).
++ *
++ * glCopyTexSubImage2D (solo in vrend_video.c): quel file si compila solo con
++ * `meson -Dvideo=true` (src/meson.build: `if with_video`), e questa build ha
++ * video disattivato (virgl-build.json: "videoEnabled": false) -- oggi non
++ * fa nemmeno parte del binario. Non e' una frequenza, e' un flag di build:
++ * verificabile con certezza, non un'ipotesi. Da rivedere se e quando video
++ * viene acceso.
++ *
++ * glClear e glClearTexSubImage NON sono escluse: sono in WINQ_SPIA_GL, vedi
++ * il commento sopra a quel gruppo di macro.
++ *
++ * glMemoryBarrier (vrend_memory_barrier, riga 3982) e la sorella
++ * glTextureBarrier (vrend_texture_barrier, riga 3989, notata durante questa
++ * verifica) sono gestori di comando guest a se' stanti, quindi non rare: il
++ * pattern dispatch-compute-poi-barriera le rende potenzialmente frequenti
++ * quanto glDispatchCompute, che e' inclusa. Restano fuori non per rarita' ma
++ * per natura: la spec GL dice esplicitamente che glMemoryBarrier "does not
++ * block execution" -- e' l'inserimento di un ordine nel flusso di comandi,
++ * non una validazione di stato ne' uno spostamento di dati ne' un blocco
++ * della CPU. Diverso da glCheckFramebufferStatus (inclusa sopra), che valida
++ * davvero lo stato del framebuffer.
++ */
++
++#endif /* WINQ_GLSPIA_H */

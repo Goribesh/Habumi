@@ -1,0 +1,67 @@
+diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
+index 186b53c..5b19e4e 100644
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -508,7 +508,6 @@ static void virgl_cmd_create_resource_2d(VirtIOGPU *g,
+     res->base.format = c2d.format;
+     res->base.resource_id = c2d.resource_id;
+     res->base.dmabuf_fd = -1;
+-    QTAILQ_INSERT_HEAD(&g->reslist, &res->base, next);
+ 
+     args.handle = c2d.resource_id;
+     args.target = 2;
+@@ -521,7 +520,17 @@ static void virgl_cmd_create_resource_2d(VirtIOGPU *g,
+     args.last_level = 0;
+     args.nr_samples = 0;
+     args.flags = VIRTIO_GPU_RESOURCE_FLAG_Y_0_TOP;
+-    virgl_renderer_resource_create(&args, NULL, 0);
++    int ret = virgl_renderer_resource_create(&args, NULL, 0);
++    if (ret) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: renderer rejected resource %u: %d\n",
++                      __func__, c2d.resource_id, ret);
++        cmd->error = ret == ENOMEM ? VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY
++                                  : VIRTIO_GPU_RESP_ERR_UNSPEC;
++        g_free(res);
++        return;
++    }
++    QTAILQ_INSERT_HEAD(&g->reslist, &res->base, next);
+ }
+ 
+ /* winq: definita piu' sotto, accanto alla mappa di bit -- il prototipo sta
+@@ -538,7 +547,6 @@ static void virgl_cmd_create_resource_3d(VirtIOGPU *g,
+     VIRTIO_GPU_FILL_CMD(c3d);
+     trace_virtio_gpu_cmd_res_create_3d(c3d.resource_id, c3d.format,
+                                        c3d.width, c3d.height, c3d.depth);
+-    winq_res_conta(c3d.resource_id, 1);
+ 
+     if (c3d.resource_id == 0) {
+         qemu_log_mask(LOG_GUEST_ERROR, "%s: resource id 0 is not allowed\n",
+@@ -561,7 +569,6 @@ static void virgl_cmd_create_resource_3d(VirtIOGPU *g,
+     res->base.format = c3d.format;
+     res->base.resource_id = c3d.resource_id;
+     res->base.dmabuf_fd = -1;
+-    QTAILQ_INSERT_HEAD(&g->reslist, &res->base, next);
+ 
+     args.handle = c3d.resource_id;
+     args.target = c3d.target;
+@@ -574,7 +581,18 @@ static void virgl_cmd_create_resource_3d(VirtIOGPU *g,
+     args.last_level = c3d.last_level;
+     args.nr_samples = c3d.nr_samples;
+     args.flags = c3d.flags;
+-    virgl_renderer_resource_create(&args, NULL, 0);
++    int ret = virgl_renderer_resource_create(&args, NULL, 0);
++    if (ret) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: renderer rejected resource %u: %d\n",
++                      __func__, c3d.resource_id, ret);
++        cmd->error = ret == ENOMEM ? VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY
++                                  : VIRTIO_GPU_RESP_ERR_UNSPEC;
++        g_free(res);
++        return;
++    }
++    QTAILQ_INSERT_HEAD(&g->reslist, &res->base, next);
++    winq_res_conta(c3d.resource_id, 1);
+ }
+ 
+ static int
