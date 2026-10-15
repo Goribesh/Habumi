@@ -101,6 +101,10 @@ int main(int argc, char **argv)
     vm_chiudi();
     start_vm("misleading"); vm_passo(); finish_check();
     CHECK(vm_s == VM_ATTESA_ANDROID); vm_chiudi();
+    start_vm("ui-missing"); vm_passo(); finish_check();
+    CHECK(vm_s == VM_ATTESA_ANDROID); vm_chiudi();
+    start_vm("only-boot"); vm_passo(); finish_check();
+    CHECK(vm_s == VM_ATTESA_ANDROID); vm_chiudi();
     start_vm("ready"); vm_passo(); finish_check();
     CHECK(vm_s == VM_PRONTO); vm_chiudi();
 

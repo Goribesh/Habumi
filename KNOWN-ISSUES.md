@@ -39,6 +39,19 @@ in SystemUI; Android subsequently reached a readable Home and accepted
 navigation. Its recurrence rate is not established. See the
 [release preparation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
 
+Development after 0.3.0-rc.1 reproduced the same exception on another fresh
+data image. A new shell check waits for stable SystemUI/compositor PIDs before
+marking startup ready. A proposed upstream null-list guard is recorded but has
+not been built or installed; the guest crash remains unresolved. See
+[the startup investigation](docs/ANDROID-STARTUP-READINESS-2026-10-15.md).
+
+**Post-initialization GApps testing also recorded background-service ANRs.**
+Google Play Services' intent-filter verification receiver and MediaProvider's
+external-storage service exceeded Android response deadlines in a subsequent
+test boot. The collected SystemUI crash buffer was empty on that boot. Their
+cause and recurrence rate are not yet established; they are not repaired by
+the new shell readiness check.
+
 **Historical `system_server` crashes remain unresolved.** Recorded crashes
 during network activity and package installation restarted the Android framework
 and closed running applications. Binder failures reached Java as an uncaught
@@ -124,8 +137,8 @@ and writable data images; see [ROADMAP.md](ROADMAP.md).
 
 ## Packaging and licensing
 
-**The prerelease is not yet published; binaries are unsigned and there is no
-updater.** SmartScreen can warn or block execution under some policies. New
+**Binaries are unsigned and there is no updater.** SmartScreen can warn or
+block execution under some policies. New
 versions require a manual download; there is no automatic notification or data
 migration.
 

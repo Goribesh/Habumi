@@ -43,13 +43,13 @@ static int child_mode(int argc, char **argv)
         !strcmp(argv[4], "reboot") && !strcmp(argv[5], "-p")) {
         return 0; /* VM integration owns a fake process, never a real guest. */
     }
-    if (argc == 6 && !strcmp(argv[1], "-s") &&
+    if (argc == 5 && !strcmp(argv[1], "-s") &&
         !strcmp(argv[2], "127.0.0.1:16555") && !strcmp(argv[3], "shell") &&
-        !strcmp(argv[4], "getprop") && !strcmp(argv[5], "sys.boot_completed")) {
+        !strcmp(argv[4], "getprop sys.boot_completed; pidof surfaceflinger; pidof com.android.systemui")) {
         if (env && !strcmp(env, "hang")) { Sleep(30000); return 0; }
         if (env && !strcmp(env, "reconnect")) {
             if (GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES) return 7;
-            puts("1"); return 0;
+            puts("1\n322\n742"); return 0;
         }
         if (env && !strcmp(env, "queryfail")) return 7;
         if (env && !strcmp(env, "notready")) { puts("0"); return 0; }
@@ -58,7 +58,31 @@ static int child_mode(int argc, char **argv)
             for (int i = 0; i < 2000; ++i) putchar(' ');
             puts("1"); return 0;
         }
-        puts(env && !strcmp(env, "ready-space") ? " \t1\r\n" : "1");
+        if (env && !strcmp(env, "ui-missing")) { puts("1\n322\n"); return 0; }
+        if (env && !strcmp(env, "sf-missing")) { puts("1\n\n742"); return 0; }
+        if (env && !strcmp(env, "sf-missing-multi")) { puts("1\n\n742 743"); return 0; }
+        if (env && !strcmp(env, "flat-output")) { puts("1 322 742"); return 0; }
+        if (env && !strcmp(env, "only-boot")) { puts("1"); return 0; }
+        if (env && !strcmp(env, "pid-zero")) { puts("1\n322\n0"); return 0; }
+        if (env && !strcmp(env, "pid-overflow")) { puts("1\n322\n4294967296"); return 0; }
+        if (env && !strcmp(env, "pid-extra")) { puts("1\n322\n742 743"); return 0; }
+        if (env && !strcmp(env, "same-pid")) { puts("1\n322\n322"); return 0; }
+        if (env && (!strcmp(env, "ui-restart") || !strcmp(env, "sf-restart") ||
+                    !strcmp(env, "confirm-fail") || !strcmp(env, "confirm-missing"))) {
+            bool seconda = GetFileAttributesA(marker) != INVALID_FILE_ATTRIBUTES;
+            if (!seconda) {
+                HANDLE h = CreateFileA(marker, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                                      FILE_ATTRIBUTE_NORMAL, NULL);
+                if (h == INVALID_HANDLE_VALUE) return 8;
+                CloseHandle(h);
+            }
+            if (seconda && !strcmp(env, "confirm-fail")) return 7;
+            if (seconda && !strcmp(env, "confirm-missing")) { puts("1\n322\n"); return 0; }
+            printf("1\n%u\n%u\n", seconda && !strcmp(env, "sf-restart") ? 323 : 322,
+                   seconda && !strcmp(env, "ui-restart") ? 743 : 742);
+            return 0;
+        }
+        puts(env && !strcmp(env, "ready-space") ? " \t1\n 322\n742 \t\n" : "1\n322\n742");
         return 0;
     }
     if (argc == 3 && !strcmp(argv[1], "connect") &&
@@ -153,15 +177,43 @@ int main(int argc, char **argv)
     AdbPreparazione *r = start(&c);
     CHECK(r != NULL);
     if (r) {
+        ULONGLONG prima = GetTickCount64();
         CHECK(wait_result(r, ADB_PRONTO_SI, 3000));
+        CHECK(GetTickCount64() - prima >= 1000);
         CHECK(adb_pronto_passo(r) == ADB_PRONTO_SI);
         CHECK(adb_pronto_chiudi(r));
     }
 
-    const char *no_modes[] = {"notready", "misleading", "noisy"};
+    const char *no_modes[] = {"notready", "misleading", "noisy", "ui-missing",
+        "sf-missing", "sf-missing-multi", "flat-output", "only-boot", "pid-zero",
+        "pid-overflow", "pid-extra", "same-pid"};
     for (size_t i = 0; i < sizeof(no_modes)/sizeof(no_modes[0]); ++i) {
         CHECK(set_mode(no_modes[i])); r = start(&c); CHECK(r != NULL);
         if (r) { CHECK(wait_result(r, ADB_PRONTO_NO, 3000)); CHECK(adb_pronto_chiudi(r)); }
+    }
+
+    const char *restart_modes[] = {"ui-restart", "sf-restart", "confirm-fail", "confirm-missing"};
+    for (size_t i = 0; i < sizeof(restart_modes)/sizeof(restart_modes[0]); ++i) {
+        CHECK(set_mode(restart_modes[i])); r = start(&c); CHECK(r != NULL);
+        if (r) { CHECK(wait_result(r, ADB_PRONTO_NO, 3000)); CHECK(adb_pronto_chiudi(r)); }
+        made_marker = GetFileAttributesA(marker) != INVALID_FILE_ATTRIBUTES;
+        CHECK(made_marker);
+        if (made_marker) { CHECK(DeleteFileA(marker)); made_marker = false; }
+    }
+
+    /* Durante il secondo tra i campioni non deve vivere alcun client ADB. */
+    CHECK(set_mode("ready")); r = start(&c); CHECK(r != NULL);
+    if (r) {
+        ULONGLONG fine = GetTickCount64() + 3000;
+        while (r->fase != 3 && GetTickCount64() < fine) {
+            CHECK(adb_pronto_passo(r) == ADB_PRONTO_ATTESA); Sleep(10);
+        }
+        CHECK(r->fase == 3 && r->cliente == NULL);
+        ULONGLONG prima = GetTickCount64();
+        CHECK(adb_pronto_passo(r) == ADB_PRONTO_ATTESA);
+        CHECK(GetTickCount64() - prima < 100);
+        CHECK(r->cliente == NULL);
+        CHECK(adb_pronto_chiudi(r));
     }
 
     /* The request must retain the port from start time, not reread Config. */

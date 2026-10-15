@@ -286,8 +286,9 @@ AdbSpegniStato adb_spegni_passo(AdbSpegnimento *richiesta);
 /* False retains ownership: cancellation has not completed yet. */
 bool adb_spegni_chiudi(AdbSpegnimento *richiesta);
 
-/* One asynchronous boot check: property, optional connect, then one retry.
- * The whole check has a 20-second deadline; completion never trusts serial logs. */
+/* Controllo asincrono: boot completo e PID invariati di compositor/SystemUI in
+ * due campioni distanti almeno un secondo. Connect e riprova se necessario.
+ * Scadenza totale 20 secondi; non considera la seriale una prova di salute. */
 typedef struct AdbPreparazione AdbPreparazione;
 typedef enum { ADB_PRONTO_ATTESA, ADB_PRONTO_SI, ADB_PRONTO_NO } AdbProntoStato;
 AdbPreparazione *adb_pronto_avvia(const Config *c);

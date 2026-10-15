@@ -1344,7 +1344,7 @@ VmStato vm_passo(void)
                 vm_adb_pronto = NULL;
                 vm_ora_ultima_adb = vm_adesso();
                 if (stato == ADB_PRONTO_SI) {
-                    registro_riga(REG_GUSCIO, "Android is ready (asynchronous ADB check)");
+                    registro_riga(REG_GUSCIO, "Android is ready (boot complete; compositor and SystemUI PIDs stable across two checks)");
                     vm_vai(VM_PRONTO);
                     break;
                 }

@@ -674,8 +674,10 @@ bool adb_spegni_chiudi(AdbSpegnimento *richiesta)
 struct AdbPreparazione {
     AdbSpegnimento *cliente;
     int porta;
-    int fase; /* 0=property, 1=connect, 2=retry property */
+    int fase; /* 0=stato, 1=connect, 2=riprova stato, 3=conferma interfaccia */
     ULONGLONG iniziata;
+    ULONGLONG conferma_dopo;
+    DWORD compositore, interfaccia;
     bool annullata;
     bool finita;
     AdbProntoStato esito;
@@ -690,7 +692,9 @@ static AdbSpegnimento *adb_pronto_cliente(const AdbPreparazione *richiesta)
         snprintf(coda, sizeof(coda), "connect 127.0.0.1:%d", config.porta_adb);
         return adb_cliente_avvia(&config, coda, false, "boot connect");
     }
-    return adb_cliente_avvia(&config, "shell getprop sys.boot_completed", true, "boot property");
+    return adb_cliente_avvia(&config,
+        "shell \"getprop sys.boot_completed; pidof surfaceflinger; pidof com.android.systemui\"",
+        true, "boot interface");
 }
 
 AdbPreparazione *adb_pronto_avvia(const Config *c)
@@ -705,12 +709,40 @@ AdbPreparazione *adb_pronto_avvia(const Config *c)
     return richiesta;
 }
 
-static bool adb_boot_completo(const char *uscita)
+/* Il flag resta a 1 anche mentre SystemUI cade e riparte. Servono entrambi i
+ * processi in due campioni: nessuna attesa bloccante sul thread della UI. */
+static bool adb_interfaccia_pronta(const char *uscita, DWORD *compositore,
+                                  DWORD *interfaccia)
 {
     while (*uscita && strchr(" \t\r\n", *uscita)) { uscita++; }
     if (*uscita++ != '1') { return false; }
+    while (*uscita && strchr(" \t", *uscita)) { uscita++; }
+    if (*uscita == '\r') { uscita++; }
+    if (*uscita++ != '\n') { return false; }
+    DWORD processi[2];
+    for (int i = 0; i < 2; i++) {
+        /* Non saltare righe vuote: un PID SystemUI non puo' riempire il
+         * campo mancante del compositor. Ogni comando produce una riga. */
+        while (*uscita && strchr(" \t", *uscita)) { uscita++; }
+        DWORD pid = 0;
+        if (*uscita < '0' || *uscita > '9') { return false; }
+        while (*uscita >= '0' && *uscita <= '9') {
+            unsigned cifra = (unsigned)(*uscita++ - '0');
+            if (pid > (MAXDWORD - cifra) / 10) { return false; }
+            pid = pid * 10 + cifra;
+        }
+        if (!pid) { return false; }
+        processi[i] = pid;
+        while (*uscita && strchr(" \t", *uscita)) { uscita++; }
+        if (*uscita == '\r') { uscita++; }
+        if (*uscita == '\n') { uscita++; }
+        else if (*uscita || i == 0) { return false; }
+    }
     while (*uscita && strchr(" \t\r\n", *uscita)) { uscita++; }
-    return *uscita == '\0';
+    if (*uscita || processi[0] == processi[1]) { return false; }
+    *compositore = processi[0];
+    *interfaccia = processi[1];
+    return true;
 }
 
 AdbProntoStato adb_pronto_passo(AdbPreparazione *richiesta)
@@ -727,13 +759,37 @@ AdbProntoStato adb_pronto_passo(AdbPreparazione *richiesta)
         richiesta->finita = true;
         return richiesta->esito = ADB_PRONTO_NO;
     }
+    if (!richiesta->cliente) {
+        if (GetTickCount64() < richiesta->conferma_dopo) { return ADB_PRONTO_ATTESA; }
+        richiesta->cliente = adb_pronto_cliente(richiesta);
+        if (!richiesta->cliente) {
+            richiesta->finita = true;
+            return richiesta->esito = ADB_PRONTO_NO;
+        }
+        return ADB_PRONTO_ATTESA;
+    }
     AdbSpegniStato stato = adb_spegni_passo(richiesta->cliente);
     if (stato == ADB_SPEGNI_ATTESA) { return ADB_PRONTO_ATTESA; }
+    DWORD compositore = 0, interfaccia = 0;
     bool pronto = stato == ADB_SPEGNI_OK &&
                   !richiesta->cliente->uscita_troncata &&
-                  adb_boot_completo(richiesta->cliente->ultima);
+                  adb_interfaccia_pronta(richiesta->cliente->ultima,
+                                        &compositore, &interfaccia);
     if (!adb_spegni_chiudi(richiesta->cliente)) { return ADB_PRONTO_ATTESA; }
     richiesta->cliente = NULL;
+    if (richiesta->fase == 3) {
+        richiesta->finita = true;
+        return richiesta->esito = pronto && compositore == richiesta->compositore &&
+                                 interfaccia == richiesta->interfaccia
+                                 ? ADB_PRONTO_SI : ADB_PRONTO_NO;
+    }
+    if (pronto) {
+        richiesta->compositore = compositore;
+        richiesta->interfaccia = interfaccia;
+        richiesta->fase = 3;
+        richiesta->conferma_dopo = GetTickCount64() + 1000;
+        return ADB_PRONTO_ATTESA;
+    }
     if (richiesta->fase != 1 && (stato == ADB_SPEGNI_OK || richiesta->fase == 2)) {
         richiesta->finita = true;
         return richiesta->esito = pronto ? ADB_PRONTO_SI : ADB_PRONTO_NO;
