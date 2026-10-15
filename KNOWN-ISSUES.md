@@ -81,6 +81,13 @@ The ring size is not a measurement of end-to-end audio latency.
 
 ## Graphics and window
 
+**Development rotation checks exposed a native Vulkan presentation limit.**
+On a portrait-natural panel, correcting the requested host window size does
+not rotate the raw scanout into an upright landscape image. The development
+profile was restored to portrait; visible rotation is not validated. See
+[the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md) for evidence
+and the remaining presentation/input transform work.
+
 **Vulkan is verified on the development machine, not across supported
 hardware.** A test-only candidate using native Qualcomm Vulkan through Venus
 and Zink booted Android, presented visible frames and completed 3DMark Wild

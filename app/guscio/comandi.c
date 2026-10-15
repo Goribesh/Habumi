@@ -124,7 +124,9 @@ void comandi_passo(void)
         } else if (fase == 1) {
             if (!leggi_rotazione(uscita, &rotazione)) { fallisci("invalid rotation state"); return; }
             int w, h;
-            dpi_ruota(larghezza, altezza, rotazione != 0, &w, &h);
+            bool verso_orizzontale = rotazione
+                ? larghezza > altezza : larghezza < altezza;
+            dpi_ruota(larghezza, altezza, verso_orizzontale, &w, &h);
             /* Preserve the existing framebuffer-before-Android-settings order. */
             if (!tubo_risoluzione(w, h)) {
                 registro_riga(REG_GUSCIO, "rotation: command pipe did not deliver the framebuffer; applying Android rotation fallback");

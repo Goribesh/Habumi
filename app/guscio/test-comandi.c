@@ -82,6 +82,7 @@ static int fake_child(int argc, char **argv)
     if (mode && !strcmp(mode, "fail")) return 7;
     if (argc == 6 && !strcmp(argv[4], "wm") && !strcmp(argv[5], "size")) {
         if (mode && !strcmp(mode, "bad-size")) { puts("size unavailable"); return 0; }
+        if (mode && !strcmp(mode, "portrait-size")) { puts("Physical size: 1600x2560"); return 0; }
         puts("Physical size: 1280x800"); return 0;
     }
     if (argc == 8 && !strcmp(argv[4], "settings") && !strcmp(argv[5], "get") &&
@@ -191,6 +192,14 @@ static bool drain(DWORD limit_ms)
     return false;
 }
 
+static bool set_rotation_state(int value)
+{
+    FILE *state = fopen(rotation_path, "wb");
+    if (!state) return false;
+    fprintf(state, "%d\n", value);
+    return fclose(state) == 0;
+}
+
 int main(int argc, char **argv)
 {
     int child = fake_child(argc, argv);
@@ -272,6 +281,25 @@ int main(int argc, char **argv)
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 0"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 1280 && pipe_h[0] == 800);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", rot2[i]); CHECK(strcmp(lines[i], e) == 0); }
+
+    /* Portrait-natural panels need the opposite target-orientation mapping:
+     * user_rotation 0 -> 1 produces landscape; 1 -> 0 produces portrait. */
+    clear_actions(); pipe_calls = 0; pipe_fail = false; own_rotation = true;
+    CHECK(set_mode("portrait-size")); CHECK(set_rotation_state(0));
+    CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
+    count = read_actions(lines, 64);
+    const char *portrait_rot0[] = {"wm size", "settings get system user_rotation",
+        "settings put system accelerometer_rotation 0", "settings put system user_rotation 1"};
+    CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 2560 && pipe_h[0] == 1600);
+    for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot0[i]); CHECK(strcmp(lines[i], e) == 0); }
+
+    clear_actions(); pipe_calls = 0; CHECK(set_rotation_state(1));
+    CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
+    count = read_actions(lines, 64);
+    const char *portrait_rot1[] = {"wm size", "settings get system user_rotation",
+        "settings put system accelerometer_rotation 0", "settings put system user_rotation 0"};
+    CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 1600 && pipe_h[0] == 2560);
+    for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot1[i]); CHECK(strcmp(lines[i], e) == 0); }
 
     /* Invalid size/state and failed writes clear queued commands. */
     const char *bad_modes[] = {"bad-size", "bad-rotation", "fail-write"};

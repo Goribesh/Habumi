@@ -47,14 +47,36 @@ the existing asynchronous handlers.
 ## Validation
 
 The complete shell compiled with `-Wall -Werror -O2`. Existing asynchronous
-control checks passed (133), readiness checks passed (187), and shutdown/VM
+control checks passed (150), readiness checks passed (187), and shutdown/VM
 checks passed (100). The candidate is installed only in Habumi-Startup-Test,
 with executable and manifest backups.
 
-The new shell booted Android and displayed current readiness with all nine
-accessible button names. Initial visual inspection confirmed the dark theme,
-but a Windows Firewall permission prompt blocked further interaction. Keyboard,
-rotation and compact-window visual checks remain pending until that prompt is
-handled by the user. Light/high-contrast appearance and live theme switching
-have not been visually verified. These are not broad hardware compatibility or
-Windows standby guarantees.
+The user handled the Windows Firewall prompt before further UI automation.
+Visual inspection confirmed the dark theme, current readiness, all nine named
+buttons, and toolbar wrapping into two rows at a compact window size of about
+451x300 logical pixels on the 200% display. Tab reached Power; Shift+Tab reached
+the log. Mouse, Enter and Space on Home each produced a separate delivered-command
+log entry. The latest candidate reached Android readiness at 36.625 seconds;
+this is an observed boot time, not a performance comparison.
+
+Light/high-contrast appearance and live theme switching have not been visually
+verified. These are not broad hardware compatibility or Windows standby guarantees.
+
+## Rotation: verified limitation
+
+The live portrait-natural 1600x2560 panel test exposed an assumption in the
+Rotate queue: its requested host orientation assumed a landscape-natural panel.
+The target now uses the physical panel aspect and current Android rotation.
+The focused queue tests cover both natural aspects and both directions.
+
+This corrects the requested host window dimensions, but does not finish visible
+rotation on the native Vulkan path. With Android rotation 1, WindowManager
+reported logical 2560x1600 and QEMU requested that host size, while the raw
+scanout remained portrait with sideways content and letterboxing. The test was
+therefore not a visual rotation pass. The profile was restored to 1600x2560 and
+`user_rotation=0` after the investigation.
+
+The scanout path uses `egl_fb_blit`/`glBlitFramebuffer`, which cannot request a
+quarter-turn. A follow-up needs an explicit presentation transform, matching
+viewport aspect and inverse input-coordinate mapping, with live rendering and
+touch checks. That renderer change is not included in this interface update.
