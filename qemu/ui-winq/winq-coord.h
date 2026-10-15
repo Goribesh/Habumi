@@ -18,8 +18,13 @@
 
 typedef struct {
     int win_w, win_h;      /* dimensioni utili della finestra, in pixel */
-    int guest_w, guest_h;  /* spazio logico del guest */
+    int guest_w, guest_h;  /* dimensioni raw naturali dello scanout */
+    unsigned rotation;     /* rotazioni orarie da 0 a 3 */
 } WinqGeom;
+
+/* Coordinate normalizzate: dal display ruotato allo scanout naturale. */
+void winq_rotation_source_uv(unsigned rotation, double u, double v,
+                            double *su, double *sv);
 
 /* Rettangolo occupato dall'immagine del guest dentro la finestra, in pixel:
  * origine (*x, *y) e dimensioni (*w, *h), con le bande nere che restano fuori.

@@ -2868,6 +2868,8 @@ int main(int argc, char **argv)
                 case VM_PRONTO:
                     finestra_fase("Android", "ready");
                     finestra_bottoni(true);
+                    /* Restore presentation for Android's persisted orientation. */
+                    ui_accoda(COMANDO_SINCRONIZZA_ROTAZIONE, 0);
                     /* Density is queued once before subsequent button commands. */
                     if (g_c.densita != 0) { ui_accoda(COMANDO_DENSITA, g_c.densita); }
                     break;

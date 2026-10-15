@@ -81,12 +81,12 @@ The ring size is not a measurement of end-to-end audio latency.
 
 ## Graphics and window
 
-**Development rotation checks exposed a native Vulkan presentation limit.**
-On a portrait-natural panel, correcting the requested host window size does
-not rotate the raw scanout into an upright landscape image. The development
-profile was restored to portrait; visible rotation is not validated. See
-[the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md) for evidence
-and the remaining presentation/input transform work.
+**Manual rotation is fixed in the development profile; published builds retain
+the older presentation limitation.** The native WGL/Zink candidate passed
+upright portrait/landscape rendering and matching mouse clicks. It also fits
+the host window within the monitor work area. Automatic app-requested orientation
+changes and the ANGLE path remain unvalidated. See
+[the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md).
 
 **Vulkan is verified on the development machine, not across supported
 hardware.** A test-only candidate using native Qualcomm Vulkan through Venus
@@ -102,11 +102,11 @@ not use the test profile; there, the HAL override applied only to the benchmark
 process, leaving other apps on the stock HAL. See the dated
 [Venus WSI report](docs/NATIVE-VULKAN.md) and [control confirmation](docs/NATIVE-VULKAN.md).
 
-**Rotation controls work, but the host window does not rotate with the guest.**
-The async controls passed a live portrait/landscape rotation pair, restoring
-the original rotation and framebuffer dimensions. The QEMU host client still
-keeps its fixed shape, so a portrait framebuffer can be squeezed into a
-landscape window. See [async controls](docs/NATIVE-VULKAN.md).
+**The published runtime does not include the new presentation/input rotation
+transform.** Its earlier async-control checks covered Android settings and
+requested dimensions; they did not establish upright host rendering. The
+post-release development fix is recorded above and has not replaced release
+assets. See [the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md).
 
 **The boot animation occupies only part of the screen in the recorded setup.**
 Cropping versus scaling still needs verification before changing its dimensions.

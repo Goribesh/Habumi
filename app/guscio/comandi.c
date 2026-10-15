@@ -14,7 +14,8 @@ static AdbComando *cliente;
 static bool attiva, annullando;
 static ULONGLONG iniziata;
 static const char *nomi[] = {"power", "volume up", "volume down", "home",
-                            "back", "recent apps", "rotation", "density"};
+                            "back", "recent apps", "rotation", "density",
+                            "rotation sync"};
 static const char *tasti[] = {"KEYCODE_POWER", "KEYCODE_VOLUME_UP", "KEYCODE_VOLUME_DOWN",
                              "KEYCODE_HOME", "KEYCODE_BACK", "KEYCODE_APP_SWITCH"};
 
@@ -38,7 +39,7 @@ bool comandi_annulla(void)
 
 bool comandi_accoda(const Config *c, ComandoUi tipo, int valore)
 {
-    if (!c || tipo < COMANDO_POWER || tipo > COMANDO_DENSITA ||
+    if (!c || tipo < COMANDO_POWER || tipo > COMANDO_SINCRONIZZA_ROTAZIONE ||
         (tipo == COMANDO_DENSITA && (valore < 120 || valore > 640))) { return false; }
     if (annullando || quanti == COMANDI_CAPACITA) {
         registro_riga(REG_GUSCIO, "controls: %s refused; queue is full or still stopping", nomi[tipo]);
@@ -108,7 +109,7 @@ void comandi_passo(void)
     if (stato != ADB_SPEGNI_OK || troncata) { fallisci("ADB error or incomplete output"); return; }
     if (!adb_comando_chiudi(cliente)) { annullando = true; quanti = 0; return; }
     cliente = NULL;
-    if (attuale.tipo == COMANDO_RUOTA) {
+    if (attuale.tipo == COMANDO_RUOTA || attuale.tipo == COMANDO_SINCRONIZZA_ROTAZIONE) {
         if (fase == 0) {
             const char *p = strchr(uscita, ':');
             char *fine;
@@ -124,12 +125,24 @@ void comandi_passo(void)
         } else if (fase == 1) {
             if (!leggi_rotazione(uscita, &rotazione)) { fallisci("invalid rotation state"); return; }
             int w, h;
-            bool verso_orizzontale = rotazione
-                ? larghezza > altezza : larghezza < altezza;
+            bool sync = attuale.tipo == COMANDO_SINCRONIZZA_ROTAZIONE;
+            unsigned destinazione = sync ? (unsigned)rotazione : rotazione ? 0 : 1;
+            bool verso_orizzontale = (destinazione & 1)
+                ? larghezza < altezza : larghezza > altezza;
             dpi_ruota(larghezza, altezza, verso_orizzontale, &w, &h);
             /* Preserve the existing framebuffer-before-Android-settings order. */
-            if (!tubo_risoluzione(w, h)) {
-                registro_riga(REG_GUSCIO, "rotation: command pipe did not deliver the framebuffer; applying Android rotation fallback");
+            /* Android ruota sul pannello fisico; la finestra lo compensa. */
+            unsigned rotazione_host = (4 - destinazione) % 4;
+            bool consegnato = tubo_risoluzione_ruotata(w, h, rotazione_host);
+            if (!consegnato) {
+                registro_riga(REG_GUSCIO, "rotation: command pipe did not deliver the presentation target");
+            }
+            if (sync) {
+                if (consegnato) {
+                    registro_riga(REG_GUSCIO, "rotation: presentation synchronized with user_rotation=%d", rotazione);
+                }
+                attiva = false;
+                return;
             }
         }
         if (fase < 3) {

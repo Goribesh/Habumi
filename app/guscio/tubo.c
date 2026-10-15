@@ -77,6 +77,17 @@ bool tubo_risoluzione(int w, int h)
     return tubo_scrivi(comando, n);
 }
 
+bool tubo_risoluzione_ruotata(int w, int h, unsigned rotazione)
+{
+    char comando[64];
+    if (rotazione > 3) {
+        return false;
+    }
+    int n = snprintf(comando, sizeof(comando), "risoluzione %d %d %u\n",
+                     w, h, rotazione);
+    return tubo_scrivi(comando, n);
+}
+
 bool tubo_mappa_carica(const char *percorso)
 {
     char comando[MAX_PATH + 32];

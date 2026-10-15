@@ -31,15 +31,17 @@ static char actions_path[MAX_PATH], rotation_path[MAX_PATH];
 static bool own_fake, own_actions, own_rotation;
 static unsigned checks, failures, pipe_calls;
 static int pipe_w[8], pipe_h[8];
+static unsigned pipe_rotation[8];
 static bool pipe_fail;
 
 #define CHECK(x) do { checks++; if (!(x)) { failures++; \
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); } } while (0)
 
-bool tubo_risoluzione(int w, int h)
+bool tubo_risoluzione_ruotata(int w, int h, unsigned rotation)
 {
     if (pipe_calls < sizeof(pipe_w)/sizeof(pipe_w[0])) {
         pipe_w[pipe_calls] = w; pipe_h[pipe_calls] = h;
+        pipe_rotation[pipe_calls] = rotation;
     }
     pipe_calls++;
     return !pipe_fail;
@@ -291,6 +293,7 @@ int main(int argc, char **argv)
     const char *portrait_rot0[] = {"wm size", "settings get system user_rotation",
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 1"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 2560 && pipe_h[0] == 1600);
+    CHECK(pipe_rotation[0] == 3);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot0[i]); CHECK(strcmp(lines[i], e) == 0); }
 
     clear_actions(); pipe_calls = 0; CHECK(set_rotation_state(1));
@@ -299,7 +302,20 @@ int main(int argc, char **argv)
     const char *portrait_rot1[] = {"wm size", "settings get system user_rotation",
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 0"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 1600 && pipe_h[0] == 2560);
+    CHECK(pipe_rotation[0] == 0);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot1[i]); CHECK(strcmp(lines[i], e) == 0); }
+
+    /* A warm boot restores presentation without changing Android settings. */
+    for (int r = 0; r < 4; ++r) {
+        clear_actions(); pipe_calls = 0; CHECK(set_rotation_state(r));
+        CHECK(comandi_accoda(&c, COMANDO_SINCRONIZZA_ROTAZIONE, 0));
+        comandi_passo(); CHECK(drain(5000));
+        count = read_actions(lines, 64);
+        CHECK(count == 2 && pipe_calls == 1);
+        CHECK(pipe_rotation[0] == (unsigned)((4-r)%4));
+        CHECK(pipe_w[0] == ((r&1) ? 2560 : 1600));
+        CHECK(pipe_h[0] == ((r&1) ? 1600 : 2560));
+    }
 
     /* Invalid size/state and failed writes clear queued commands. */
     const char *bad_modes[] = {"bad-size", "bad-rotation", "fail-write"};

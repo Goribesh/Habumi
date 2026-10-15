@@ -305,7 +305,8 @@ bool adb_comando_chiudi(AdbComando *richiesta);
 /* UI-thread-only FIFO; VM lifetime cancels it before shutdown or restart. */
 typedef enum {
     COMANDO_POWER, COMANDO_VOL_SU, COMANDO_VOL_GIU, COMANDO_HOME,
-    COMANDO_BACK, COMANDO_RECENTI, COMANDO_RUOTA, COMANDO_DENSITA
+    COMANDO_BACK, COMANDO_RECENTI, COMANDO_RUOTA, COMANDO_DENSITA,
+    COMANDO_SINCRONIZZA_ROTAZIONE
 } ComandoUi;
 bool comandi_accoda(const Config *c, ComandoUi tipo, int valore);
 void comandi_passo(void);
@@ -453,6 +454,7 @@ void finestra_messaggi_guscio(FinMsgGuscio f);
 /* --- tubo.c -------------------------------------------------------------- */
 
 bool tubo_risoluzione(int w, int h);
+bool tubo_risoluzione_ruotata(int w, int h, unsigned rotazione);
 
 /* Le tre funzioni della mappa dei tasti, modellate su tubo_risoluzione:
  * aprono il tubo, scrivono un comando, chiudono. Il fallimento (tubo

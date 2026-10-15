@@ -76,6 +76,8 @@ static uint64_t winq_frames;                 /* frame presentati, per la diagnos
  * punto egl_init la pretende ancora. */
 static DisplayGLMode winq_mode;
 
+#include "winq-rotate-gl.h"
+
 bool winq_present_early_init(DisplayGLMode mode)
 {
     Error *err = NULL;
@@ -737,7 +739,11 @@ static void winq_disegna_scanout(void)
         int64_t t0 = winq_pres_diag() ? g_get_monotonic_time() : 0;
 
         egl_fb_setup_default(&winq_win_fb, vw, vh, vx, vy);
-        egl_fb_blit(&winq_win_fb, &winq_guest_fb, !winq_y0_top);
+        if (!winq.geom.rotation ||
+            !winq_rotate_draw(winq_guest_fb.texture, !winq_y0_top,
+                              vx, vy, vw, vh)) {
+            egl_fb_blit(&winq_win_fb, &winq_guest_fb, !winq_y0_top);
+        }
         if (t0) {
             winq_pres_blit_us += g_get_monotonic_time() - t0;
         }
@@ -922,6 +928,13 @@ static void winq_disegna_superficie(void)
      * scanout resta legato l'FBO della texture del guest, e disegnare la'
      * dentro non darebbe alcun errore -- solo una finestra nera. */
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (winq.geom.rotation) {
+        int x, y, w, h;
+        winq_viewport(&x, &y, &w, &h);
+        if (winq_rotate_draw(winq_ds->texture, true, x, y, w, h)) {
+            goto swap;
+        }
+    }
     surface_gl_setup_viewport(winq_gls, winq_ds,
                               winq.geom.win_w, winq.geom.win_h);
     /* qemu_gl_run_texture_blit disegna la texture LEGATA ADESSO, non una
@@ -930,6 +943,7 @@ static void winq_disegna_superficie(void)
      * contesto, quindi si rilega qui invece di fidarsi. */
     glBindTexture(GL_TEXTURE_2D, winq_ds->texture);
     surface_gl_render_texture(winq_gls, winq_ds);
+swap:
     if (winq_wgl_attivo()) {
         winq_wgl_swap();
     } else {

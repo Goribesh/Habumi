@@ -128,7 +128,7 @@ static void winq_tubo_apri(void)
 
 static void winq_tubo_esegui(const char *comando)
 {
-    int w = 0, h = 0;
+    int w = 0, h = 0, rotazione = 0;
 
     /* "mappa carica <percorso>" e "mappa impara <...>": il resto della riga,
      * comando+13, e' passato PARI PARI -- winq_tubo_passo (sopra) ha gia'
@@ -158,16 +158,18 @@ static void winq_tubo_esegui(const char *comando)
         return;
     }
 
-    if (sscanf(comando, "risoluzione %d %d", &w, &h) == 2) {
+    if (sscanf(comando, "risoluzione %d %d %d", &w, &h, &rotazione) >= 2) {
         /* Si valida invece di girare al device qualunque cosa: con larghezza o
          * altezza a ZERO virtio-gpu DISABILITA l'uscita
          * (hw/display/virtio-gpu-base.c:116-120), cioe' lo schermo si spegne e
          * il comando sembra "having done nothing". */
-        if (w < 320 || h < 320 || w > 8192 || h > 8192) {
-            info_report("winq: resolution %dx%d refused, outside 320..8192",
-                        w, h);
+        if (w < 320 || h < 320 || w > 8192 || h > 8192 ||
+            rotazione < 0 || rotazione > 3) {
+            info_report("winq: resolution %dx%d rotation=%d refused",
+                        w, h, rotazione);
             return;
         }
+        winq.geom.rotation = (unsigned)rotazione;
         winq_imposta_risoluzione(w, h);
         return;
     }

@@ -1209,6 +1209,30 @@ static void winq_dimensiona_cliente(int w, int h)
          * rami non possono divergere -- vedi il commento sopra questa funzione. */
         AdjustWindowRectEx(&r, stile, FALSE, stile_ex);
     }
+    /* A portrait framebuffer can be taller than the desktop, especially with
+     * guest_scale enabled. Fit only the host client, keeping guest resolution
+     * and aspect intact, so navigation never ends up below the work area. */
+    MONITORINFO monitor = { .cbSize = sizeof(MONITORINFO) };
+    RECT current;
+    if (GetMonitorInfo(MonitorFromWindow(winq.hwnd, MONITOR_DEFAULTTONEAREST),
+                       &monitor) && GetWindowRect(winq.hwnd, &current)) {
+        int border_w = r.right-r.left-w, border_h = r.bottom-r.top-h;
+        int available_w = monitor.rcWork.right-monitor.rcWork.left-border_w;
+        int available_h = monitor.rcWork.bottom-monitor.rcWork.top-border_h;
+        if (available_w > 0 && available_h > 0 && w > 0 && h > 0) {
+            double scale_w = (double)available_w/w;
+            double scale_h = (double)available_h/h;
+            double scale = MIN(1.0, MIN(scale_w, scale_h));
+            int outer_w = MAX(1, (int)(w*scale)) + border_w;
+            int outer_h = MAX(1, (int)(h*scale)) + border_h;
+            int x = MAX(monitor.rcWork.left,
+                        MIN(current.left, monitor.rcWork.right-outer_w));
+            int y = MAX(monitor.rcWork.top,
+                        MIN(current.top, monitor.rcWork.bottom-outer_h));
+            SetWindowPos(winq.hwnd, NULL, x, y, outer_w, outer_h, SWP_NOZORDER);
+            return;
+        }
+    }
     SetWindowPos(winq.hwnd, NULL, 0, 0, r.right - r.left, r.bottom - r.top,
                  SWP_NOMOVE | SWP_NOZORDER);
 }

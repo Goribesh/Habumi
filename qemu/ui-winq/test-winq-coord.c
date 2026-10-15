@@ -71,11 +71,11 @@ static void rettangolo_utile(void) {
      * su tutta la finestra. */
     double sentinella = -12345;
     x = y = w = h = sentinella;
-    WinqGeom minimizzata = { 0, 0, 1280, 800 };
+    WinqGeom minimizzata = { 0, 0, 1280, 800, 0 };
     CHECK(!winq_guest_rect(&minimizzata, &x, &y, &w, &h));
     CHECK(quasi(x, sentinella) && quasi(y, sentinella)
           && quasi(w, sentinella) && quasi(h, sentinella));
-    WinqGeom senza_guest = { 1280, 800, 0, 0 };
+    WinqGeom senza_guest = { 1280, 800, 0, 0, 0 };
     CHECK(!winq_guest_rect(&senza_guest, &x, &y, &w, &h));
 }
 
@@ -131,11 +131,60 @@ static void finestra_ridotta(void) {
 }
 
 static void casi_degeneri(void) {
-    WinqGeom zero = { 0, 0, 1280, 800 };
+    WinqGeom zero = { 0, 0, 1280, 800, 0 };
     int x, y;
     CHECK(!winq_win_to_guest(&zero, 0, 0, &x, &y));   /* finestra minimizzata */
-    WinqGeom senza_guest = { 1280, 800, 0, 0 };
+    WinqGeom senza_guest = { 1280, 800, 0, 0, 0 };
     CHECK(!winq_win_to_guest(&senza_guest, 10, 10, &x, &y));
+}
+
+static void rotazioni(void) {
+    static const int attesi[4][4][2] = {
+        { {0,0}, {3,0}, {0,1}, {3,1} },
+        { {0,1}, {0,0}, {3,1}, {3,0} },
+        { {3,1}, {0,1}, {3,0}, {0,0} },
+        { {3,0}, {3,1}, {0,0}, {0,1} }
+    };
+    static const int centri[4][2] = { {2,1}, {2,0}, {1,0}, {1,1} };
+    for (unsigned r = 0; r < 4; r++) {
+        int dw = (r & 1) ? 2 : 4, dh = (r & 1) ? 4 : 2;
+        WinqGeom g = { .win_w = dw, .win_h = dh, .guest_w = 4,
+                       .guest_h = 2, .rotation = r };
+        int gx, gy;
+        CHECK(winq_win_to_guest(&g, 0, 0, &gx, &gy)
+              && gx == attesi[r][0][0] && gy == attesi[r][0][1]);
+        CHECK(winq_win_to_guest(&g, dw - 1, 0, &gx, &gy)
+              && gx == attesi[r][1][0] && gy == attesi[r][1][1]);
+        CHECK(winq_win_to_guest(&g, 0, dh - 1, &gx, &gy)
+              && gx == attesi[r][2][0] && gy == attesi[r][2][1]);
+        CHECK(winq_win_to_guest(&g, dw - 1, dh - 1, &gx, &gy)
+              && gx == attesi[r][3][0] && gy == attesi[r][3][1]);
+        CHECK(winq_win_to_guest(&g, dw / 2, dh / 2, &gx, &gy)
+              && gx == centri[r][0] && gy == centri[r][1]);
+    }
+
+    /* Ritratto raw Android: rotazione 3 produce un display landscape. */
+    WinqGeom portrait = { .win_w = 2560, .win_h = 1600,
+                          .guest_w = 1600, .guest_h = 2560, .rotation = 3 };
+    double x, y, w, h;
+    int gx = -9, gy = -9;
+    CHECK(winq_guest_rect(&portrait, &x, &y, &w, &h)
+          && quasi(x, 0) && quasi(y, 0) && quasi(w, 2560) && quasi(h, 1600));
+    CHECK(winq_win_to_guest(&portrait, 0, 0, &gx, &gy) && gx == 1599 && gy == 0);
+
+    /* Banda laterale e geometria con rotazione fuori dominio non scrivono output. */
+    WinqGeom letterbox = { .win_w = 3000, .win_h = 1600,
+                           .guest_w = 1600, .guest_h = 2560, .rotation = 3 };
+    gx = gy = -9;
+    CHECK(!winq_win_to_guest(&letterbox, 10, 800, &gx, &gy)
+          && gx == -9 && gy == -9);
+    WinqGeom invalida = { .win_w = 10, .win_h = 10, .guest_w = 4,
+                          .guest_h = 2, .rotation = 4 };
+    x = y = w = h = -7;
+    CHECK(!winq_guest_rect(&invalida, &x, &y, &w, &h)
+          && quasi(x, -7) && quasi(y, -7) && quasi(w, -7) && quasi(h, -7));
+    CHECK(!winq_win_to_guest(&invalida, 0, 0, &gx, &gy)
+          && gx == -9 && gy == -9);
 }
 
 int main(void) {
@@ -146,6 +195,7 @@ int main(void) {
     casi_degeneri();
     rettangolo_utile();
     disegno_e_tocco_concordano();
+    rotazioni();
 
     if (fallimenti > 0) {
         fprintf(stderr, "test-winq-coord: %d/%d falliti\n", fallimenti, totali);
