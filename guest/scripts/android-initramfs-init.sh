@@ -422,6 +422,23 @@ if [ -f /winq/omx-nonblocking-probe.so ]; then
     echo "=== Habumi: experimental nonblocking OMX lookup enabled" > /dev/kmsg
 fi
 
+# L'APK ricostruito deve corrispondere proprio al SystemUI analizzato.
+if [ -f /winq/SystemUI.null-probe.apk ]; then
+    SYSTEMUI_ORIGINAL=$(sha256sum /system_lower/system_ext/priv-app/SystemUI/SystemUI.apk)
+    SYSTEMUI_ORIGINAL=${SYSTEMUI_ORIGINAL%% *}
+    SYSTEMUI_CANDIDATE=$(sha256sum /winq/SystemUI.null-probe.apk)
+    SYSTEMUI_CANDIDATE=${SYSTEMUI_CANDIDATE%% *}
+    if [ "$SYSTEMUI_ORIGINAL" != "2f8fe1b0d88a33b26d3c7ea09dedf56248002ec00b86ba8431ed257573da6960" ] ||
+       [ "$SYSTEMUI_CANDIDATE" != "40f473924907f993d2eb73f81e6c31112eb06b411682edb0f319a6f21afcf888" ]; then
+        echo "HABUMI-STOP: experimental SystemUI probe hash mismatch" > /dev/kmsg
+        exec sh
+    fi
+    mkdir -p /so/extra/system_ext/priv-app/SystemUI
+    cp /winq/SystemUI.null-probe.apk /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
+    chmod 0644 /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
+    echo "=== Habumi: experimental SystemUI null-list guard enabled" > /dev/kmsg
+fi
+
 if [ -f /winq/HabumiClipboard.apk ]; then
     mkdir -p /so/extra/app/HabumiClipboard
     cp /winq/HabumiClipboard.apk /so/extra/app/HabumiClipboard/HabumiClipboard.apk

@@ -46,6 +46,13 @@ Work through the phases in order. Each phase has an observable completion condit
 
 **Validation:** Here, inspect packaging scripts, manifests, and license inventories and run deterministic packaging checks when dependencies exist. Clean-machine installation, Windows ARM64 execution, and checks across any claimed host/runtime matrix require external machines. Android system-image builds require Linux x86_64.
 
+**Current boundary:** The repository has no automatic updater, and the release
+does not claim code signing. A signed updater is future development, with both
+an implementation and a supplied signing identity still required. Do not infer
+one exists from the packaging scripts or delay unrelated interface work while
+waiting for an unavailable certificate. Cross-hardware validation also needs
+machines beyond the current development PC.
+
 ## 6. Native interface glow-up
 
 **Objective:** Modernize Habumi's Win32 shell after functional behavior is stable, retaining its native accessibility, DPI behavior, copyable diagnostics, and existing actions.

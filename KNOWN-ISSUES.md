@@ -41,9 +41,12 @@ navigation. Its recurrence rate is not established. See the
 
 Development after 0.3.0-rc.1 reproduced the same exception on another fresh
 data image. A new shell check waits for stable SystemUI/compositor PIDs before
-marking startup ready. A proposed upstream null-list guard is recorded but has
-not been built or installed; the guest crash remains unresolved. See
+marking startup ready. A proposed upstream source null-list guard is recorded;
+an isolated Dex prototype subsequently passed one fresh-data boot and a short
+codec/storage workload. This is not yet a distributed guest fix. See
 [the startup investigation](docs/ANDROID-STARTUP-READINESS-2026-10-15.md).
+The prototype's build gates and runtime limits are in
+[the SystemUI probe record](docs/ANDROID-SYSTEMUI-NULL-PROBE-2026-10-15.md).
 
 **Post-initialization GApps testing also recorded background-service ANRs.**
 Google Play Services' intent-filter verification receiver and MediaProvider's

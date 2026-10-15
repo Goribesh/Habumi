@@ -116,6 +116,17 @@ if [ -n "${WINQ_OMX_NONBLOCKING_PROBE_LIB:-}" ]; then
     cp "$WINQ_OMX_NONBLOCKING_PROBE_LIB" "$STAGE/winq/omx-nonblocking-probe.so"
     echo "    (experimental nonblocking OMX lookup probe included)"
 fi
+# La correzione SystemUI resta una sonda separata, mai parte dell'uscita normale.
+if [ -n "${WINQ_SYSTEMUI_NULL_PROBE_APK:-}" ]; then
+    [ -n "${WINQ_INITRAMFS_OUTPUT:-}" ] || { echo "STOP: the SystemUI probe requires an isolated output path"; exit 1; }
+    SYSTEMUI_HASH=$(sha256sum "$WINQ_SYSTEMUI_NULL_PROBE_APK")
+    SYSTEMUI_HASH=${SYSTEMUI_HASH%% *}
+    [ "$SYSTEMUI_HASH" = "40f473924907f993d2eb73f81e6c31112eb06b411682edb0f319a6f21afcf888" ] || {
+        echo "STOP: unverified SystemUI probe APK"; exit 1;
+    }
+    cp "$WINQ_SYSTEMUI_NULL_PROBE_APK" "$STAGE/winq/SystemUI.null-probe.apk"
+    echo "    (experimental SystemUI null-list guard included)"
+fi
 # La diagnostica si include solo se WINQ_LOGCAT=1: allaga la seriale, e serve
 # mentre si inseguono i guasti dell'avvio, non dopo.
 if [ "${WINQ_LOGCAT:-0}" = "1" ]; then
