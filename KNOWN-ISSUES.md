@@ -52,6 +52,13 @@ test boot. The collected SystemUI crash buffer was empty on that boot. Their
 cause and recurrence rate are not yet established; they are not repaired by
 the new shell readiness check.
 
+A subsequent isolated investigation traced MediaProvider's main-thread wait
+to OMX codec enumeration with a declared but missing service. An opt-in
+nonblocking lookup prototype restored the Codec2 list and emulated storage;
+it remains an experiment, and the published runtime is unchanged. See
+[the media startup investigation](docs/ANDROID-MEDIA-STABILITY-2026-10-15.md)
+for its exact image constraints and limited test coverage.
+
 **Historical `system_server` crashes remain unresolved.** Recorded crashes
 during network activity and package installation restarted the Android framework
 and closed running applications. Binder failures reached Java as an uncaught

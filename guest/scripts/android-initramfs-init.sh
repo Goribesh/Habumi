@@ -407,6 +407,21 @@ mount --bind /android/system /system_lower || { echo "WINQ-FERMO: bind di /syste
 mount -t tmpfs -o mode=0755 tmpfs /so
 mkdir -p /so/extra
 
+# La sonda va davanti al system originale, senza riscriverne l'immagine.
+# E' vincolata alla libreria esatta analizzata: un OTA diverso va rifiutato.
+if [ -f /winq/omx-nonblocking-probe.so ]; then
+    OMX_ORIGINAL=$(sha256sum /system_lower/lib64/android.hardware.media.omx@1.0.so)
+    OMX_ORIGINAL=${OMX_ORIGINAL%% *}
+    if [ "$OMX_ORIGINAL" != "b343ab767e7511b7c3abd522184ff1db8bb4b2d0c4491ed8ac63ff63509e8a50" ]; then
+        echo "HABUMI-STOP: experimental OMX probe does not match this Android image" > /dev/kmsg
+        exec sh
+    fi
+    mkdir -p /so/extra/lib64
+    cp /winq/omx-nonblocking-probe.so /so/extra/lib64/android.hardware.media.omx@1.0.so
+    chmod 0644 /so/extra/lib64/android.hardware.media.omx@1.0.so
+    echo "=== Habumi: experimental nonblocking OMX lookup enabled" > /dev/kmsg
+fi
+
 if [ -f /winq/HabumiClipboard.apk ]; then
     mkdir -p /so/extra/app/HabumiClipboard
     cp /winq/HabumiClipboard.apk /so/extra/app/HabumiClipboard/HabumiClipboard.apk

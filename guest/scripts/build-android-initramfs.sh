@@ -105,6 +105,17 @@ cp "$BOOTANIM" "$STAGE/winq/bootanimation.zip"
 cp "$ASOUND" "$STAGE/winq/asound.conf"
 cp "$HERE/android-fstab" "$STAGE/winq/fstab.waydroid"
 cp "$HERE/android-tablet.idc" "$STAGE/winq/QEMU_Virtio_Tablet.idc"
+# Sonda OMX solo esplicita e con uscita separata: mai nel runtime predefinito.
+if [ -n "${WINQ_OMX_NONBLOCKING_PROBE_LIB:-}" ]; then
+    [ -n "${WINQ_INITRAMFS_OUTPUT:-}" ] || { echo "STOP: the OMX probe requires an isolated output path"; exit 1; }
+    OMX_HASH=$(sha256sum "$WINQ_OMX_NONBLOCKING_PROBE_LIB")
+    OMX_HASH=${OMX_HASH%% *}
+    [ "$OMX_HASH" = "9bdf01dfd15160da62a0f7175219a84d197df25b72e8941b37b36b8b311b226c" ] || {
+        echo "STOP: unverified OMX probe library"; exit 1;
+    }
+    cp "$WINQ_OMX_NONBLOCKING_PROBE_LIB" "$STAGE/winq/omx-nonblocking-probe.so"
+    echo "    (experimental nonblocking OMX lookup probe included)"
+fi
 # La diagnostica si include solo se WINQ_LOGCAT=1: allaga la seriale, e serve
 # mentre si inseguono i guasti dell'avvio, non dopo.
 if [ "${WINQ_LOGCAT:-0}" = "1" ]; then
