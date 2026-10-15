@@ -400,6 +400,8 @@ bool finestra_apri(const Config *c);
 /* Da chiamare dal timer: riversa le righe nuove del registro nel pannello. */
 void finestra_passo(void);
 HWND finestra_handle(void);
+/* Tab/Shift+Tab e Invio: solo i controlli del guscio, prima del dispatch. */
+bool finestra_tastiera(const MSG *msg);
 void finestra_fase(const char *nome, const char *esito);
 void finestra_bottoni(bool attivi);
 void finestra_bottone_variante(bool attivo);

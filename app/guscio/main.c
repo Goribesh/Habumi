@@ -17,6 +17,7 @@
 #include <windows.h>
 #include "guscio.h"
 #include "scarica.h"
+#include "immagine-stato.h"
 
 #define GUSCIO_MUTEX  "AndroidRuntimeGuscio.istanza"
 
@@ -1309,6 +1310,7 @@ static DWORD WINAPI variante_thread_scarica(LPVOID arg)
     char cartella[MAX_PATH];
     char taglia[32];
     VarVoce voce;
+    VarVoce voce_immagine;
     const char *immagine;
     const char *dati;
     /* La copia dello stato pubblicato dalla verifica d'avvio: e' la base su cui
@@ -1383,13 +1385,23 @@ static DWORD WINAPI variante_thread_scarica(LPVOID arg)
                       voce.file, errore);
         goto fine;
     }
+    /* Il manifesto autentica l'archivio ZIP, ma variants.txt serve a
+     * classificare l'immagine estratta: sono due contenuti e due impronte
+     * diverse. Manteniamo sulla voce il nome e la taglia dell'archivio, e
+     * sostituiamo solo l'impronta salvata con quella dell'immagine. */
+    if (!immagine_stato_voce(&voce, immagine, &voce_immagine, errore,
+                             sizeof(errore))) {
+        registro_riga(REG_GUSCIO, "variant: could not hash extracted %s: %s; "
+                      "the archive stays on disk", var_testo(v), errore);
+        goto fine;
+    }
     if (!DeleteFileA(archivio_percorso)) {
         registro_riga(REG_GUSCIO, "variant: %s extracted, but I could not "
                       "delete the archive (%lu): it stays on disk",
                       voce.file, GetLastError());
     }
 
-    stato.voci[v] = voce;
+    stato.voci[v] = voce_immagine;
     if (!var_stato_scrivi(&stato, "runtime/variants.txt", errore,
                           sizeof(errore))) {
         /* IL CONSIGLIO DEVE ESSERE VERO. Prima diceva "riprovare" e basta,
@@ -1411,10 +1423,9 @@ static DWORD WINAPI variante_thread_scarica(LPVOID arg)
     registro_riga(REG_GUSCIO, "variant: %s ready", var_testo(v));
 
     /* LA CLASSIFICAZIONE SI RINFRESCA QUI, ed e' l'unico momento in cui puo'
-     * essere cambiata da uno scaricamento. L'immagine e' quella del manifesto e
-     * lo sha256 e' gia' stato verificato dentro scarica_file: ricalcolarlo
-     * sarebbe un terzo hash dello stesso file. Resta da guardare solo il /data,
-     * che costa un GetFileAttributesA.
+     * essere cambiata da uno scaricamento. L'impronta dell'immagine estratta
+     * e' stata calcolata sopra e scritta nello stato. Resta da guardare solo
+     * il /data, che costa un GetFileAttributesA.
      *
      * Si scrive PRIMA di azzerare variante_in_corso la' sotto: il menu legge
      * queste due variabili solo dopo aver visto variante_in_corso a zero, e
@@ -2326,6 +2337,9 @@ static bool guscio_pompa_attesa(HANDLE h)
             if (msg.message == WM_QUIT) {
                 return false;
             }
+            if (finestra_tastiera(&msg)) {
+                continue;
+            }
             if (msg.message == WM_TIMER && msg.hwnd == finestra_handle() && msg.wParam != UI_CONTROLLI_TIMER) {
                 /* NON vm_passo(): vedi il commento qui sopra. */
                 finestra_passo();
@@ -2831,6 +2845,9 @@ int main(int argc, char **argv)
     vm_apri(&g_c);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        if (finestra_tastiera(&msg)) {
+            continue;
+        }
         if (msg.message == WM_TIMER && msg.hwnd == finestra_handle() && msg.wParam != UI_CONTROLLI_TIMER) {
             VmStato s = vm_passo();
 

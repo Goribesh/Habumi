@@ -38,15 +38,20 @@
  * che saltano al primo ridimensionamento) non nominerebbe la causa. Da qui in
  * poi le posizioni le decide fin_disponi e nessun altro. */
 #define FIN_MARGINE    10
-#define FIN_FASI_Y     10
-#define FIN_FASI_H     22
-#define FIN_BOT_Y      40
-#define FIN_BOT_W      96
+#define FIN_TITOLO_Y   10
+#define FIN_TITOLO_H   22
+#define FIN_FASI_Y     36
+#define FIN_FASI_H     28
+#define FIN_BOT_Y      72
+#define FIN_BOT_W      70
 #define FIN_BOT_H      28
-#define FIN_BOT_PASSO 100
+#define FIN_BOT_PASSO  76
 /* Lo spazio verticale fra due righe di bottoni, quando la larghezza non basta
  * per tenerli su una sola. Vedi fin_disponi. */
-#define FIN_BOT_GAP     6
+#define FIN_BOT_GAP     5
+#define FIN_LOG_LABEL_H 18
+#define FIN_LOG_TOP_GAP  5
+#define FIN_LOG_TEXT_GAP 2
 /* Il corpo del carattere a 96 DPI. 12 pixel e' l'altezza dei caratteri del
  * Segoe UI a 9 punti, cioe' il carattere di interfaccia predefinito di Windows. */
 #define FIN_FONT_PX    12
@@ -109,28 +114,121 @@ _Static_assert(FIN_LOG_TETTO > FIN_LOG_TRONCA + 8192,
  * finito. */
 static const Config *fin_config;
 static HWND fin_hwnd;
+static HWND fin_titolo;
 static HWND fin_fasi;
+static HWND fin_log_label;
 static HWND fin_log;
 static HWND fin_bottoni[9];
 static char fin_testo_fasi[512];
 static DWORD fin_ora_avvio;
 static HFONT fin_font_ui;
+static HFONT fin_font_titolo;
 static HFONT fin_font_log;
 static UINT fin_dpi;
+static HBRUSH fin_brush_sfondo;
+static COLORREF fin_colore_sfondo;
+static COLORREF fin_colore_testo;
+static COLORREF fin_colore_log;
+static bool fin_tema_scuro;
+static bool fin_contrasto_alto;
+static HMODULE fin_dwm_modulo;
+
+typedef HRESULT (WINAPI *FinDwmSetWindowAttribute)(HWND, DWORD,
+                                                    LPCVOID, DWORD);
+
+/* L'impostazione e' letta senza modificarla: se non e' disponibile si usa il
+ * tema chiaro. L'alto contrasto ha priorita' e mantiene i colori scelti da
+ * Windows, compresi quelli della finestra e del testo. */
+static void fin_aggiorna_tema(void)
+{
+    DWORD chiaro = 1;
+    DWORD byte = sizeof(chiaro);
+    HIGHCONTRASTW contrasto = {0};
+    bool alto_contrasto;
+    bool scuro;
+    HBRUSH nuovo;
+
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                 L"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL,
+                 &chiaro, &byte) != ERROR_SUCCESS) {
+        chiaro = 1;
+    }
+    contrasto.cbSize = sizeof(contrasto);
+    alto_contrasto = SystemParametersInfoW(SPI_GETHIGHCONTRAST,
+                                           sizeof(contrasto), &contrasto, 0) &&
+                     (contrasto.dwFlags & HCF_HIGHCONTRASTON) != 0;
+    scuro = chiaro == 0;
+
+    fin_contrasto_alto = alto_contrasto;
+    fin_tema_scuro = scuro && !alto_contrasto;
+    if (alto_contrasto) {
+        fin_colore_sfondo = GetSysColor(COLOR_WINDOW);
+        fin_colore_testo = GetSysColor(COLOR_WINDOWTEXT);
+        fin_colore_log = fin_colore_testo;
+    } else if (fin_tema_scuro) {
+        fin_colore_sfondo = RGB(32, 32, 32);
+        fin_colore_testo = RGB(242, 242, 242);
+        fin_colore_log = RGB(220, 220, 220);
+    } else {
+        fin_colore_sfondo = GetSysColor(COLOR_WINDOW);
+        fin_colore_testo = GetSysColor(COLOR_WINDOWTEXT);
+        fin_colore_log = fin_colore_testo;
+    }
+
+    nuovo = CreateSolidBrush(fin_colore_sfondo);
+    if (nuovo) {
+        HBRUSH vecchio = fin_brush_sfondo;
+        fin_brush_sfondo = nuovo;
+        if (vecchio) {
+            DeleteObject(vecchio);
+        }
+    }
+
+    if (fin_hwnd) {
+        FinDwmSetWindowAttribute setta;
+        BOOL scuro_titolo = fin_tema_scuro ? TRUE : FALSE;
+
+        if (!fin_dwm_modulo) {
+            fin_dwm_modulo = LoadLibraryExW(L"dwmapi.dll", NULL,
+                                            LOAD_LIBRARY_SEARCH_SYSTEM32);
+        }
+        setta = fin_dwm_modulo ? (FinDwmSetWindowAttribute)
+            GetProcAddress(fin_dwm_modulo, "DwmSetWindowAttribute") : NULL;
+        if (setta) {
+            /* DWMWA_USE_IMMERSIVE_DARK_MODE e' 20 sui Windows supportati.
+             * La chiamata dinamica lascia avviabile il guscio anche senza DWM. */
+            setta(fin_hwnd, 20, &scuro_titolo, sizeof(scuro_titolo));
+        }
+        InvalidateRect(fin_hwnd, NULL, TRUE);
+        if (fin_titolo) InvalidateRect(fin_titolo, NULL, TRUE);
+        if (fin_fasi) InvalidateRect(fin_fasi, NULL, TRUE);
+        if (fin_log_label) InvalidateRect(fin_log_label, NULL, TRUE);
+        {
+            size_t i;
+            for (i = 0; i < sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
+                if (fin_bottoni[i]) InvalidateRect(fin_bottoni[i], NULL, TRUE);
+            }
+        }
+        if (fin_log) {
+            InvalidateRect(fin_log, NULL, TRUE);
+        }
+    }
+}
 
 static const struct {
     int id;
     const char *etichetta;
 } fin_elenco[] = {
-    { ID_POWER,    "power"    },
-    { ID_VOL_SU,   "volume +" },
-    { ID_VOL_GIU,  "volume -" },
-    { ID_HOME,     "home"     },
-    { ID_BACK,     "back"     },
-    { ID_RECENTI,  "recents"  },
-    { ID_RUOTA,    "rotate"   },
-    { ID_TASTI,    "keys"     },
-    { ID_VARIANTE, "variant"  },
+    { ID_POWER,    "Power"   },
+    { ID_VOL_SU,   "Vol +"   },
+    { ID_VOL_GIU,  "Vol -"   },
+    { ID_HOME,     "Home"    },
+    { ID_BACK,     "Back"    },
+    { ID_RECENTI,  "Recents" },
+    { ID_RUOTA,    "Rotate"  },
+    { ID_TASTI,    "Keys"    },
+    { ID_VARIANTE, "Variant" },
 };
 
 /* Il tempo trascorso non e' un ornamento: e' cio' che distingue "lento" da
@@ -141,13 +239,18 @@ void finestra_fase(const char *nome, const char *esito)
     char aggiunta[128];
     DWORD ms = (DWORD)GetTickCount64() - fin_ora_avvio;
 
-    snprintf(aggiunta, sizeof(aggiunta), "%s%s: %s (%lu.%lu s)",
-             fin_testo_fasi[0] ? "    " : "", nome, esito,
+    snprintf(aggiunta, sizeof(aggiunta), "%s: %s (%lu.%lu s)", nome, esito,
              ms / 1000, (ms % 1000) / 100);
+    if (fin_testo_fasi[0]) {
+        strncat(fin_testo_fasi, "    ",
+                sizeof(fin_testo_fasi) - strlen(fin_testo_fasi) - 1);
+    }
     strncat(fin_testo_fasi, aggiunta,
             sizeof(fin_testo_fasi) - strlen(fin_testo_fasi) - 1);
     if (fin_fasi) {
-        SetWindowTextA(fin_fasi, fin_testo_fasi);
+        /* La finestra mostra l'esito corrente; la cronologia completa resta
+         * nel buffer per non cambiare la raccolta delle fasi. */
+        SetWindowTextA(fin_fasi, aggiunta);
     }
 }
 
@@ -194,7 +297,7 @@ void finestra_bottone_tasti(bool accesa)
     for (i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
         if (fin_elenco[i].id == ID_TASTI) {
             if (fin_bottoni[i]) {
-                SetWindowTextA(fin_bottoni[i], accesa ? "keys ON" : "keys");
+                SetWindowTextA(fin_bottoni[i], accesa ? "Keys On" : "Keys");
             }
             return;
         }
@@ -255,9 +358,9 @@ HWND finestra_handle(void)
  * tag). Con un carattere proporzionale quelle colonne diventano irregolari e si
  * legge peggio, mentre per fasi e bottoni un proporzionale e' cio' che usa il
  * resto di Windows. Costa un HFONT in piu' e una DeleteObject. */
-static HFONT fin_crea_font(UINT dpi, const wchar_t *nome)
+static HFONT fin_crea_font(UINT dpi, const wchar_t *nome, int peso)
 {
-    return CreateFontW(-dpi_scala(FIN_FONT_PX, dpi), 0, 0, 0, FW_NORMAL, FALSE,
+    return CreateFontW(-dpi_scala(FIN_FONT_PX, dpi), 0, 0, 0, peso, FALSE,
                        FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                        DEFAULT_PITCH | FF_DONTCARE, nome);
@@ -283,6 +386,7 @@ static void fin_disponi(int w, int a, UINT dpi)
     int bot_y = dpi_scala(FIN_BOT_Y, dpi);
     int x = m;
     int riga = 0;
+    int etichetta_log_y;
     int log_y;
     size_t i;
 
@@ -302,12 +406,22 @@ static void fin_disponi(int w, int a, UINT dpi)
      * consumerebbe handle GDI senza motivo. */
     if (dpi != fin_dpi || !fin_font_ui) {
         HFONT vecchio_ui = fin_font_ui;
+        HFONT vecchio_titolo = fin_font_titolo;
         HFONT vecchio_log = fin_font_log;
 
-        fin_font_ui = fin_crea_font(dpi, L"Segoe UI");
-        fin_font_log = fin_crea_font(dpi, L"Consolas");
+        fin_font_ui = fin_crea_font(dpi, L"Segoe UI", FW_NORMAL);
+        fin_font_titolo = fin_crea_font(dpi, L"Segoe UI", FW_SEMIBOLD);
+        fin_font_log = fin_crea_font(dpi, L"Consolas", FW_NORMAL);
+        if (fin_titolo) {
+            SendMessageW(fin_titolo, WM_SETFONT,
+                         (WPARAM)fin_font_titolo, TRUE);
+        }
         if (fin_fasi) {
             SendMessageW(fin_fasi, WM_SETFONT, (WPARAM)fin_font_ui, TRUE);
+        }
+        if (fin_log_label) {
+            SendMessageW(fin_log_label, WM_SETFONT,
+                         (WPARAM)fin_font_ui, TRUE);
         }
         for (i = 0; i < sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
             if (fin_bottoni[i]) {
@@ -325,12 +439,19 @@ static void fin_disponi(int w, int a, UINT dpi)
         if (vecchio_ui) {
             DeleteObject(vecchio_ui);
         }
+        if (vecchio_titolo) {
+            DeleteObject(vecchio_titolo);
+        }
         if (vecchio_log) {
             DeleteObject(vecchio_log);
         }
         fin_dpi = dpi;
     }
 
+    if (fin_titolo) {
+        MoveWindow(fin_titolo, m, dpi_scala(FIN_TITOLO_Y, dpi), w - 2 * m,
+                   dpi_scala(FIN_TITOLO_H, dpi), TRUE);
+    }
     if (fin_fasi) {
         MoveWindow(fin_fasi, m, dpi_scala(FIN_FASI_Y, dpi), w - 2 * m,
                    dpi_scala(FIN_FASI_H, dpi), TRUE);
@@ -359,11 +480,16 @@ static void fin_disponi(int w, int a, UINT dpi)
         x += passo;
     }
 
-    /* IL PANNELLO SEGUE I BOTTONI, e per questo la sua cima si calcola invece di
-     * essere la costante 78 che era prima: con i bottoni su due righe una
-     * costante li lascerebbe coperti dal pannello. Con una riga sola il calcolo
-     * da' 40 + 28 + 10 = 78, cioe' esattamente il layout di oggi a 96 DPI. */
-    log_y = bot_y + (riga + 1) * bh + riga * gap + m;
+    /* Etichetta e registro seguono la toolbar: con le righe aggiuntive il
+     * pannello resta sempre sotto i controlli. */
+    etichetta_log_y = bot_y + (riga + 1) * bh + riga * gap +
+                      m + dpi_scala(FIN_LOG_TOP_GAP, dpi);
+    log_y = etichetta_log_y + dpi_scala(FIN_LOG_LABEL_H, dpi) +
+            dpi_scala(FIN_LOG_TEXT_GAP, dpi);
+    if (fin_log_label) {
+        MoveWindow(fin_log_label, m, etichetta_log_y, w - 2 * m,
+                   dpi_scala(FIN_LOG_LABEL_H, dpi), TRUE);
+    }
     if (fin_log) {
         int h = a - log_y - m;
 
@@ -418,6 +544,131 @@ void finestra_messaggi_guscio(FinMsgGuscio f)
     fin_msg_guscio = f;
 }
 
+/* Traduzione minima per i controlli della finestra: il chiamante la invoca
+ * prima di DispatchMessage nei due cicli di main.c. */
+bool finestra_tastiera(const MSG *msg)
+{
+    HWND fuoco;
+    size_t i;
+
+    if (!msg || msg->message != WM_KEYDOWN || !fin_hwnd ||
+        (msg->hwnd != fin_hwnd && !IsChild(fin_hwnd, msg->hwnd)) ||
+        (GetKeyState(VK_CONTROL) & 0x8000) ||
+        (GetKeyState(VK_MENU) & 0x8000)) {
+        return false;
+    }
+
+    fuoco = GetFocus();
+    if (msg->wParam == VK_TAB) {
+        HWND prossimo = GetNextDlgTabItem(fin_hwnd, fuoco,
+                              (GetKeyState(VK_SHIFT) & 0x8000) != 0);
+
+        if (!prossimo) {
+            return false;
+        }
+        SetFocus(prossimo);
+        return true;
+    }
+
+    if (msg->wParam == VK_RETURN) {
+        for (i = 0; i < sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
+            if (fuoco == fin_bottoni[i] && fin_bottoni[i] &&
+                IsWindowEnabled(fin_bottoni[i])) {
+                if (!(msg->lParam & (1L << 30))) {
+                    PostMessageA(fin_bottoni[i], BM_CLICK, 0, 0);
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* I pulsanti restano BUTTON standard per nome e WM_COMMAND. Il disegno manuale
+ * mantiene visibili riempimento, pressione, disabilitazione e fuoco. */
+static void fin_disegna_bottone(const DRAWITEMSTRUCT *d)
+{
+    RECT r = d->rcItem;
+    RECT testo = r;
+    HBRUSH riempimento;
+    HFONT font;
+    COLORREF bordo;
+    COLORREF colore_testo;
+    char etichetta[64];
+    int stato;
+    int contesto;
+
+    if (d->CtlType != ODT_BUTTON || !d->hwndItem) {
+        return;
+    }
+    contesto = SaveDC(d->hDC);
+    if (!contesto) {
+        return;
+    }
+    stato = GetWindowTextA(d->hwndItem, etichetta, sizeof(etichetta));
+    if (stato < 0) {
+        etichetta[0] = '\0';
+    }
+    if (fin_contrasto_alto) {
+        riempimento = CreateSolidBrush(GetSysColor(
+            (d->itemState & ODS_SELECTED) ? COLOR_HIGHLIGHT : COLOR_BTNFACE));
+        bordo = GetSysColor(COLOR_BTNTEXT);
+        colore_testo = !IsWindowEnabled(d->hwndItem)
+                     ? GetSysColor(COLOR_GRAYTEXT)
+                     : GetSysColor((d->itemState & ODS_SELECTED)
+                                   ? COLOR_HIGHLIGHTTEXT : COLOR_BTNTEXT);
+    } else if (fin_tema_scuro) {
+        riempimento = CreateSolidBrush((d->itemState & ODS_SELECTED)
+                                      ? RGB(64, 64, 64) : RGB(46, 46, 46));
+        bordo = RGB(78, 78, 78);
+        colore_testo = IsWindowEnabled(d->hwndItem)
+                     ? fin_colore_testo : RGB(145, 145, 145);
+    } else {
+        riempimento = CreateSolidBrush((d->itemState & ODS_SELECTED)
+                                      ? GetSysColor(COLOR_3DSHADOW)
+                                      : GetSysColor(COLOR_BTNFACE));
+        bordo = GetSysColor(COLOR_BTNSHADOW);
+        colore_testo = IsWindowEnabled(d->hwndItem)
+                     ? GetSysColor(COLOR_BTNTEXT)
+                     : GetSysColor(COLOR_GRAYTEXT);
+    }
+    if (!riempimento) {
+        RestoreDC(d->hDC, contesto);
+        return;
+    }
+    FillRect(d->hDC, &r, riempimento);
+    DeleteObject(riempimento);
+    {
+        HPEN penna = CreatePen(PS_SOLID, 1, bordo);
+        if (penna) {
+            HGDIOBJ vecchia_penna = SelectObject(d->hDC, penna);
+            HGDIOBJ vecchio_brush =
+                SelectObject(d->hDC, GetStockObject(NULL_BRUSH));
+
+            Rectangle(d->hDC, r.left, r.top, r.right, r.bottom);
+            SelectObject(d->hDC, vecchia_penna);
+            SelectObject(d->hDC, vecchio_brush);
+            DeleteObject(penna);
+        }
+    }
+    SetBkMode(d->hDC, TRANSPARENT);
+    SetTextColor(d->hDC, colore_testo);
+    font = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
+    if (!font) {
+        font = fin_font_ui;
+    }
+    if (font) {
+        SelectObject(d->hDC, font);
+    }
+    DrawTextA(d->hDC, etichetta, -1, &testo,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if ((d->itemState & ODS_FOCUS) && !(d->itemState & ODS_NOFOCUSRECT)) {
+        InflateRect(&r, -4, -4);
+        DrawFocusRect(d->hDC, &r);
+    }
+    RestoreDC(d->hDC, contesto);
+}
+
 static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -437,6 +688,30 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         PostQuitMessage(0);
         return 0;
 
+    case WM_NCDESTROY:
+        if (fin_font_ui) {
+            DeleteObject(fin_font_ui);
+            fin_font_ui = NULL;
+        }
+        if (fin_font_titolo) {
+            DeleteObject(fin_font_titolo);
+            fin_font_titolo = NULL;
+        }
+        if (fin_font_log) {
+            DeleteObject(fin_font_log);
+            fin_font_log = NULL;
+        }
+        if (fin_brush_sfondo) {
+            DeleteObject(fin_brush_sfondo);
+            fin_brush_sfondo = NULL;
+        }
+        if (fin_dwm_modulo) {
+            FreeLibrary(fin_dwm_modulo);
+            fin_dwm_modulo = NULL;
+        }
+        fin_hwnd = NULL;
+        return DefWindowProcA(h, msg, wp, lp);
+
     case WM_CLIPBOARDUPDATE:
         /* Gli appunti di Windows sono cambiati. QUI NON SI FA NIENTE DI LUNGO,
          * come per ogni altro ramo di questo wndproc: leggere gli appunti,
@@ -451,6 +726,44 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
         fin_disponi(LOWORD(lp), HIWORD(lp), dpi_di_finestra(h));
         return 0;
+
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *misure = (MINMAXINFO *)lp;
+        UINT dpi = dpi_di_finestra(h);
+
+        /* Client sufficienti per almeno quattro pulsanti per riga e un log
+         * leggibile; la misura cresce insieme ai controlli al cambio DPI. */
+        misure->ptMinTrackSize.x = dpi_scala(420, dpi);
+        misure->ptMinTrackSize.y = dpi_scala(300, dpi);
+        return 0;
+    }
+
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+    case WM_SYSCOLORCHANGE:
+        fin_aggiorna_tema();
+        return DefWindowProcA(h, msg, wp, lp);
+
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = (HDC)wp;
+
+        SetTextColor(dc, (HWND)lp == fin_log
+                         ? fin_colore_log : fin_colore_testo);
+        SetBkColor(dc, fin_colore_sfondo);
+        return (LRESULT)fin_brush_sfondo;
+    }
+
+    case WM_ERASEBKGND: {
+        RECT cliente;
+
+        GetClientRect(h, &cliente);
+        FillRect((HDC)wp, &cliente, fin_brush_sfondo);
+        return 1;
+    }
+
+    case WM_DRAWITEM:
+        fin_disegna_bottone((const DRAWITEMSTRUCT *)lp);
+        return TRUE;
 
     case WM_DROPFILES:
         fin_rilascio((HDROP)wp);
@@ -564,11 +877,12 @@ bool finestra_apri(const Config *c)
      * APK ha bisogno della porta di adb per installarlo. */
     fin_config = c;
     fin_ora_avvio = (DWORD)GetTickCount64();
+    fin_aggiorna_tema();
     wc.lpfnWndProc = fin_wndproc;
     wc.hInstance = GetModuleHandleA(NULL);
     wc.lpszClassName = FIN_CLASSE;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     if (!RegisterClassA(&wc)) {
         return false;
     }
@@ -580,6 +894,7 @@ bool finestra_apri(const Config *c)
     if (!fin_hwnd) {
         return false;
     }
+    fin_aggiorna_tema();
 
     /* Da qui la finestra accetta file trascinati. Va chiamata sulla finestra
      * PRINCIPALE: i controlli figli non ereditano l'accettazione, ed e' giusto
@@ -611,21 +926,31 @@ bool finestra_apri(const Config *c)
      * una seconda copia delle costanti di posizione -- che e' proprio la
      * duplicazione che ha gia' fatto divergere la larghezza del pannello
      * (FIN_LARGHEZZA - 40 alla creazione, w - 20 in WM_SIZE). */
-    fin_fasi = CreateWindowA("STATIC", "starting...",
+    fin_titolo = CreateWindowA("STATIC", "Android runtime",
+                             WS_CHILD | WS_VISIBLE | SS_LEFT,
+                             0, 0, 0, 0, fin_hwnd, NULL, wc.hInstance, NULL);
+    /* Il titolo e la fase corrente condividono un'intestazione compatta. */
+    fin_fasi = CreateWindowA("STATIC", "Starting...",
                              WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                              fin_hwnd, NULL, wc.hInstance, NULL);
 
     for (i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
         fin_bottoni[i] = CreateWindowA("BUTTON", fin_elenco[i].etichetta,
-                                       WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                       BS_OWNERDRAW,
                                        0, 0, 0, 0, fin_hwnd,
                                        (HMENU)(INT_PTR)fin_elenco[i].id,
                                        wc.hInstance, NULL);
     }
     finestra_bottoni(false);
 
+    fin_log_label = CreateWindowA("STATIC", "Activity log",
+                             WS_CHILD | WS_VISIBLE | SS_LEFT,
+                             0, 0, 0, 0, fin_hwnd, NULL, wc.hInstance, NULL);
+
     fin_log = CreateWindowA("EDIT", "",
-                            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER |
+                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                            WS_BORDER |
                             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                             0, 0, 0, 0,
                             fin_hwnd, NULL, wc.hInstance, NULL);

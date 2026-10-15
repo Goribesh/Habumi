@@ -32,6 +32,6 @@ clang -std=c11 -Wall -Werror -O2 -mwindows \
       main.c finestra.c vm.c comandi.c adb.c config.c registro.c tubo.c dpi.c apk.c \
       file.c rilascio.c archivio.c appunti.c appunti-trama.c varianti.c \
       dati.c scarica.c hyperv.c \
-      -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt
+      -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32
 
 echo "fatto: runtime/bin/Habumi.exe"

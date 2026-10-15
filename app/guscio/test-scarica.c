@@ -9,10 +9,14 @@
 #include <wchar.h>
 
 #include "scarica.c"
+#include "varianti.c"
+#include "immagine-stato.h"
 
 static const unsigned char corpo[] = "Habumi download test payload";
 static const char sha_corpo[] =
     "70fad64d70157462dd1267bbc0301f9e2732f2449ba5fe1a1fc8d174fee88956";
+static const unsigned char immagine_estratta[] = "extracted image bytes";
+static const unsigned char immagine_modificata[] = "changed image bytes";
 static size_t corpo_pos;
 static int errore_lettura_dopo_primo_blocco;
 static DWORD limite_blocco;
@@ -107,6 +111,52 @@ static void esegui(const char *root)
     snprintf(parziale,sizeof(parziale),"%s.parziale",dest);
     CHECK(GetFileAttributesA(parziale)==INVALID_FILE_ATTRIBUTES);
 
+    /* Un ZIP verificato contiene un payload distinto dall'immagine estratta.
+     * Lo stato persistito deve classificare l'immagine usando il suo hash,
+     * mantenendo filename e byte dell'archivio per identita' e stime. */
+    {
+        char immagine[MAX_PATH], stato_path[MAX_PATH], sha_immagine[65];
+        char sha_modificata[65];
+        VarStato stato, riletto;
+        VarVoce voce, voce_immagine, sentinella, voce_modificata;
+        int riga = 0;
+        FILE *out;
+        snprintf(immagine,sizeof(immagine),"%s\\image.img",root);
+        snprintf(stato_path,sizeof(stato_path),"%s\\variants.txt",root);
+        out=fopen(immagine,"wb"); CHECK(out!=NULL);
+        if(out){fwrite(immagine_estratta,1,sizeof(immagine_estratta)-1,out);fclose(out);}
+        memset(&voce,0,sizeof(voce));
+        strcpy(voce.file,"upstream-build.zip");
+        strcpy(voce.sha256,sha);
+        voce.byte=sizeof(corpo)-1;
+        voce.datetime=1775198504ULL;
+        strcpy(voce.url,"https://unit.test/payload");
+        CHECK(immagine_stato_voce(&voce,immagine,&voce_immagine,
+                                  errore,sizeof(errore)));
+        CHECK(strcmp(voce.sha256,voce_immagine.sha256)!=0);
+        strcpy(sha_immagine,voce_immagine.sha256);
+        memset(&stato,0,sizeof(stato));
+        stato.voci[VAR_VANILLA]=voce_immagine;
+        CHECK(var_stato_scrivi(&stato,stato_path,errore,sizeof(errore)));
+        CHECK(var_stato_leggi(&riletto,stato_path,errore,sizeof(errore),&riga));
+        CHECK(strcmp(riletto.voci[VAR_VANILLA].file,"upstream-build.zip")==0);
+        CHECK(riletto.voci[VAR_VANILLA].byte==sizeof(corpo)-1);
+        CHECK(var_cosa_manca(&riletto,VAR_VANILLA,true,true,sha_immagine)==VAR_PRONTA);
+        out=fopen(immagine,"wb"); CHECK(out!=NULL);
+        if(out){fwrite(immagine_modificata,1,sizeof(immagine_modificata)-1,out);fclose(out);}
+        CHECK(immagine_stato_voce(&voce,immagine,&voce_modificata,
+                                  errore,sizeof(errore)));
+        strcpy(sha_modificata,voce_modificata.sha256);
+        CHECK(var_cosa_manca(&riletto,VAR_VANILLA,true,true,sha_modificata)==VAR_IMPRONTA_SBAGLIATA);
+        memset(&sentinella,0xA5,sizeof(sentinella));
+        voce_modificata=sentinella;
+        CHECK(!immagine_stato_voce(&voce,"missing-image.img",&voce_modificata,
+                                   errore,sizeof(errore)));
+        CHECK(memcmp(&voce_modificata,&sentinella,sizeof(sentinella))==0);
+        DeleteFileA(immagine);
+        DeleteFileA(stato_path);
+    }
+
     snprintf(dest,sizeof(dest),"%s\\bad-hash.zip",root);
     CHECK(!scarica_file("https://unit.test/payload",dest,
                         "0000000000000000000000000000000000000000000000000000000000000000",
@@ -157,6 +207,7 @@ int main(void)
     {
         static const char *nomi[] = {
             "test-payload.bin", "success.zip", "success.zip.parziale",
+            "image.img", "variants.txt",
             "bad-hash.zip", "bad-hash.zip.parziale", "read-error.zip",
             "read-error.zip.parziale", "cancel.zip", "cancel.zip.parziale"
         };
@@ -168,7 +219,7 @@ int main(void)
         }
     }
     RemoveDirectoryA(root);
-    printf("%s: valid hash, wrong-hash cleanup, interrupted network read, and cancellation %s\n",
+    printf("%s: download hashes, image-state hash round-trip, failure cleanup, and cancellation %s\n",
            fallimenti?"FAIL":"PASS",fallimenti?"failed":"passed");
     return fallimenti?1:0;
 }
