@@ -13,6 +13,19 @@ release-wide guarantees.
 Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) first: most of what follows is the other
 half of something written there.
 
+The [BlueStacks comparison and feature backlog](docs/BLUESTACKS-FEATURE-GAPS-2026-10-15.md)
+records the 15 October source audit against development commit `628db63`.
+It separates 51 missing/partial product workflows from existing capabilities,
+scope choices, Habumi-specific work and validation gates. IDs G01-G51, H01-H04
+and V01-V08 provide a reference for future changes; priorities are proposals,
+not release commitments. BlueStacks 5 Windows is the reference product; its
+published CPU requirements differ from Habumi's native Windows ARM64 target.
+
+The proposed order is stability and data recovery, then graphical settings,
+fullscreen/screenshots/app shortcuts, measured power controls, richer input,
+and finally instance isolation and management. See the catalog for dependencies
+and acceptance boundaries.
+
 ## Worth doing first
 
 **Complete installation and upgrade coverage.**
@@ -90,8 +103,10 @@ test-profile binaries are not a substitute for a clean package build.
 **Complete interactive UI validation.**
 Async startup, shutdown and controls passed fake checks and live boot,
 density, rotation, navigation and close/reopen checks on the development
-machine. Actual button clicks and modal visuals were not tested. Repeat these
-checks from a fresh install and on additional hardware.
+machine. Later development checks verified the compact dark shell, keyboard
+navigation, Home delivery, manual rotation and matching mouse clicks. Light and
+high-contrast themes, live switching, remaining modals and fresh-install/additional
+hardware coverage remain open. See [the interface record](docs/NATIVE-INTERFACE-2026-10-15.md).
 
 **Sign the binaries.**
 A certificate turns "Windows protected your PC" into a normal install. Costs
@@ -101,11 +116,13 @@ money, not time.
 Today a new version is a new download and a manual copy. Anything better needs a
 decision about where the data directory lives across versions.
 
-**Finish rotation of the host window.**
-APK drag and drop already exists, as do file and folder transfers. The remaining
-window defect is that the guest and framebuffer rotate while the fixed host
-client keeps its old shape. Guest rotation controls work; make the host window
-follow the framebuffer and verify both orientations visually.
+**Package and extend the development rotation fix.**
+Manual rotation now transforms the shared scanout, viewport and input together;
+portrait/landscape mouse checks and monitor work-area fitting passed in the
+isolated profile. Package the change and verify physical touch, ANGLE/2D fallback
+and automatic app-requested orientation. Published assets retain the older
+behavior. APK drag and drop, file/folder import and manual key mapping already
+exist; the comparison catalog does not count them as missing.
 
 **Size the boot animation for the display.**
 The recorded issue is an animation occupying only part of the screen. Verify

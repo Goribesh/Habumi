@@ -29,6 +29,10 @@ targets the native Qualcomm Vulkan driver; and repeated overnight resume still
 needs validation. What would make
 the project better, and where help is wanted, is in [ROADMAP.md](ROADMAP.md).
 
+For a source-backed comparison of existing tools and missing product workflows,
+see the [BlueStacks feature-gap catalog](docs/BLUESTACKS-FEATURE-GAPS-2026-10-15.md).
+It distinguishes the published release from recent isolated-profile development.
+
 Two things that are choices rather than defects: the guest images are **pinned**
 to Waydroid OTA commit `026205c747d314865fa18398375ff3b0e7bd7f70` (build `20260927`), because an image that changed by itself would
 change the bugs by itself; and **comments and internal documentation are in
@@ -85,8 +89,9 @@ Measured on a Surface Pro 11 — Snapdragon X Plus X1P64100, 10 cores, Adreno
 X1-85. These feature measurements do not establish compatibility on every
 Windows ARM machine:
 
-- **Touch, multi-touch and guest rotation**. The host window still needs to
-  follow the rotated framebuffer's shape; see the known issues
+- **Touch, multi-touch and guest rotation**. Development now adds matching host
+  presentation/input rotation and window fitting; this is not in published assets.
+  See [the interface checks](docs/NATIVE-INTERFACE-2026-10-15.md)
 - **Audio playback and input**, through an audio HAL with a 4096-frame ring.
   The measured starvation gaps were fixed; audio during physical interaction
   still needs a controlled check
