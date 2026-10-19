@@ -18,10 +18,26 @@
 #include "guscio.h"
 #include "scarica.h"
 #include "immagine-stato.h"
+#include "profilo-lock.h"
 
 #define GUSCIO_MUTEX  "AndroidRuntimeGuscio.istanza"
 
 static Config g_c;
+static HANDLE g_profile_lock = INVALID_HANDLE_VALUE;
+
+static void profilo_lock_chiudi(void)
+{
+    if (g_profile_lock != INVALID_HANDLE_VALUE) { CloseHandle(g_profile_lock); }
+    g_profile_lock = INVALID_HANDLE_VALUE;
+}
+
+static int profilo_proteggi(void)
+{
+    g_profile_lock = profilo_lock_apri();
+    if (g_profile_lock == INVALID_HANDLE_VALUE) { return 2; }
+    if (profilo_recupero_pendente()) { profilo_lock_chiudi(); return 3; }
+    return 0;
+}
 
 /* L'esito di guscio_radice_imposta (vedi il commento in cima a main() per il
  * perche'), tenuto qui e non locale a main() perche' modo_argomenti e
@@ -2607,9 +2623,30 @@ int main(int argc, char **argv)
     if (argc > 1 && !strcmp(argv[1], "--config")) {
         return modo_config();
     }
+    if (argc > 1 && !strcmp(argv[1], "--storage-status")) {
+        int status = profilo_proteggi();
+        printf("%s\n", status == 0 ? "available" :
+               status == 2 ? "busy" : "recovery required");
+        profilo_lock_chiudi();
+        return status;
+    }
 
     if (!istanza_unica()) {
         return 0;
+    }
+
+    /* Prima di configurazione, download o dischi: una manutenzione e un avvio
+     * competono per lo stesso handle, senza intervallo fra controllo e uso. */
+    {
+        int status = profilo_proteggi();
+        if (status) {
+            MessageBoxA(NULL, status == 2 ?
+                "This profile is in use or undergoing data maintenance.\nClose it or wait for the operation to finish." :
+                "Interrupted data maintenance requires recovery.\nRun Manage-Data.ps1 -Operation Recover before starting Android.",
+                "Habumi", MB_OK | MB_ICONERROR);
+            return 1;
+        }
+        atexit(profilo_lock_chiudi);
     }
 
     registro_apri();

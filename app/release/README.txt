@@ -99,6 +99,27 @@ is enabling Windows virtualization, if it is not already on - see WHAT
 YOU NEED above. To uninstall, see further down: you delete the folder.
 
 
+OFFLINE DATA TOOLS
+-----------------
+
+Close Android normally before running Manage-Data.ps1 from this folder.
+Example commands (choose a new backup directory outside the installation):
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Backup -Path D:\Backups\Habumi-01
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Restore -Path D:\Backups\Habumi-01
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Recover
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Diagnostics -Path D:\Backups\Habumi-diagnostics-01
+
+Backup includes both existing data images, configuration and keymaps. Reference
+Android images are identified by hashes, not copied. Restore requires matching
+reference images, verifies a complete staging copy and retains previous files
+under maintenance/<transaction>/original. Interrupted replacement blocks startup
+until Recover completes. Failed or incomplete backups are never published at the
+requested destination; their .partial directories remain available for inspection.
+Diagnostics exports bounded recent logs and metadata, without data-image bytes.
+Storage growth and graphical data controls are separate development work.
+
+
 THE FIRST TIME, WINDOWS WILL WARN YOU
 --------------------------------------
 

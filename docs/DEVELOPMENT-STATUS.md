@@ -1,25 +1,19 @@
 # Development status
 
-- **Commit:** workspace organization commit containing this checkpoint; parent
-  `01f0c3e`. Recorded 19 October 2026; local, not pushed.
-- **Completed:** A0/A1 and compact presentation portion of A3, now with a native
-  GUI bootstrap that prepares Vulkan without creating a console. The isolated
-  profile has a direct desktop shortcut, Habumi Compact (Test). See
-  [compact interface evidence](COMPACT-INTERFACE-2026-10-19.md).
-  Nineteen artifact directories are now grouped in Habumi-Workspace; use the
-  [workspace layout](WORKSPACE-LAYOUT.md) for all new build/package/test outputs.
-- **Tests:** both bootstrap modes passed console, path, working directory,
-  arguments and error/exit-code probes. Full package compilation and all 335 ZIP
-  entries verified; real launcher validation passed without restarting Android.
-  Existing shell/QEMU source is unchanged. See
-  [launcher evidence](CONSOLE-FREE-LAUNCHER.md).
-  All 19 moves and both launcher validations passed after workspace cleanup.
-- **Open limit:** local development profile, not distributed. A3 settings,
-  fullscreen and screenshots remain; physical keyboard/touchscreen, theme/DPI
-  transitions, other hardware, real standby and production guest replacements
-  need further evidence. Cold startup through the new shortcut awaits user
-  acceptance. No new overhead or battery claim.
-- **Next:** A2 offline data protection: define the profile maintenance/startup
-  exclusion and backup manifest, then implement staged hash-verified restore
-  against a disposable copy before storage growth. See the
-  [implementation plan](IMPLEMENTATION-PLAN.md).
+- **Commit:** A2 data foundation commit containing this checkpoint; parent
+  `58eff95`. Recorded 19 October 2026; local, not pushed.
+- **Completed:** first A2 milestone: shared runtime/maintenance exclusion,
+  offline backup, verified staged restore, retained originals, interruption
+  recovery and bounded local diagnostic export. Existing A0/A1 and compact UI
+  remain. Use the [workspace layout](WORKSPACE-LAYOUT.md) for new outputs.
+- **Tests:** full shell build, 13 suites/648 checks, 56 data checks and 21 recovery
+  checks; 337 archive entries and all build inputs verified. Real 4 GiB GApps
+  backup/restore reproduced payload hashes and an in-guest file after reboot.
+  See [A2 evidence and limitations](A2-DATA-FOUNDATION.md).
+- **Open limit:** A2 remains in progress: growth, native data controls and fuller
+  diagnostic presentation remain. Local development package, not distributed;
+  physical power-loss, broad hardware and prior release gates remain open. No
+  new graphics overhead or battery claim.
+- **Next:** build a pinned ARM64 maintenance initramfs with ext4 tools; verify
+  4-to-16-GiB growth and file preservation on a disposable copy, then integrate
+  transactional growth. See the [implementation plan](IMPLEMENTATION-PLAN.md).

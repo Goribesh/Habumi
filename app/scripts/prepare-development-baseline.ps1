@@ -47,6 +47,7 @@ $provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild=$DevelopmentName;Publish
     PinnedFiles=$lock.PinnedFiles;QemuBuild=$build;ShellInputs=$inputs;
     SourceMode='Working-tree snapshots; file hashes, not HEAD alone, identify the built source.';
     LauncherInput=@{Path='app/release/launcher.c';SHA256=(Get-FileHash -LiteralPath (Join-Path $repo 'app/release/launcher.c')).Hash};
+    DataToolInputs=@(foreach($path in @('app/release/Manage-Data.ps1','app/release/Profile-Data.psm1')){@{Path=$path;SHA256=(Get-FileHash -LiteralPath (Join-Path $repo $path)).Hash}});
     SourceDirty=[bool]@(& git -C $repo status --porcelain --untracked-files=normal -- app/guscio qemu/ui-winq app/scripts/prepare-development-baseline.ps1 qemu/scripts/build-development-baseline.ps1);
     ExperimentalOmxProbe=$true;ExperimentalSystemUiNullProbe=$true;
     ReproducibilityScope='Clean shell/QEMU build, pinned binary dependencies; not a bit-identical rebuild of every third-party component.'}

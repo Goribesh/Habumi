@@ -5,6 +5,10 @@ This is a documentation/source audit, not a new compatibility or performance tes
 The published Habumi runtime remains 0.3.0-rc.1; recent fixes run only in the
 isolated development profile unless explicitly packaged.
 
+Local implementation delta, 19 October: the [A2 data foundation](A2-DATA-FOUNDATION.md)
+adds verified offline CLI protection/restore and diagnostic export in a development
+package. Rows G26/G27/G29 reflect that progress; no BlueStacks claims were revised.
+
 ## Comparison boundary
 
 The reference is **BlueStacks 5 for Windows**, using its official support pages
@@ -100,10 +104,10 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 | G23 | P3 | Rolling highlight capture | Missing | Optional recent-gameplay buffer with an explicit memory/power budget; vendor documentation gives differing durations, so none is used as an acceptance target. |
 | G24 | P3 | Capture gallery/video editing | Missing | Optional gallery and basic clip management; editing is a separate cost from recording. |
 | G25 | P1 | In-app update checks/install | Missing | Add version checks and an update workflow with rollback and preserved user data. Manual GitHub downloads already exist. |
-| G26 | P1 | Upgrade/data migration | Partial | Separate clean packages exist. Define a supported migration path, backup behavior and rollback compatibility. |
-| G27 | P1 | Instance backup/restore | Missing | Add offline, consistent backups covering data, configuration and keymaps, plus a tested restore. Copying a running disk is not sufficient. |
+| G26 | P1 | Upgrade/data migration | Partial | Schema/version/reference-image metadata and journaled restore exist in the A2 development package. Define broader upgrade/migration compatibility; mismatched Android images are currently refused. |
+| G27 | P1 | Instance backup/restore | Partial | Offline CLI backup/restore/recovery implemented; real isolated 4 GiB restore and startup exclusion verified. Native management workflow remains; development-packaged, not distributed. See [A2 evidence](A2-DATA-FOUNDATION.md). |
 | G28 | P2 | Disk reclaim/cleanup | Missing | Assess the raw-image format, guest discard and host space recovery. Removing an Android file alone does not prove Windows disk space was reclaimed. |
-| G29 | P1 | Diagnostic export/report | Partial | Logs and probes exist. Build a local support bundle with version/driver/config metadata and user-reviewed export; uploading is a separate choice. |
+| G29 | P1 | Diagnostic export/report | Partial | Offline bounded log/metadata directory export implemented and tested locally. Complete driver/config presentation and native export selection; no automatic upload. See [A2 evidence](A2-DATA-FOUNDATION.md). |
 
 ## Instances and gaming controls
 

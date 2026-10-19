@@ -56,11 +56,13 @@ foreach($pair in @(@('Start-Vulkan.cmd','Start.cmd'),@('Start-Habumi.ps1','Start
     [IO.File]::WriteAllText((Join-Path $stage $pair[1]),$value,$encoding)
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'app/release/LICENSES') -Destination (Join-Path $stage 'LICENSES') -Recurse
+foreach($name in @('Manage-Data.ps1','Profile-Data.psm1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
 $critical=@()
-foreach($relative in @('Habumi.exe','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
+foreach($relative in @('Habumi.exe','Manage-Data.ps1','Profile-Data.psm1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
     $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
 }
 $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;CriticalFiles=$critical;
+    OfflineDataTools=$true;DataToolsSchema='habumi.backup.v1';
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;
     UserDataIncluded=$false;RepeatedHibernateValidated=$false;
     ShaderBenchmarkOverheadGuarantee=$false;SourceRecipe='app/scripts/prepare-native-release.ps1'}
