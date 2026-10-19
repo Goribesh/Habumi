@@ -80,17 +80,18 @@ HOW TO START IT
 Unpack this archive into whatever folder you like - any path works -
 and double-click:
 
-    Start.cmd
+    Habumi.exe
 
 which sits in the main folder, the one you see right after unpacking.
-A black command-prompt window flashes for an instant: that is normal,
-it is launching the shell at
+This graphical launcher starts Windows PowerShell without creating a console,
+prepares Vulkan and launches the shell at
 
     runtime\bin\Habumi.exe
 
 through `Start-Habumi.ps1`. Do not start `runtime\bin\Habumi.exe` directly
 for Vulkan: the launcher selects the native ICD and sets the required process
-environment for Venus and Zink.
+environment for Venus and Zink. Start.cmd remains available for compatibility;
+opening a .cmd file can still briefly display a command-prompt window.
 
 There is nothing to install: no Windows registry entries and no
 administrator rights to USE the program. The only thing that needs them
