@@ -20,6 +20,7 @@
  * gratis, che e' cio' che si vuole fare con una riga di errore. Una ListView
  * sarebbe piu' bella e meno utile. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 #include <shellapi.h>   /* DragAcceptFiles, DragQueryFileA, DragFinish */
@@ -118,6 +119,7 @@ static HWND fin_titolo;
 static HWND fin_fasi;
 static HWND fin_log_label;
 static HWND fin_log;
+static HWND fin_vista;
 static HWND fin_bottoni[9];
 static char fin_testo_fasi[512];
 static DWORD fin_ora_avvio;
@@ -486,6 +488,15 @@ static void fin_disponi(int w, int a, UINT dpi)
                       m + dpi_scala(FIN_LOG_TOP_GAP, dpi);
     log_y = etichetta_log_y + dpi_scala(FIN_LOG_LABEL_H, dpi) +
             dpi_scala(FIN_LOG_TEXT_GAP, dpi);
+    if (fin_vista) {
+        int top = etichetta_log_y;
+        int view_h = a - top - dpi_scala(110, dpi) - m;
+        if (view_h < 1) { view_h = 1; }
+        MoveWindow(fin_vista, m, top, w - 2 * m, view_h, TRUE);
+        sessione_area(w - 2 * m, view_h);
+        etichetta_log_y = top + view_h + m;
+        log_y = etichetta_log_y + dpi_scala(FIN_LOG_LABEL_H + FIN_LOG_TEXT_GAP, dpi);
+    }
     if (fin_log_label) {
         MoveWindow(fin_log_label, m, etichetta_log_y, w - 2 * m,
                    dpi_scala(FIN_LOG_LABEL_H, dpi), TRUE);
@@ -559,6 +570,8 @@ bool finestra_tastiera(const MSG *msg)
     }
 
     fuoco = GetFocus();
+    /* I messaggi del guest non sono navigazione fra i controlli del guscio. */
+    if (fin_vista && IsChild(fin_vista, msg->hwnd)) { return false; }
     if (msg->wParam == VK_TAB) {
         HWND prossimo = GetNextDlgTabItem(fin_hwnd, fuoco,
                               (GetKeyState(VK_SHIFT) & 0x8000) != 0);
@@ -672,6 +685,12 @@ static void fin_disegna_bottone(const DRAWITEMSTRUCT *d)
 static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
+    case WM_ACTIVATE:
+        if (fin_vista && LOWORD(wp) == WA_INACTIVE) { sessione_focus(false); }
+        break;
+    case WM_SETFOCUS:
+        if (fin_vista) { sessione_focus(true); }
+        break;
     case WM_CLOSE:
         /* Chiudere la finestra del guscio E' chiudere l'applicazione: non
          * esistono due modi di uscire con due significati. Lo spegnimento lo
@@ -868,6 +887,18 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcA(h, msg, wp, lp);
 }
 
+static LRESULT CALLBACK fin_vista_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_KILLFOCUS && !IsChild(h, (HWND)wp)) {
+        sessione_focus(false);
+    }
+    if (msg == WM_SETFOCUS || msg == WM_LBUTTONDOWN) {
+        sessione_focus(true);
+        return 0;
+    }
+    return DefWindowProcA(h, msg, wp, lp);
+}
+
 bool finestra_apri(const Config *c)
 {
     WNDCLASSA wc = {0};
@@ -888,13 +919,35 @@ bool finestra_apri(const Config *c)
     }
 
     fin_hwnd = CreateWindowA(FIN_CLASSE, "Habumi",
-                             WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                              FIN_LARGHEZZA, FIN_ALTEZZA, NULL, NULL,
                              wc.hInstance, NULL);
     if (!fin_hwnd) {
         return false;
     }
     fin_aggiorna_tema();
+
+    const char *single = getenv("HABUMI_SINGLE_WINDOW");
+    if (single && !strcmp(single, "1")) {
+        WNDCLASSA view = {0};
+        view.lpfnWndProc = fin_vista_proc;
+        view.hInstance = wc.hInstance;
+        view.lpszClassName = "HabumiA1View";
+        view.hCursor = LoadCursor(NULL, IDC_ARROW);
+        view.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        if (!RegisterClassA(&view)) { return false; }
+        fin_vista = CreateWindowA(view.lpszClassName, "Android view",
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_TABSTOP,
+            0, 0, 1, 1, fin_hwnd, NULL, wc.hInstance, NULL);
+        if (!fin_vista || !sessione_avvia(fin_vista)) {
+            registro_riga(REG_GUSCIO, "session: cannot prepare the A1 child window");
+            return false;
+        }
+    } else {
+        SetEnvironmentVariableA("HABUMI_SESSION", NULL);
+        SetEnvironmentVariableA("HABUMI_PARENT", NULL);
+        SetEnvironmentVariableA("HABUMI_OWNER", NULL);
+    }
 
     /* Da qui la finestra accetta file trascinati. Va chiamata sulla finestra
      * PRINCIPALE: i controlli figli non ereditano l'accettazione, ed e' giusto

@@ -9,6 +9,7 @@ param([Parameter(Mandatory)][string]$RuntimeRoot,
       [string]$QemuExecutable='', [string]$BuildProvenancePath='',
       [string]$ShellSourceDirectory='',
       [switch]$DevelopmentBaseline,
+      [ValidateSet('A0','A1')][string]$DevelopmentName='A0',
       [ValidateRange(1024,65535)][int]$AdbPort=15555,
       [ValidateRange(1024,65535)][int]$ClipboardPort=15556)
 $ErrorActionPreference='Stop'
@@ -39,7 +40,7 @@ foreach($relative in $paths){
 }
 $source=Join-Path $repoRoot 'app/guscio'
 if($ShellSourceDirectory){$source=(Resolve-Path -LiteralPath $ShellSourceDirectory).Path}
-$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv')
+$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv','sessione')
 $files=@($modules|ForEach-Object {Join-Path $source "$_.c"})
 & (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32
 if($LASTEXITCODE){throw 'Release shell compilation failed.'}
@@ -63,8 +64,13 @@ $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;Critic
 if($DevelopmentBaseline){
     Copy-Item -LiteralPath $BuildProvenancePath -Destination (Join-Path $stage 'development-build.json')
     $manifest.CriticalFiles+=@{Path='development-build.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'development-build.json')).Hash}
-    $manifest.DevelopmentBuild='A0';$manifest.ExperimentalOmxProbe=$true
+    $manifest.DevelopmentBuild=$DevelopmentName;$manifest.ExperimentalOmxProbe=$true
     $manifest.ExperimentalSystemUiNullProbe=$true;$manifest.ExperimentalRendererRotation=$true
+    if($DevelopmentName -eq 'A1'){
+        $manifest.ExperimentalChildWindow=$true
+        $start="@echo off`r`nset HABUMI_SINGLE_WINDOW=1`r`ncall `"%~dp0Start.cmd`"`r`n"
+        [IO.File]::WriteAllText((Join-Path $stage 'Start-A1.cmd'),$start,$encoding)
+    }
 }
 [IO.File]::WriteAllText((Join-Path $stage 'release-profile.json'),($manifest|ConvertTo-Json -Depth 6)+"`n",$encoding)
 $inventory=@(Get-ChildItem -LiteralPath $stage -Recurse -File|ForEach-Object {
@@ -72,7 +78,7 @@ $inventory=@(Get-ChildItem -LiteralPath $stage -Recurse -File|ForEach-Object {
 })
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'package-files.json'),($inventory|ConvertTo-Json -Depth 4)+"`n",$encoding)
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archiveName=if($DevelopmentBaseline){'Habumi-development-A0.zip'}else{"Habumi-$version.zip"}
+$archiveName=if($DevelopmentBaseline){"Habumi-development-$DevelopmentName.zip"}else{"Habumi-$version.zip"}
 $archive=Join-Path $OutputRoot $archiveName
 [IO.Compression.ZipFile]::CreateFromDirectory($stage,$archive,[IO.Compression.CompressionLevel]::Optimal,$false)
 # Riapertura e confronto dei byte letti dall'archivio, non solo della directory.

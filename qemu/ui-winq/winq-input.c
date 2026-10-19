@@ -347,12 +347,17 @@ static int winq_scancode_to_qcode(int scancode)
  * fisica produce sempre lo stesso scancode qualunque sia il layout -- ed e'
  * per questo che la tabella di QEMU e' indicizzata per scancode e non per
  * codice virtuale. */
+#include "winq-keycode.h"
 void winq_key(WPARAM vk, LPARAM info, bool premuto)
 {
-    int scancode = (info >> 16) & 0xff;
+    int scancode = winq_key_scancode(vk, info);
     int qcode;
+    static bool synthetic_reported;
 
-    (void)vk;   /* vedi il commento sopra: si usa lo scancode, non vk */
+    if (!((info >> 16) & 0xff) && scancode && !synthetic_reported) {
+        synthetic_reported = true;
+        info_report("winq: synthetic keyboard input omitted its scan code; using the host key mapping");
+    }
 
     /* Il bit 24 di lParam distingue i tasti ESTESI. Windows assegna lo
      * STESSO scancode a 7 bit a coppie come le frecce e i tasti 2/4/6/8/7/9/

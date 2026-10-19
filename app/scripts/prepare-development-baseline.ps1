@@ -5,6 +5,7 @@ param([Parameter(Mandatory)][string]$RuntimeArchive,
       [Parameter(Mandatory)][string]$QemuBuildRoot,
       [Parameter(Mandatory)][string]$InitramfsPath,
       [Parameter(Mandatory)][string]$OutputRoot,
+      [ValidateSet('A0','A1')][string]$DevelopmentName='A0',
       [string]$MsysBin='C:/msys64/clangarm64/bin')
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -39,7 +40,7 @@ foreach($file in @(Get-ChildItem -LiteralPath (Join-Path $repo 'app/guscio') -Fi
     Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $snapshot $file.Name)
     $inputs+=@{Path=('app/guscio/'+$file.Name);SHA256=(Get-FileHash -LiteralPath $file.FullName).Hash}
 }
-$provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild='A0';Published=$false;
+$provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild=$DevelopmentName;Published=$false;
     SourceCommit=(& git -C $repo rev-parse HEAD).Trim();
     LockSHA256=(Get-FileHash -LiteralPath $lockPath).Hash;
     RuntimeArchiveSHA256=$lock.RuntimeArchive.SHA256;ComponentVersions=$lock.ComponentVersions;
@@ -50,6 +51,6 @@ $provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild='A0';Published=$false;
     ReproducibilityScope='Clean shell/QEMU build, pinned binary dependencies; not a bit-identical rebuild of every third-party component.'}
 $provenancePath=Join-Path $OutputRoot 'development-build.json'
 $provenance|ConvertTo-Json -Depth 12|Set-Content -LiteralPath $provenancePath -Encoding utf8
-& (Join-Path $PSScriptRoot 'prepare-native-release.ps1') -RuntimeRoot $runtime -InitramfsPath $initramfs -OutputRoot (Join-Path $OutputRoot 'distribution') -QemuExecutable $qemu -BuildProvenancePath $provenancePath -ShellSourceDirectory $snapshot -DevelopmentBaseline -AdbPort 17555 -ClipboardPort 15556 -MsysBin $MsysBin
+& (Join-Path $PSScriptRoot 'prepare-native-release.ps1') -RuntimeRoot $runtime -InitramfsPath $initramfs -OutputRoot (Join-Path $OutputRoot 'distribution') -QemuExecutable $qemu -BuildProvenancePath $provenancePath -ShellSourceDirectory $snapshot -DevelopmentBaseline -DevelopmentName $DevelopmentName -AdbPort 17555 -ClipboardPort 15556 -MsysBin $MsysBin
 if(-not(Test-Path -LiteralPath (Join-Path $OutputRoot 'distribution/SHA256SUMS.txt'))){throw 'Baseline package was not produced.'}
-Write-Output 'PASS: isolated A0 baseline packaged from clean QEMU and pinned dependencies. No Android user disk was copied.'
+Write-Output "PASS: isolated $DevelopmentName baseline packaged from clean QEMU and pinned dependencies. No Android user disk was copied."

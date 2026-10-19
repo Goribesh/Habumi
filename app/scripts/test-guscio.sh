@@ -26,7 +26,7 @@ for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama
     # a prescindere da cosa la singola prova chiami davvero -- e' cosi' per
     # config stesso e per ognuna delle righe qui sotto che include config.c.
     if [ "$prova" = "config" ]; then extra="registro.c archivio.c varianti.c"; fi
-    if [ "$prova" = "vm" ]; then extra="registro.c archivio.c config.c adb.c varianti.c comandi.c dpi.c tubo.c"; fi
+    if [ "$prova" = "vm" ]; then extra="registro.c archivio.c config.c adb.c varianti.c comandi.c dpi.c tubo.c sessione.c -lbcrypt"; fi
     if [ "$prova" = "dpi" ]; then extra="registro.c archivio.c config.c varianti.c"; fi
     if [ "$prova" = "adb" ]; then extra="registro.c archivio.c config.c varianti.c"; fi
     if [ "$prova" = "apk" ]; then extra="registro.c archivio.c config.c adb.c varianti.c"; fi

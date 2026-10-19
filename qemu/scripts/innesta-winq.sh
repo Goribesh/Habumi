@@ -115,6 +115,7 @@ for f in "$HERE"/ui-winq/winq*.c "$HERE"/ui-winq/winq*.h; do
     COPIATI=$((COPIATI + 1))
 done
 echo "=== $COPIATI sorgenti winq copiati in ui/"
+cp "$HERE/../app/guscio/habumi-session.h" "$SRC/ui/"
 
 # E CIO' CHE meson PRETENDE DEVE ESSERCI, verificato prima di arrivare a
 # configure: l'errore di meson arriva dopo minuti di risoluzione delle

@@ -2972,9 +2972,10 @@ int main(int argc, char **argv)
     {
         bool varianti_ferme = variante_ferma();
         bool appunti_fermi = appunti_ferma();
+        bool sessione_fermata = sessione_ferma();
 
         vm_chiudi();
-        if (varianti_ferme && appunti_fermi) {
+        if (varianti_ferme && appunti_fermi && sessione_fermata) {
             registro_chiudi();
         }
     }

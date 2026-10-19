@@ -453,6 +453,13 @@ void finestra_messaggi_guscio(FinMsgGuscio f);
 
 /* --- tubo.c -------------------------------------------------------------- */
 
+/* Prova A1: intenzioni UI asincrone e sessione legata al processo QEMU. */
+bool sessione_avvia(HWND parent);
+void sessione_qemu(DWORD pid);
+void sessione_area(int width, int height);
+void sessione_focus(bool active);
+bool sessione_ferma(void);
+
 bool tubo_risoluzione(int w, int h);
 bool tubo_risoluzione_ruotata(int w, int h, unsigned rotazione);
 

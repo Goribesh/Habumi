@@ -939,6 +939,7 @@ static bool vm_lancia(void)
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     vm_processo = pi.hProcess;
+    sessione_qemu(pi.dwProcessId);
     vm_thread_stderr = CreateThread(NULL, 0, vm_thread_stderr_corpo,
                                     vm_stderr_lettura, 0, NULL);
     registro_riga(REG_GUSCIO, "QEMU started, pid %lu, attempt %d of %d",
@@ -973,6 +974,7 @@ static void vm_uccidi(void)
         }
         CloseHandle(vm_processo);
         vm_processo = NULL;
+        sessione_qemu(0);
     }
     if (vm_thread_stderr) {
         WaitForSingleObject(vm_thread_stderr, 2000);

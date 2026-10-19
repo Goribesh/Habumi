@@ -70,6 +70,7 @@ static const GUID winq_console_display_guid = {
 #include "winq-mappa.h"
 
 WinqState winq;
+#include "winq-session.h"
 
 /* Definita in fondo, insieme alla creazione della finestra, e usata dal wndproc
  * che sta prima: e' l'unica ragione di questa dichiarazione anticipata. Resta
@@ -711,6 +712,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         winq_mappa_aggiorna_proporzioni(h);
         return 0;
     case WM_DPICHANGED: {
+        if (winq_session.parent) { return DefWindowProc(h, msg, wp, lp); }
         /* LA FINESTRA E' PASSATA SU UNO SCHERMO CON SCALA DIVERSA.
          *
          * lParam porta il rettangolo SUGGERITO da Windows: si applica quello
@@ -916,6 +918,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_POINTERDOWN:
     case WM_POINTERUPDATE:
     case WM_POINTERUP: {
+        if (msg == WM_POINTERDOWN && winq_session.parent) { SetFocus(h); }
         UINT32 pid = GET_POINTERID_WPARAM(wp);
         POINTER_INFO pi;
         POINT p;
@@ -1055,6 +1058,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
      * pulsante e' ancora giu'. */
 #define WINQ_MOUSE_ID 0x7fffffff
     case WM_LBUTTONDOWN:
+        if (winq_session.parent) { SetFocus(h); }
         /* Il clic del modo impara: consuma il clic invece di iniettarlo come
          * dito. E' il giro inverso di winq_mappa_pm_a_cliente (vedi
          * winq_mappa_cliente_a_pm), e non passa da SetCapture -- non c'e'
@@ -1288,6 +1292,8 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
  * primario. */
 static void winq_dimensiona_cliente(int w, int h)
 {
+    /* Nel contenitore l'area e' decisa dal guscio, non dallo scanout guest. */
+    if (winq_session.parent) { return; }
     RECT r = { 0, 0, w, h };
     DWORD stile = (DWORD)GetWindowLongPtrA(winq.hwnd, GWL_STYLE);
     /* Letto anche se oggi vale sempre 0 (CreateWindowEx(0, ...) piu' sotto):
@@ -1344,6 +1350,10 @@ static void winq_dimensiona_cliente(int w, int h)
 
 bool winq_create_window(int w, int h)
 {
+    if (!winq_session_parent()) {
+        error_report("winq/session: invalid parent, owner, session or DPI context");
+        return false;
+    }
     WNDCLASSEX wc = {
         .cbSize = sizeof(wc),
         .lpfnWndProc = winq_wndproc,
@@ -1371,14 +1381,21 @@ bool winq_create_window(int w, int h)
      * appena l'handle esiste e il DPI vero si puo' chiedere alla finestra. La
      * finestra non e' ancora visibile (ShowWindow viene dopo), quindi questo
      * passaggio intermedio non si vede. */
-    winq.hwnd = CreateWindowEx(0, "winq", "Android", WS_OVERLAPPEDWINDOW,
-                               CW_USEDEFAULT, CW_USEDEFAULT, w, h,
-                               NULL, NULL, wc.hInstance, NULL);
+    RECT area = {0, 0, w, h};
+    if (winq_session.parent) { GetClientRect(winq_session.parent, &area); }
+    winq.hwnd = CreateWindowEx(winq_session.parent ? WS_EX_NOPARENTNOTIFY : 0,
+                               "winq", "Android",
+                               winq_session.parent ? WS_CHILD | WS_CLIPSIBLINGS : WS_OVERLAPPEDWINDOW,
+                               winq_session.parent ? 0 : CW_USEDEFAULT,
+                               winq_session.parent ? 0 : CW_USEDEFAULT,
+                               area.right, area.bottom,
+                               winq_session.parent, NULL, wc.hInstance, NULL);
     if (!winq.hwnd) {
         error_report("winq: CreateWindowEx failed, error %lu", GetLastError());
         return false;
     }
     winq_dimensiona_cliente(w, h);
+    if (!winq_session_start()) { DestroyWindow(winq.hwnd); return false; }
     const char *power_test = getenv("WINQ_HOST_POWER_TEST");
     winq_power_test = power_test && !strcmp(power_test, "1");
     if (winq_power_test) {
@@ -1505,7 +1522,7 @@ static void *winq_thread_corpo(void *opaque)
      * quasi gratuito: dorme finche' un messaggio non arriva, invece di girare a
      * vuoto ogni cinque millisecondi come faceva la pompa dentro il battito. */
     winq_traccia_finestra("entering the message loop");
-    while ((r = GetMessage(&m, NULL, 0, 0)) != 0) {
+    while ((r = winq_session_message(&m)) != 0) {
         if (r == -1) {
             error_report("winq: GetMessage failed (%lu), the window "
                      "thread exits", GetLastError());
@@ -1515,6 +1532,7 @@ static void *winq_thread_corpo(void *opaque)
         DispatchMessage(&m);
     }
 
+    winq_session_close();
     if (winq_power_notification) {
         UnregisterSuspendResumeNotification(winq_power_notification);
         winq_power_notification = NULL;

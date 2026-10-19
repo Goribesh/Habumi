@@ -27,6 +27,10 @@ foreach($file in @(Get-ChildItem -LiteralPath (Join-Path $repo 'qemu/ui-winq') -
     $inputs+=@{Path=('qemu/ui-winq/'+$file.Name);SHA256=(Get-FileHash -LiteralPath $to).Hash}
 }
 if(@($inputs|Where-Object Path -like '*.c').Count -ne 9){throw 'Unexpected WinQ module count.'}
+$protocol=Join-Path $repo 'app/guscio/habumi-session.h'
+$protocolTarget=Join-Path $source 'ui/habumi-session.h'
+[IO.File]::WriteAllText($protocolTarget,[IO.File]::ReadAllText($protocol).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
+$inputs+=@{Path='app/guscio/habumi-session.h';SHA256=(Get-FileHash -LiteralPath $protocolTarget).Hash}
 $commit=(& git -C $repo rev-parse HEAD).Trim()
 $manifest=[ordered]@{SchemaVersion=1;SourceCommit=$commit;QemuVersion=$lock.QemuVersion;
     SourceMode='Working-tree snapshot; OverlayInputs hashes identify the compiled source.';
