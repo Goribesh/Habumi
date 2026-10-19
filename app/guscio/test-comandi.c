@@ -33,6 +33,8 @@ static unsigned checks, failures, pipe_calls;
 static int pipe_w[8], pipe_h[8];
 static unsigned pipe_rotation[8];
 static bool pipe_fail;
+static unsigned callback_calls;
+static int callback_w[32], callback_h[32];
 
 #define CHECK(x) do { checks++; if (!(x)) { failures++; \
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); } } while (0)
@@ -45,6 +47,22 @@ bool tubo_risoluzione_ruotata(int w, int h, unsigned rotation)
     }
     pipe_calls++;
     return !pipe_fail;
+}
+
+static void test_schermo_callback(int w, int h)
+{
+    if (callback_calls < sizeof(callback_w)/sizeof(callback_w[0])) {
+        callback_w[callback_calls] = w;
+        callback_h[callback_calls] = h;
+    }
+    callback_calls++;
+}
+
+static void reset_callback(void)
+{
+    callback_calls = 0;
+    memset(callback_w, 0, sizeof(callback_w));
+    memset(callback_h, 0, sizeof(callback_h));
 }
 
 static bool suffix_ci(const char *s, const char *suffix)
@@ -209,6 +227,7 @@ int main(int argc, char **argv)
     if (!setup_paths()) { fprintf(stderr, "Refusing to run outside isolated UI-controls folder.\n"); return 2; }
     atexit(cleanup);
     Config c; config_default(&c); c.porta_adb = 16555;
+    comandi_schermo_callback(test_schermo_callback);
 
     /* FIFO: enqueue everything before dispatch, then mutate the config port. */
     CHECK(set_mode("normal"));
@@ -218,6 +237,7 @@ int main(int argc, char **argv)
     CHECK(comandi_accoda(&c, COMANDO_DENSITA, 426)); c.porta_adb = 16556;
     own_actions = true;
     CHECK(drain(5000));
+    CHECK(callback_calls == 0);
     char lines[64][256]; int count = read_actions(lines, 64);
     const char *ordered[] = {"input keyevent KEYCODE_POWER", "input keyevent KEYCODE_VOLUME_UP",
         "input keyevent KEYCODE_VOLUME_DOWN", "input keyevent KEYCODE_HOME",
@@ -269,24 +289,27 @@ int main(int argc, char **argv)
 
     /* Rotation preserves read-size -> read-state -> pipe -> Android writes. */
     clear_actions(); own_actions = true; own_rotation = true; CHECK(set_mode("normal"));
-    pipe_calls = 0; pipe_fail = true;
+    pipe_calls = 0; pipe_fail = true; reset_callback();
     CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
     count = read_actions(lines, 64);
     const char *rot1[] = {"wm size", "settings get system user_rotation",
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 1"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 800 && pipe_h[0] == 1280);
+    CHECK(callback_calls == 0);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", rot1[i]); CHECK(strcmp(lines[i], e) == 0); }
-    clear_actions(); pipe_calls = 0;
+    clear_actions(); pipe_calls = 0; reset_callback();
     CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
     count = read_actions(lines, 64);
     const char *rot2[] = {"wm size", "settings get system user_rotation",
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 0"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 1280 && pipe_h[0] == 800);
+    CHECK(callback_calls == 0);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", rot2[i]); CHECK(strcmp(lines[i], e) == 0); }
 
     /* Portrait-natural panels need the opposite target-orientation mapping:
      * user_rotation 0 -> 1 produces landscape; 1 -> 0 produces portrait. */
     clear_actions(); pipe_calls = 0; pipe_fail = false; own_rotation = true;
+    reset_callback();
     CHECK(set_mode("portrait-size")); CHECK(set_rotation_state(0));
     CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
     count = read_actions(lines, 64);
@@ -294,18 +317,21 @@ int main(int argc, char **argv)
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 1"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 2560 && pipe_h[0] == 1600);
     CHECK(pipe_rotation[0] == 3);
+    CHECK(callback_calls == 1 && callback_w[0] == 2560 && callback_h[0] == 1600);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot0[i]); CHECK(strcmp(lines[i], e) == 0); }
 
-    clear_actions(); pipe_calls = 0; CHECK(set_rotation_state(1));
+    clear_actions(); pipe_calls = 0; reset_callback(); CHECK(set_rotation_state(1));
     CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); comandi_passo(); CHECK(drain(5000));
     count = read_actions(lines, 64);
     const char *portrait_rot1[] = {"wm size", "settings get system user_rotation",
         "settings put system accelerometer_rotation 0", "settings put system user_rotation 0"};
     CHECK(count == 4 && pipe_calls == 1 && pipe_w[0] == 1600 && pipe_h[0] == 2560);
     CHECK(pipe_rotation[0] == 0);
+    CHECK(callback_calls == 1 && callback_w[0] == 1600 && callback_h[0] == 2560);
     for (int i = 0; i < 4 && i < count; ++i) { char e[256]; snprintf(e, sizeof(e), "127.0.0.1:16555 %s", portrait_rot1[i]); CHECK(strcmp(lines[i], e) == 0); }
 
     /* A warm boot restores presentation without changing Android settings. */
+    reset_callback();
     for (int r = 0; r < 4; ++r) {
         clear_actions(); pipe_calls = 0; CHECK(set_rotation_state(r));
         CHECK(comandi_accoda(&c, COMANDO_SINCRONIZZA_ROTAZIONE, 0));
@@ -315,6 +341,8 @@ int main(int argc, char **argv)
         CHECK(pipe_rotation[0] == (unsigned)((4-r)%4));
         CHECK(pipe_w[0] == ((r&1) ? 2560 : 1600));
         CHECK(pipe_h[0] == ((r&1) ? 1600 : 2560));
+        CHECK(callback_calls == (unsigned)(r + 1));
+        CHECK(callback_w[r] == pipe_w[0] && callback_h[r] == pipe_h[0]);
     }
 
     /* Invalid size/state and failed writes clear queued commands. */
@@ -322,10 +350,15 @@ int main(int argc, char **argv)
     const int expected_prefix[] = {1, 2, 3};
     for (size_t i = 0; i < 3; ++i) {
         clear_actions(); CHECK(set_mode(bad_modes[i])); pipe_calls = 0;
+        reset_callback();
         CHECK(comandi_accoda(&c, COMANDO_RUOTA, 0)); CHECK(comandi_accoda(&c, COMANDO_HOME, 0));
         comandi_passo(); CHECK(drain(5000));
         count = read_actions(lines, 64); CHECK(count == expected_prefix[i]);
         CHECK(!comandi_in_corso());
+        CHECK(callback_calls == (unsigned)(i == 2));
+        if (i == 2) {
+            CHECK(callback_w[0] == pipe_w[0] && callback_h[0] == pipe_h[0]);
+        }
     }
     CHECK(pipe_calls == 1); /* framebuffer still updates before failed Android write */
     clear_actions(); own_actions = false;
@@ -343,6 +376,8 @@ int main(int argc, char **argv)
     }
     CHECK(GetProcessHandleCount(self, &after) != 0); CHECK(before == after);
     SetEnvironmentVariableA("HABUMI_UI_TEST_MODE", NULL);
+    comandi_schermo_callback(NULL);
+    reset_callback();
     printf("test-comandi: %u/%u checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

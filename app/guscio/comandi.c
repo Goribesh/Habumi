@@ -12,6 +12,8 @@ static RichiestaUi coda[COMANDI_CAPACITA], attuale;
 static int testa, quanti, fase, larghezza, altezza, rotazione;
 static AdbComando *cliente;
 static bool attiva, annullando;
+static void (*schermo_callback)(int, int);
+void comandi_schermo_callback(void (*callback)(int, int)) { schermo_callback = callback; }
 static ULONGLONG iniziata;
 static const char *nomi[] = {"power", "volume up", "volume down", "home",
                             "back", "recent apps", "rotation", "density",
@@ -134,6 +136,7 @@ void comandi_passo(void)
             /* Android ruota sul pannello fisico; la finestra lo compensa. */
             unsigned rotazione_host = (4 - destinazione) % 4;
             bool consegnato = tubo_risoluzione_ruotata(w, h, rotazione_host);
+            if (consegnato && schermo_callback) { schermo_callback(w, h); }
             if (!consegnato) {
                 registro_riga(REG_GUSCIO, "rotation: command pipe did not deliver the presentation target");
             }

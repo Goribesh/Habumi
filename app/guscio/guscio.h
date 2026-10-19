@@ -310,6 +310,7 @@ typedef enum {
 } ComandoUi;
 bool comandi_accoda(const Config *c, ComandoUi tipo, int valore);
 void comandi_passo(void);
+void comandi_schermo_callback(void (*callback)(int, int));
 bool comandi_annulla(void);
 bool comandi_in_corso(void);
 /* VM timer fallback retries retained cancellation without dispatching commands. */
@@ -401,6 +402,7 @@ bool finestra_apri(const Config *c);
 /* Da chiamare dal timer: riversa le righe nuove del registro nel pannello. */
 void finestra_passo(void);
 HWND finestra_handle(void);
+void finestra_schermo(int width, int height);
 /* Tab/Shift+Tab e Invio: solo i controlli del guscio, prima del dispatch. */
 bool finestra_tastiera(const MSG *msg);
 void finestra_fase(const char *nome, const char *esito);

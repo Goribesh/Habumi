@@ -68,6 +68,8 @@ if($DevelopmentBaseline){
     $manifest.ExperimentalSystemUiNullProbe=$true;$manifest.ExperimentalRendererRotation=$true
     if($DevelopmentName -eq 'A1'){
         $manifest.ExperimentalChildWindow=$true
+        $manifest.CompactInterface=$true
+        $manifest.Interface='Native frame, aspect-fitted Android view and 36-DIP right command rail'
         $start="@echo off`r`nset HABUMI_SINGLE_WINDOW=1`r`ncall `"%~dp0Start.cmd`"`r`n"
         [IO.File]::WriteAllText((Join-Path $stage 'Start-A1.cmd'),$start,$encoding)
     }

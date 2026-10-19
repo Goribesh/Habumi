@@ -2704,6 +2704,7 @@ int main(int argc, char **argv)
      * postano, e prima del ciclo dei messaggi, che e' l'unico posto da cui un
      * WM_CLOSE puo' arrivare. */
     finestra_messaggi_guscio(guscio_messaggio);
+    comandi_schermo_callback(finestra_schermo);
 
     if (!RegisterHotKey(finestra_handle(), ID_HOTKEY_TASTI,
                         MOD_CONTROL | MOD_ALT, 'T')) {

@@ -24,12 +24,18 @@
 #include <string.h>
 #include <windows.h>
 #include <shellapi.h>   /* DragAcceptFiles, DragQueryFileA, DragFinish */
+#include <commctrl.h>
 #include "guscio.h"
+#include "layout-compatto.h"
 
 #define FIN_CLASSE   "AndroidRuntimeGuscio"
 #define FIN_LARGHEZZA 760
 #define FIN_ALTEZZA   520
 #define FIN_TIMER     1
+#define FIN_BARRA     36
+#define FIN_MENU      1100
+#define FIN_LOG       1101
+#define FIN_ADATTA    1102
 
 /* LE COSTANTI DI POSIZIONE, tutte a 96 DPI e tutte qui. Prima vivevano due
  * volte -- una nella creazione dei controlli e una nel gestore di WM_SIZE -- con
@@ -120,6 +126,12 @@ static HWND fin_fasi;
 static HWND fin_log_label;
 static HWND fin_log;
 static HWND fin_vista;
+static HWND fin_more, fin_log_finestra, fin_tooltips;
+static int fin_guest_w, fin_guest_h;
+static void fin_disponi(int w, int a, UINT dpi);
+static void fin_adatta(bool iniziale);
+static void fin_menu_mostra(void);
+static void fin_apri_log(void);
 static HWND fin_bottoni[9];
 static char fin_testo_fasi[512];
 static DWORD fin_ora_avvio;
@@ -201,8 +213,10 @@ static void fin_aggiorna_tema(void)
             /* DWMWA_USE_IMMERSIVE_DARK_MODE e' 20 sui Windows supportati.
              * La chiamata dinamica lascia avviabile il guscio anche senza DWM. */
             setta(fin_hwnd, 20, &scuro_titolo, sizeof(scuro_titolo));
+            if (fin_log_finestra) { setta(fin_log_finestra, 20, &scuro_titolo, sizeof(scuro_titolo)); }
         }
         InvalidateRect(fin_hwnd, NULL, TRUE);
+        if (fin_more) { InvalidateRect(fin_more, NULL, TRUE); }
         if (fin_titolo) InvalidateRect(fin_titolo, NULL, TRUE);
         if (fin_fasi) InvalidateRect(fin_fasi, NULL, TRUE);
         if (fin_log_label) InvalidateRect(fin_log_label, NULL, TRUE);
@@ -253,6 +267,15 @@ void finestra_fase(const char *nome, const char *esito)
         /* La finestra mostra l'esito corrente; la cronologia completa resta
          * nel buffer per non cambiare la raccolta delle fasi. */
         SetWindowTextA(fin_fasi, aggiunta);
+    }
+    if (fin_vista) {
+        const char *title = "Habumi - Starting Android";
+        if (!strcmp(esito, "ready")) { title = "Habumi"; }
+        else if (!strcmp(nome, "shutdown")) { title = "Habumi - Shutting down"; }
+        else if (!strcmp(nome, "variant")) { title = "Habumi - Switching Android variant"; }
+        else if (!strcmp(esito, "FAILED")) { title = "Habumi - Startup failed"; }
+        else if (!strcmp(nome, "QEMU")) { title = "Habumi - Stopped"; }
+        SetWindowTextA(fin_hwnd, title);
     }
 }
 
@@ -310,6 +333,9 @@ void finestra_passo(void)
 {
     char buf[8192];
     int n;
+
+    /* Il file continua a registrare; nessun controllo nascosto da aggiornare. */
+    if (!fin_log) { return; }
 
     n = registro_nuove(buf, sizeof(buf));
     while (n > 0) {
@@ -378,6 +404,66 @@ static HFONT fin_crea_font(UINT dpi, const wchar_t *nome, int peso)
  * due giri di MoveWindow. Serve, perche' WM_DPICHANGED la chiama dopo un
  * SetWindowPos che a sua volta puo' aver mandato un WM_SIZE che l'ha gia'
  * chiamata. */
+static void fin_bordi(UINT dpi, int *width, int *height)
+{
+    typedef BOOL (WINAPI *AdjustDpi)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    AdjustDpi adjust = (AdjustDpi)(void *)GetProcAddress(GetModuleHandleA("user32.dll"),
+                                                       "AdjustWindowRectExForDpi");
+    RECT r = {0, 0, 100, 100};
+    DWORD style = (DWORD)GetWindowLongPtrA(fin_hwnd, GWL_STYLE);
+    DWORD ex = (DWORD)GetWindowLongPtrA(fin_hwnd, GWL_EXSTYLE);
+    if (adjust) { adjust(&r, style, FALSE, ex, dpi); }
+    else { AdjustWindowRectEx(&r, style, FALSE, ex); }
+    *width = r.right - r.left - 100;
+    *height = r.bottom - r.top - 100;
+}
+
+static void fin_adatta(bool iniziale)
+{
+    MONITORINFO monitor = {.cbSize = sizeof(monitor)};
+    RECT current, client;
+    int bx, by;
+    if (!fin_vista || !GetWindowRect(fin_hwnd, &current) ||
+        !GetClientRect(fin_hwnd, &client) ||
+        !GetMonitorInfoA(MonitorFromWindow(fin_hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) { return; }
+    UINT dpi = dpi_di_finestra(fin_hwnd);
+    int rail = dpi_scala(FIN_BARRA, dpi);
+    fin_bordi(dpi, &bx, &by);
+    int maxw = monitor.rcWork.right - monitor.rcWork.left - bx;
+    int maxh = monitor.rcWork.bottom - monitor.rcWork.top - by;
+    if (iniziale) {
+        maxw = maxw * 9 / 10;
+        maxh = maxh * 4 / 5;
+    } else {
+        int longedge = client.right - rail > client.bottom ? client.right - rail : client.bottom;
+        int desired_w = fin_guest_w >= fin_guest_h ? longedge + rail :
+                        (int)((int64_t)longedge * fin_guest_w / fin_guest_h) + rail;
+        int desired_h = fin_guest_w >= fin_guest_h ?
+                        (int)((int64_t)longedge * fin_guest_h / fin_guest_w) : longedge;
+        if (desired_w < maxw) { maxw = desired_w; }
+        if (desired_h < maxh) { maxh = desired_h; }
+    }
+    CompatSize fit = compat_fit(fin_guest_w, fin_guest_h, maxw, maxh, rail);
+    if (!fit.width || !fit.height) { return; }
+    if (IsZoomed(fin_hwnd)) { ShowWindow(fin_hwnd, SW_RESTORE); }
+    int x = current.left, y = current.top;
+    if (x + fit.width + bx > monitor.rcWork.right) { x = monitor.rcWork.right - fit.width - bx; }
+    if (y + fit.height + by > monitor.rcWork.bottom) { y = monitor.rcWork.bottom - fit.height - by; }
+    if (x < monitor.rcWork.left) { x = monitor.rcWork.left; }
+    if (y < monitor.rcWork.top) { y = monitor.rcWork.top; }
+    SetWindowPos(fin_hwnd, NULL, x, y, fit.width + bx, fit.height + by,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void finestra_schermo(int width, int height)
+{
+    if (!fin_vista || width < 1 || height < 1) { return; }
+    bool changed = (int64_t)width * fin_guest_h != (int64_t)height * fin_guest_w;
+    fin_guest_w = width;
+    fin_guest_h = height;
+    if (changed) { fin_adatta(false); }
+}
+
 static void fin_disponi(int w, int a, UINT dpi)
 {
     int m = dpi_scala(FIN_MARGINE, dpi);
@@ -454,6 +540,28 @@ static void fin_disponi(int w, int a, UINT dpi)
         MoveWindow(fin_titolo, m, dpi_scala(FIN_TITOLO_Y, dpi), w - 2 * m,
                    dpi_scala(FIN_TITOLO_H, dpi), TRUE);
     }
+    if (fin_vista) {
+        const int rapidi[] = {ID_BACK, ID_HOME, ID_RECENTI, ID_RUOTA};
+        CompatLayout area = compat_layout(w, a, dpi_scala(FIN_BARRA, dpi));
+        int lato = dpi_scala(32, dpi);
+        MoveWindow(fin_vista, 0, 0, area.view_width, area.view_height, TRUE);
+        sessione_area(area.view_width, area.view_height);
+        for (i = 0; i < sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
+            bool visibile = false;
+            for (unsigned j = 0; j < sizeof(rapidi) / sizeof(rapidi[0]); j++) {
+                if (fin_elenco[i].id == rapidi[j]) {
+                    MoveWindow(fin_bottoni[i], area.rail_x + dpi_scala(2, dpi),
+                               dpi_scala(4, dpi) + j * (lato + dpi_scala(4, dpi)),
+                               lato, lato, TRUE);
+                    visibile = true;
+                }
+            }
+            ShowWindow(fin_bottoni[i], visibile ? SW_SHOW : SW_HIDE);
+        }
+        MoveWindow(fin_more, area.rail_x + dpi_scala(2, dpi),
+                   dpi_scala(4, dpi) + 4 * (lato + dpi_scala(4, dpi)), lato, lato, TRUE);
+        return;
+    }
     if (fin_fasi) {
         MoveWindow(fin_fasi, m, dpi_scala(FIN_FASI_Y, dpi), w - 2 * m,
                    dpi_scala(FIN_FASI_H, dpi), TRUE);
@@ -488,15 +596,6 @@ static void fin_disponi(int w, int a, UINT dpi)
                       m + dpi_scala(FIN_LOG_TOP_GAP, dpi);
     log_y = etichetta_log_y + dpi_scala(FIN_LOG_LABEL_H, dpi) +
             dpi_scala(FIN_LOG_TEXT_GAP, dpi);
-    if (fin_vista) {
-        int top = etichetta_log_y;
-        int view_h = a - top - dpi_scala(110, dpi) - m;
-        if (view_h < 1) { view_h = 1; }
-        MoveWindow(fin_vista, m, top, w - 2 * m, view_h, TRUE);
-        sessione_area(w - 2 * m, view_h);
-        etichetta_log_y = top + view_h + m;
-        log_y = etichetta_log_y + dpi_scala(FIN_LOG_LABEL_H + FIN_LOG_TEXT_GAP, dpi);
-    }
     if (fin_log_label) {
         MoveWindow(fin_log_label, m, etichetta_log_y, w - 2 * m,
                    dpi_scala(FIN_LOG_LABEL_H, dpi), TRUE);
@@ -584,6 +683,10 @@ bool finestra_tastiera(const MSG *msg)
     }
 
     if (msg->wParam == VK_RETURN) {
+        if (fuoco == fin_more && fin_more) {
+            if (!(msg->lParam & (1L << 30))) { PostMessageA(fin_more, BM_CLICK, 0, 0); }
+            return true;
+        }
         for (i = 0; i < sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
             if (fuoco == fin_bottoni[i] && fin_bottoni[i] &&
                 IsWindowEnabled(fin_bottoni[i])) {
@@ -599,8 +702,73 @@ bool finestra_tastiera(const MSG *msg)
 
 /* I pulsanti restano BUTTON standard per nome e WM_COMMAND. Il disegno manuale
  * mantiene visibili riempimento, pressione, disabilitazione e fuoco. */
+static void fin_disegna_icona(const DRAWITEMSTRUCT *d)
+{
+    RECT r = d->rcItem;
+    int saved = SaveDC(d->hDC);
+    if (!saved) { return; }
+    UINT dpi = dpi_di_finestra(d->hwndItem);
+    int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+    int s = dpi_scala(5, dpi), dot = dpi_scala(1, dpi);
+    COLORREF color = IsWindowEnabled(d->hwndItem) ? fin_colore_testo : GetSysColor(COLOR_GRAYTEXT);
+    FillRect(d->hDC, &r, (d->itemState & ODS_SELECTED)
+             ? GetSysColorBrush(COLOR_3DSHADOW) : fin_brush_sfondo);
+    HPEN pen = CreatePen(PS_SOLID, dpi_scala(1, dpi), color);
+    HBRUSH brush = CreateSolidBrush(color);
+    if (!pen || !brush) {
+        RestoreDC(d->hDC, saved);
+        if (pen) { DeleteObject(pen); }
+        if (brush) { DeleteObject(brush); }
+        return;
+    }
+    SelectObject(d->hDC, pen);
+    SelectObject(d->hDC, GetStockObject(NULL_BRUSH));
+    switch (d->CtlID) {
+    case ID_BACK:
+        MoveToEx(d->hDC, cx + s/2, cy - s, NULL);
+        LineTo(d->hDC, cx - s/2, cy);
+        LineTo(d->hDC, cx + s/2, cy + s);
+        break;
+    case ID_HOME:
+        Ellipse(d->hDC, cx - s, cy - s, cx + s, cy + s);
+        break;
+    case ID_RECENTI:
+        RoundRect(d->hDC, cx - s, cy - s, cx + s, cy + s, dot * 2, dot * 2);
+        break;
+    case ID_RUOTA:
+        MoveToEx(d->hDC, cx - s, cy, NULL);
+        LineTo(d->hDC, cx - s, cy - s);
+        LineTo(d->hDC, cx + s, cy - s);
+        LineTo(d->hDC, cx + s - s/2, cy - s - s/2);
+        MoveToEx(d->hDC, cx + s, cy, NULL);
+        LineTo(d->hDC, cx + s, cy + s);
+        LineTo(d->hDC, cx - s, cy + s);
+        LineTo(d->hDC, cx - s + s/2, cy + s + s/2);
+        break;
+    case FIN_MENU:
+        SelectObject(d->hDC, brush);
+        for (int y = -1; y <= 1; y++) {
+            int dy = y * dpi_scala(5, dpi);
+            Ellipse(d->hDC, cx - dot, cy + dy - dot, cx + dot, cy + dy + dot);
+        }
+        break;
+    }
+    if ((d->itemState & ODS_FOCUS) && !(d->itemState & ODS_NOFOCUSRECT)) {
+        InflateRect(&r, -dpi_scala(3, dpi), -dpi_scala(3, dpi));
+        DrawFocusRect(d->hDC, &r);
+    }
+    RestoreDC(d->hDC, saved);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
 static void fin_disegna_bottone(const DRAWITEMSTRUCT *d)
 {
+    if (fin_vista && (d->CtlID == ID_BACK || d->CtlID == ID_HOME ||
+        d->CtlID == ID_RECENTI || d->CtlID == ID_RUOTA || d->CtlID == FIN_MENU)) {
+        fin_disegna_icona(d);
+        return;
+    }
     RECT r = d->rcItem;
     RECT testo = r;
     HBRUSH riempimento;
@@ -682,6 +850,78 @@ static void fin_disegna_bottone(const DRAWITEMSTRUCT *d)
     RestoreDC(d->hDC, contesto);
 }
 
+static LRESULT CALLBACK fin_log_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_SIZE && fin_log) {
+        MoveWindow(fin_log, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        return 0;
+    }
+    if (msg == WM_CTLCOLORSTATIC) {
+        SetTextColor((HDC)wp, fin_colore_log);
+        SetBkColor((HDC)wp, fin_colore_sfondo);
+        return (LRESULT)fin_brush_sfondo;
+    }
+    if (msg == WM_CLOSE) { DestroyWindow(h); return 0; }
+    if (msg == WM_NCDESTROY) { fin_log_finestra = fin_log = NULL; }
+    return DefWindowProcA(h, msg, wp, lp);
+}
+
+static void fin_apri_log(void)
+{
+    if (fin_log_finestra) { SetForegroundWindow(fin_log_finestra); return; }
+    WNDCLASSA wc = {0};
+    wc.lpfnWndProc = fin_log_proc;
+    wc.hInstance = GetModuleHandleA(NULL);
+    wc.lpszClassName = "HabumiActivityLog";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) { return; }
+    UINT dpi = dpi_di_finestra(fin_hwnd);
+    fin_log_finestra = CreateWindowExA(WS_EX_TOOLWINDOW, wc.lpszClassName,
+        "Habumi - Activity log", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+        dpi_scala(640, dpi), dpi_scala(400, dpi), fin_hwnd, NULL, wc.hInstance, NULL);
+    if (!fin_log_finestra) { return; }
+    fin_log = CreateWindowA("EDIT", "", WS_CHILD | WS_VISIBLE | WS_VSCROLL |
+        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL, 0, 0, 0, 0,
+        fin_log_finestra, NULL, wc.hInstance, NULL);
+    if (!fin_log) { DestroyWindow(fin_log_finestra); return; }
+    SendMessageA(fin_log, EM_SETLIMITTEXT, FIN_LOG_TETTO, 0);
+    SendMessageW(fin_log, WM_SETFONT, (WPARAM)fin_font_log, TRUE);
+    RECT client;
+    GetClientRect(fin_log_finestra, &client);
+    MoveWindow(fin_log, 0, 0, client.right, client.bottom, TRUE);
+    fin_aggiorna_tema();
+    ShowWindow(fin_log_finestra, SW_SHOW);
+    finestra_passo();
+}
+
+static void fin_menu_mostra(void)
+{
+    HMENU menu = CreatePopupMenu();
+    RECT r;
+    if (!menu || !GetWindowRect(fin_more, &r)) { if (menu) DestroyMenu(menu); return; }
+    AppendMenuA(menu, MF_STRING, FIN_ADATTA, "Fit window");
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    const int actions[] = {ID_POWER, ID_VOL_SU, ID_VOL_GIU, ID_TASTI, ID_VARIANTE};
+    const char *labels[] = {"Power", "Volume up", "Volume down", "Key mapping...", "Android variant..."};
+    for (unsigned j = 0; j < sizeof(actions) / sizeof(actions[0]); j++) {
+        bool enabled = false;
+        for (unsigned i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
+            if (fin_elenco[i].id == actions[j]) { enabled = IsWindowEnabled(fin_bottoni[i]); }
+        }
+        AppendMenuA(menu, MF_STRING | (enabled ? 0 : MF_GRAYED), actions[j], labels[j]);
+    }
+    AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, FIN_LOG, "Activity log...");
+    SetForegroundWindow(fin_hwnd);
+    UINT selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN,
+                                   r.right, r.top, 0, fin_hwnd, NULL);
+    DestroyMenu(menu);
+    PostMessageA(fin_hwnd, WM_NULL, 0, 0);
+    if (selected == FIN_LOG) { fin_apri_log(); }
+    else if (selected == FIN_ADATTA) { fin_adatta(true); }
+    else if (selected) { PostMessageA(fin_hwnd, WM_APP + 2, selected, (LPARAM)fin_more); }
+}
+
 static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -749,12 +989,58 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_GETMINMAXINFO: {
         MINMAXINFO *misure = (MINMAXINFO *)lp;
         UINT dpi = dpi_di_finestra(h);
+        if (fin_vista) {
+            MONITORINFO monitor = {.cbSize = sizeof(monitor)};
+            int bx, by, rail = dpi_scala(FIN_BARRA, dpi);
+            fin_bordi(dpi, &bx, &by);
+            int gh = dpi_scala(200, dpi);
+            int gw = (int)((int64_t)gh * fin_guest_w / fin_guest_h);
+            if (gw < dpi_scala(160, dpi)) {
+                gw = dpi_scala(160, dpi);
+                gh = (int)(((int64_t)gw * fin_guest_h + fin_guest_w - 1) / fin_guest_w);
+            }
+            misure->ptMinTrackSize.x = gw + rail + bx;
+            misure->ptMinTrackSize.y = gh + by;
+            if (GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &monitor)) {
+                CompatSize fit = compat_fit(fin_guest_w, fin_guest_h,
+                    monitor.rcWork.right - monitor.rcWork.left - bx,
+                    monitor.rcWork.bottom - monitor.rcWork.top - by, rail);
+                misure->ptMaxSize.x = fit.width + bx;
+                misure->ptMaxSize.y = fit.height + by;
+                misure->ptMaxPosition.x = monitor.rcWork.left - monitor.rcMonitor.left;
+                misure->ptMaxPosition.y = monitor.rcWork.top - monitor.rcMonitor.top;
+            }
+            return 0;
+        }
 
         /* Client sufficienti per almeno quattro pulsanti per riga e un log
          * leggibile; la misura cresce insieme ai controlli al cambio DPI. */
         misure->ptMinTrackSize.x = dpi_scala(420, dpi);
         misure->ptMinTrackSize.y = dpi_scala(300, dpi);
         return 0;
+    }
+
+    case WM_SIZING: {
+        if (!fin_vista) { break; }
+        RECT *r = (RECT *)lp;
+        MONITORINFO monitor = {.cbSize = sizeof(monitor)};
+        if (!GetMonitorInfoA(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &monitor)) { break; }
+        UINT dpi = dpi_di_finestra(h);
+        int bx, by;
+        fin_bordi(dpi, &bx, &by);
+        bool horizontal = wp == WMSZ_LEFT || wp == WMSZ_RIGHT;
+        CompatSize fit = compat_fit(fin_guest_w, fin_guest_h,
+            horizontal ? r->right - r->left - bx : monitor.rcWork.right - monitor.rcWork.left - bx,
+            horizontal ? monitor.rcWork.bottom - monitor.rcWork.top - by : r->bottom - r->top - by,
+            dpi_scala(FIN_BARRA, dpi));
+        if (!fit.width || !fit.height) { break; }
+        if (wp == WMSZ_LEFT || wp == WMSZ_TOPLEFT || wp == WMSZ_BOTTOMLEFT) {
+            r->left = r->right - fit.width - bx;
+        } else { r->right = r->left + fit.width + bx; }
+        if (wp == WMSZ_TOP || wp == WMSZ_TOPLEFT || wp == WMSZ_TOPRIGHT) {
+            r->top = r->bottom - fit.height - by;
+        } else { r->bottom = r->top + fit.height + by; }
+        return TRUE;
     }
 
     case WM_SETTINGCHANGE:
@@ -822,6 +1108,7 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                      r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         GetClientRect(h, &cliente);
         fin_disponi(cliente.right, cliente.bottom, LOWORD(wp));
+        if (fin_vista && !IsZoomed(h)) { fin_adatta(false); }
         registro_riga(REG_GUSCIO, "DPI changed to %u: geometry %ldx%ld "
                       "applied and layout redone",
                       (unsigned)LOWORD(wp), r->right - r->left,
@@ -830,6 +1117,7 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     }
 
     case WM_COMMAND:
+        if (LOWORD(wp) == FIN_MENU) { fin_menu_mostra(); return 0; }
         /* Si rimanda a main.c invece di premere i tasti qui: finestra.c non deve
          * conoscere adb, o diventerebbe il file che sa tutto.
          *
@@ -907,6 +1195,8 @@ bool finestra_apri(const Config *c)
     /* la configurazione serve davvero: il trascinamento di un
      * APK ha bisogno della porta di adb per installarlo. */
     fin_config = c;
+    fin_guest_w = c->larghezza;
+    fin_guest_h = c->altezza;
     fin_ora_avvio = (DWORD)GetTickCount64();
     fin_aggiorna_tema();
     wc.lpfnWndProc = fin_wndproc;
@@ -943,6 +1233,7 @@ bool finestra_apri(const Config *c)
             registro_riga(REG_GUSCIO, "session: cannot prepare the A1 child window");
             return false;
         }
+        SetWindowTextA(fin_hwnd, "Habumi - Starting Android");
     } else {
         SetEnvironmentVariableA("HABUMI_SESSION", NULL);
         SetEnvironmentVariableA("HABUMI_PARENT", NULL);
@@ -979,6 +1270,7 @@ bool finestra_apri(const Config *c)
      * una seconda copia delle costanti di posizione -- che e' proprio la
      * duplicazione che ha gia' fatto divergere la larghezza del pannello
      * (FIN_LARGHEZZA - 40 alla creazione, w - 20 in WM_SIZE). */
+    if (!fin_vista) {
     fin_titolo = CreateWindowA("STATIC", "Android runtime",
                              WS_CHILD | WS_VISIBLE | SS_LEFT,
                              0, 0, 0, 0, fin_hwnd, NULL, wc.hInstance, NULL);
@@ -986,6 +1278,8 @@ bool finestra_apri(const Config *c)
     fin_fasi = CreateWindowA("STATIC", "Starting...",
                              WS_CHILD | WS_VISIBLE, 0, 0, 0, 0,
                              fin_hwnd, NULL, wc.hInstance, NULL);
+
+    }
 
     for (i = 0; i < sizeof(fin_elenco) / sizeof(fin_elenco[0]); i++) {
         fin_bottoni[i] = CreateWindowA("BUTTON", fin_elenco[i].etichetta,
@@ -996,6 +1290,29 @@ bool finestra_apri(const Config *c)
                                        wc.hInstance, NULL);
     }
     finestra_bottoni(false);
+
+    if (fin_vista) {
+        fin_more = CreateWindowA("BUTTON", "More", WS_CHILD | WS_VISIBLE |
+            WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0, fin_hwnd,
+            (HMENU)(INT_PTR)FIN_MENU, wc.hInstance, NULL);
+        if (!fin_more) { return false; }
+        INITCOMMONCONTROLSEX common = {sizeof(common), ICC_WIN95_CLASSES};
+        InitCommonControlsEx(&common);
+        fin_tooltips = CreateWindowExA(WS_EX_TOPMOST, TOOLTIPS_CLASSA, NULL,
+            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT,
+            CW_USEDEFAULT, CW_USEDEFAULT, fin_hwnd, NULL, wc.hInstance, NULL);
+        if (fin_tooltips) {
+            for (i = 0; i <= sizeof(fin_bottoni) / sizeof(fin_bottoni[0]); i++) {
+                TOOLINFOA info = {0};
+                info.cbSize = sizeof(info);
+                info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                info.hwnd = fin_hwnd;
+                info.uId = (UINT_PTR)(i == 9 ? fin_more : fin_bottoni[i]);
+                info.lpszText = (char *)(i == 9 ? "More" : fin_elenco[i].etichetta);
+                SendMessageA(fin_tooltips, TTM_ADDTOOLA, 0, (LPARAM)&info);
+            }
+        }
+    } else {
 
     fin_log_label = CreateWindowA("STATIC", "Activity log",
                              WS_CHILD | WS_VISIBLE | SS_LEFT,
@@ -1015,6 +1332,7 @@ bool finestra_apri(const Config *c)
      * mai allo stesso valore, altrimenti il troncamento diventa
      * irraggiungibile (vedi il commento sopra la macro). */
     SendMessageA(fin_log, EM_SETLIMITTEXT, FIN_LOG_TETTO, 0);
+    }
 
     /* LA FINESTRA SI CREA ALLA DIMENSIONE DI RIFERIMENTO E POI SI SCALA. Al
      * momento di CreateWindowA non esiste ancora un HWND a cui chiedere il DPI,
@@ -1031,9 +1349,10 @@ bool finestra_apri(const Config *c)
         UINT dpi = dpi_di_finestra(fin_hwnd);
         RECT cliente;
 
-        SetWindowPos(fin_hwnd, NULL, 0, 0, dpi_scala(FIN_LARGHEZZA, dpi),
+        if (fin_vista) { fin_adatta(true); }
+        else { SetWindowPos(fin_hwnd, NULL, 0, 0, dpi_scala(FIN_LARGHEZZA, dpi),
                      dpi_scala(FIN_ALTEZZA, dpi),
-                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); }
         GetClientRect(fin_hwnd, &cliente);
         fin_disponi(cliente.right, cliente.bottom, dpi);
     }
