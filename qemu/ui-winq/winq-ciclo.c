@@ -38,6 +38,9 @@
 #include "qapi/qapi-commands-control.h"
 #include "qemu/error-report.h"
 #include "system/system.h"
+#include "system/runstate.h"
+#include "hw/core/cpu.h"
+#include "system/whpx.h"
 #include "ui/console.h"
 #include "winq.h"
 #include "winq-coda.h"
@@ -113,6 +116,56 @@ void winq_arma_scadenza_chiusura(void)
  * parziali, che e' il codice che si scrive male leggendo senza bloccare. */
 static HANDLE winq_tubo = INVALID_HANDLE_VALUE;
 
+/* Off unless the isolated profile explicitly opts in. Main-loop/BQL only. */
+static bool winq_host_pause_owned;
+static bool winq_host_power_enabled(void)
+{
+    const char *enabled = getenv("WINQ_HOST_POWER_TEST");
+    return enabled && !strcmp(enabled, "1");
+}
+
+static void winq_host_power(bool suspend)
+{
+    CPUState *cpu;
+    if (!winq_host_power_enabled()) {
+        return;
+    }
+    if (suspend) {
+        if (winq_host_pause_owned) {
+            return;
+        }
+        if (!runstate_is_running()) {
+            info_report("winq/power: host suspend while VM already stopped; state preserved");
+            return;
+        }
+        if (vm_stop(RUN_STATE_PAUSED)) {
+            error_report("winq/power: cannot pause VM before host suspend");
+            return;
+        }
+        winq_host_pause_owned = true;
+        bool frozen = whpx_enabled() && whpx_host_suspend_time();
+        info_report("winq/power: VM paused before host suspend; partition time %s",
+                    frozen ? "suspended" : "not suspended (API unavailable or failed)");
+        return;
+    }
+    if (winq_host_pause_owned) {
+        winq_host_pause_owned = false;
+        if (runstate_check(RUN_STATE_PAUSED)) {
+            vm_start();
+            info_report("winq/power: host resume restarted the VM paused by this handler");
+        } else {
+            info_report("winq/power: host resume preserves changed VM run state");
+        }
+    } else {
+        info_report("winq/power: host resume without an owned pause; run state preserved");
+    }
+    if (runstate_is_running()) {
+        CPU_FOREACH(cpu) {
+            qemu_cpu_kick(cpu);
+        }
+    }
+}
+
 static void winq_tubo_apri(void)
 {
     winq_tubo = CreateNamedPipeA("\\\\.\\pipe\\AndroidRuntimeGuscio.comandi",
@@ -129,6 +182,16 @@ static void winq_tubo_apri(void)
 static void winq_tubo_esegui(const char *comando)
 {
     int w = 0, h = 0, rotazione = 0;
+
+    /* Diagnostic replay pauses only this VM, never changes host power state. */
+    if (winq_host_power_enabled() && !strcmp(comando, "host-power suspend")) {
+        winq_host_power(true);
+        return;
+    }
+    if (winq_host_power_enabled() && !strcmp(comando, "host-power resume")) {
+        winq_host_power(false);
+        return;
+    }
 
     /* "mappa carica <percorso>" e "mappa impara <...>": il resto della riga,
      * comando+13, e' passato PARI PARI -- winq_tubo_passo (sopra) ha gia'
@@ -163,13 +226,13 @@ static void winq_tubo_esegui(const char *comando)
          * altezza a ZERO virtio-gpu DISABILITA l'uscita
          * (hw/display/virtio-gpu-base.c:116-120), cioe' lo schermo si spegne e
          * il comando sembra "having done nothing". */
-        if (w < 320 || h < 320 || w > 8192 || h > 8192 ||
-            rotazione < 0 || rotazione > 3) {
-            info_report("winq: resolution %dx%d rotation=%d refused",
-                        w, h, rotazione);
+        if (w < 320 || h < 320 || w > 8192 || h > 8192) {
+            info_report("winq: resolution %dx%d refused, outside 320..8192",
+                        w, h);
             return;
         }
-        winq.geom.rotation = (unsigned)rotazione;
+        if (rotazione < 0 || rotazione > 3) { return; }
+        winq.geom.rotation = rotazione;
         winq_imposta_risoluzione(w, h);
         return;
     }
@@ -301,6 +364,17 @@ static void winq_coda_drena(void)
             break;
         case WINQ_REC_ESPONI:
             winq.expose = true;
+            break;
+        case WINQ_REC_HOST_SUSPEND:
+            winq_host_power(true);
+            if (r.power_ack) {
+                HANDLE ack = (HANDLE)(uintptr_t)r.power_ack;
+                SetEvent(ack);
+                CloseHandle(ack);
+            }
+            break;
+        case WINQ_REC_HOST_RESUME:
+            winq_host_power(false);
             break;
         case WINQ_REC_CHIUSURA:
             if (r.inatteso) {
@@ -512,11 +586,10 @@ static int winq_leggi_periodo(void)
  * sceglie COSA presentare, sceglie solo QUANDO provarci. Un aggiornamento non
  * consumato resta pendente e viene preso al primo tentativo utile, al
  * massimo winq_presenta_intervallo_ms dopo -- non piu' tardi, perche'
- * durante l'attivita' winq_tick prova a ogni winq_periodo_ms (5 ms di default),
+ * winq_tick continua a provare a ogni winq_periodo_ms (5 ms di default),
  * molto piu' spesso dell'intervallo che si vuole imporre. Un expose o un
  * ridimensionamento restano quindi appesi al massimo un intervallo, mai di
- * piu'. Un evento durante il riposo passa dalla bottom half e ripristina
- * questa cadenza prima di aspettare il timer di sicurezza.
+ * piu'.
  *
  * DUE CHIAMANTI, UN SOLO CANCELLO. winq_present_frame() era chiamata sia da
  * winq_tick sia da winq_display_refresh: bastava lasciarne una senza il

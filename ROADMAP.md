@@ -13,6 +13,11 @@ release-wide guarantees.
 Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) first: most of what follows is the other
 half of something written there.
 
+The accepted [implementation plan](docs/IMPLEMENTATION-PLAN.md) is executed one
+package per session. See [the short checkpoint](docs/DEVELOPMENT-STATUS.md) for
+the current package and next step, and [the A0 recipe](docs/DEVELOPMENT-BASELINE-A0.md)
+for the clean development build and its verification boundary.
+
 The [BlueStacks comparison and feature backlog](docs/BLUESTACKS-FEATURE-GAPS-2026-10-15.md)
 records the 15 October source audit against development commit `628db63`.
 It separates 51 missing/partial product workflows from existing capabilities,

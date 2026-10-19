@@ -17,7 +17,7 @@
  * winq_handle_pointer_event. Traduce ogni messaggio in un record, lo accoda
  * (winq-coda.h) e sveglia il ciclo principale, che drena e chiama.
  *
- * PERCHE'. Fino al la pompa dei messaggi viveva dentro winq_tick,
+ * PERCHE'. Fino al 04/08/2026 la pompa dei messaggi viveva dentro winq_tick,
  * cioe' un timer del ciclo principale di QEMU. Una finestra Win32 appartiene al
  * thread che l'ha CREATA, e li' gira anche il ciclo modale in cui Windows entra
  * dentro DefWindowProc quando l'utente afferra un bordo o la barra del titolo:
@@ -38,6 +38,7 @@
  * thread del contesto NON aspetta il thread proprietario della finestra mentre
  * quello e' dentro un ciclo modale -- peggiore 11,6 ms su 1772 campioni.
  *
+ * Spec: docs/superpowers/specs/2026-08-04-finestra-thread-proprio-design.md
  */
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -50,6 +51,22 @@
 #include "ui/console.h"
 #include "winq.h"
 #include "winq-coda.h"
+
+static HPOWERNOTIFY winq_power_notification;
+static HPOWERNOTIFY winq_power_callback_notification;
+static HPOWERNOTIFY winq_display_notification;
+static HMODULE winq_power_library;
+static DWORD (WINAPI *winq_power_unregister)(HPOWERNOTIFY);
+static bool winq_power_test;
+/* MinGW lacks DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS; match the Windows ABI. */
+typedef struct {
+    ULONG (CALLBACK *callback)(PVOID, ULONG, PVOID);
+    PVOID context;
+} WinqPowerSubscribe;
+static WinqPowerSubscribe winq_power_subscribe;
+static const GUID winq_console_display_guid = {
+    0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}
+};
 #include "winq-mappa.h"
 
 WinqState winq;
@@ -88,7 +105,7 @@ static void winq_dimensiona_cliente(int w, int h);
  * ci fosse: un import di user32.dll non risolvibile fa rifiutare dal caricatore
  * il processo INTERO, prima che esegua una riga. Il ripiego non sarebbe
  * "sfocato" ma "does not start". Le wgl* si caricano a runtime per la stessa
- * ragione.
+ * ragione, vedi qemu/WGL.md.
  *
  * PERCHE' NON UN MANIFEST, che sarebbe la via piu' robusta perche' si applica
  * prima che qualunque codice giri: richiederebbe di toccare la configurazione di
@@ -234,6 +251,81 @@ static void winq_accoda(const WinqRec *r)
     warn_report_once("winq: queue full for over %d ms, window event "
                      "dropped. The main loop is behind.",
                      WINQ_ATTESA_MAX_MS);
+}
+
+/* The window thread waits for an acknowledgment, never takes QEMU's BQL.
+ * Separate event handles keep a late consumer safe after the bounded wait.
+ * A timeout is diagnostic evidence that the sleep interval was not covered. */
+static void winq_accoda_power(bool suspend)
+{
+    WinqRec r = { .tipo = suspend ? WINQ_REC_HOST_SUSPEND : WINQ_REC_HOST_RESUME };
+    HANDLE ack = NULL, consumer_ack = NULL;
+    int waited;
+
+    if (suspend) {
+        ack = CreateEvent(NULL, TRUE, FALSE, NULL);
+        if (!ack || !DuplicateHandle(GetCurrentProcess(), ack,
+                                    GetCurrentProcess(), &consumer_ack,
+                                    0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            if (ack) { CloseHandle(ack); }
+            error_report("winq/power: suspend acknowledgment allocation failed");
+            return;
+        }
+        r.power_ack = (uint64_t)(uintptr_t)consumer_ack;
+    }
+    for (waited = 0; waited < WINQ_ATTESA_MAX_MS; waited++) {
+        if (winq_coda_metti(&r)) {
+            winq_sveglia();
+            if (ack) {
+                DWORD result = WaitForSingleObject(ack, 1500);
+                if (result == WAIT_OBJECT_0) {
+                    info_report("winq/power: suspend handler acknowledged before returning to Windows");
+                } else {
+                    error_report("winq/power: suspend acknowledgment timed out or failed; host sleep is not protected");
+                }
+                CloseHandle(ack);
+            }
+            return;
+        }
+        Sleep(1);
+    }
+    if (consumer_ack) { CloseHandle(consumer_ack); }
+    if (ack) { CloseHandle(ack); }
+    winq_coda_conta_scarto();
+    error_report("winq/power: power event dropped after queue timeout; host sleep is not protected");
+}
+
+/* May run on a Windows worker thread: queue only, never call QEMU/BQL. */
+static ULONG CALLBACK winq_power_callback(PVOID context, ULONG type, PVOID setting)
+{
+    (void)context;
+    (void)setting;
+    if (!winq_power_test) {
+        return ERROR_SUCCESS;
+    }
+    info_report("winq/power: callback event 0x%lx", type);
+    if (type == PBT_APMSUSPEND) {
+        winq_accoda_power(true);
+    } else if (type == PBT_APMRESUMEAUTOMATIC || type == PBT_APMRESUMESUSPEND) {
+        winq_accoda_power(false);
+    }
+    return ERROR_SUCCESS;
+}
+
+static void winq_power_display_setting(const POWERBROADCAST_SETTING *setting)
+{
+    DWORD state;
+    if (!setting || memcmp(&setting->PowerSetting, &winq_console_display_guid,
+                           sizeof(GUID))) {
+        return;
+    }
+    if (setting->DataLength != sizeof(state)) {
+        error_report("winq/power: invalid console display notification size");
+        return;
+    }
+    memcpy(&state, setting->Data, sizeof(state));
+    info_report("winq/power: console display state %lu (0=off, 1=on, 2=dim); diagnostic only",
+                state);
 }
 
 /* I quattro aiuti che costruiscono un record.
@@ -672,6 +764,19 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                     r->bottom - r->top);
         return 0;
     }
+    case WM_POWERBROADCAST:
+        if (winq_power_test) {
+            info_report("winq/power: window event 0x%llx", (unsigned long long)wp);
+            if (wp == PBT_POWERSETTINGCHANGE) {
+                winq_power_display_setting((const POWERBROADCAST_SETTING *)lp);
+            } else if (!winq_power_callback_notification && wp == PBT_APMSUSPEND) {
+                winq_accoda_power(true);
+            } else if (!winq_power_callback_notification &&
+                       (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND)) {
+                winq_accoda_power(false);
+            }
+        }
+        return TRUE;
     case WM_PAINT: {
         /* BeginPaint/EndPaint e non solo il flag: WM_PAINT resta in coda
          * finche' la regione non e' validata, e PeekMessage lo ripescherebbe
@@ -801,7 +906,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
      *
      * NON si usano i messaggi di mouse promossi dal tocco: sono un solo
      * puntatore per costruzione, quindi il multitouch andrebbe perso, e non
-     * distinguono un dito da un cursore. Il mouse come dito (una verifica del
+     * distinguono un dito da un cursore. Il mouse come dito (Task 7 del
      * piano) NON passa da qui: e' il ramo WM_LBUTTONDOWN/WM_MOUSEMOVE/
      * WM_LBUTTONUP piu' sotto, apposta separato da questo, per non dover
      * riaprire il filtro sul tipo di puntatore due righe sotto ne' chiamare
@@ -852,7 +957,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          * Senza questo filtro il sintomo e' Android che si muove da solo, e
          * cercarlo nella mappatura o negli slot sarebbe cercarlo nel posto
          * sbagliato. Il mouse come dito e' una scelta da fare esplicitamente,
-         * col suo criterio, non un effetto collaterale. */
+         * col suo criterio (Task 7 del piano), non un effetto collaterale. */
         if (pi.pointerType != PT_TOUCH && pi.pointerType != PT_PEN) {
             if (winq_diag_tocco()) {
                 info_report("winq touch: pointer of type %u dropped "
@@ -910,7 +1015,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                               false);
         return 0;
 
-    /* Il mouse come dito solo. WM_LBUTTONDOWN/WM_MOUSEMOVE/
+    /* Il mouse come dito solo (Task 7). WM_LBUTTONDOWN/WM_MOUSEMOVE/
      * WM_LBUTTONUP, non WM_POINTER*: e' un percorso separato apposta, per non
      * toccare il filtro sul tipo di puntatore qui sopra. Quel filtro esiste
      * perche' MISURATO che PT_MOUSE (e PT_TOUCHPAD) su WM_POINTER* produce
@@ -935,7 +1040,7 @@ static LRESULT CALLBACK winq_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
      * esattamente come farebbe un dito vero -- quella funzione non guarda
      * altro che l'uguaglianza dell'id passato -- quindi il mouse riusa di
      * peso lo stesso percorso di slot e la stessa winq_handle_pointer_event
-     * gia' verificata dal tocco (37 pressioni / 37 rilasci): zero
+     * gia' verificata dal tocco (37 pressioni / 37 rilasci, Task 5): zero
      * stato nuovo, zero logica di traduzione duplicata.
      *
      * SetCapture/ReleaseCapture: senza cattura, rilasciare il pulsante fuori
@@ -1274,6 +1379,46 @@ bool winq_create_window(int w, int h)
         return false;
     }
     winq_dimensiona_cliente(w, h);
+    const char *power_test = getenv("WINQ_HOST_POWER_TEST");
+    winq_power_test = power_test && !strcmp(power_test, "1");
+    if (winq_power_test) {
+        DWORD (WINAPI *register_callback)(DWORD, HANDLE, PHPOWERNOTIFY) = NULL;
+        winq_power_library = LoadLibraryExW(L"PowrProf.dll", NULL,
+                                          LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (winq_power_library) {
+            register_callback = (void *)GetProcAddress(winq_power_library,
+                                "PowerRegisterSuspendResumeNotification");
+            winq_power_unregister = (void *)GetProcAddress(winq_power_library,
+                                "PowerUnregisterSuspendResumeNotification");
+        }
+        if (register_callback && winq_power_unregister) {
+            winq_power_subscribe.callback = winq_power_callback;
+            DWORD result = register_callback(2 /* DEVICE_NOTIFY_CALLBACK */,
+                             &winq_power_subscribe, &winq_power_callback_notification);
+            if (result != ERROR_SUCCESS) {
+                winq_power_callback_notification = NULL;
+                error_report("winq/power: callback registration failed: %lu", result);
+            } else {
+                info_report("winq/power: direct suspend/resume callback registered");
+            }
+        }
+        if (!winq_power_callback_notification) {
+            winq_power_notification = RegisterSuspendResumeNotification(
+                winq.hwnd, DEVICE_NOTIFY_WINDOW_HANDLE);
+            if (!winq_power_notification) {
+                error_report("winq/power: window notification registration failed: %lu", GetLastError());
+            } else {
+                info_report("winq/power: window suspend/resume fallback registered");
+            }
+        }
+        winq_display_notification = RegisterPowerSettingNotification(
+            winq.hwnd, &winq_console_display_guid, DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (!winq_display_notification) {
+            error_report("winq/power: display diagnostic registration failed: %lu", GetLastError());
+        } else {
+            info_report("winq/power: console display diagnostic registered; does not pause the VM");
+        }
+    }
     {
         RECT cliente;
 
@@ -1368,6 +1513,27 @@ static void *winq_thread_corpo(void *opaque)
         }
         TranslateMessage(&m);
         DispatchMessage(&m);
+    }
+
+    if (winq_power_notification) {
+        UnregisterSuspendResumeNotification(winq_power_notification);
+        winq_power_notification = NULL;
+    }
+    if (winq_display_notification) {
+        UnregisterPowerSettingNotification(winq_display_notification);
+        winq_display_notification = NULL;
+    }
+    if (winq_power_callback_notification) {
+        DWORD result = winq_power_unregister(winq_power_callback_notification);
+        if (result == ERROR_SUCCESS) {
+            winq_power_callback_notification = NULL;
+        } else {
+            error_report("winq/power: callback unregister failed: %lu; module kept loaded", result);
+        }
+    }
+    if (winq_power_library && !winq_power_callback_notification) {
+        FreeLibrary(winq_power_library);
+        winq_power_library = NULL;
     }
 
     /* r == 0 e' WM_QUIT, cioe' una chiusura CHIESTA; r == -1 e' un errore di

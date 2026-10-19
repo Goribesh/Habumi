@@ -2,14 +2,22 @@
 # Composizione esplicita: nessuna immagine Android usata o registro personale.
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$RuntimeRoot,
-      [Parameter(Mandatory)][string]$RendererBuild,
+      [string]$RendererBuild='',
       [Parameter(Mandatory)][string]$InitramfsPath,
       [Parameter(Mandatory)][string]$OutputRoot,
-      [string]$MsysBin='C:/msys64/clangarm64/bin')
+      [string]$MsysBin='C:/msys64/clangarm64/bin',
+      [string]$QemuExecutable='', [string]$BuildProvenancePath='',
+      [string]$ShellSourceDirectory='',
+      [switch]$DevelopmentBaseline,
+      [ValidateRange(1024,65535)][int]$AdbPort=15555,
+      [ValidateRange(1024,65535)][int]$ClipboardPort=15556)
 $ErrorActionPreference='Stop'
 $repoRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $RuntimeRoot=(Resolve-Path -LiteralPath $RuntimeRoot).Path
-$RendererBuild=(Resolve-Path -LiteralPath $RendererBuild).Path
+if($RendererBuild){$RendererBuild=(Resolve-Path -LiteralPath $RendererBuild).Path}
+if(-not $DevelopmentBaseline -and -not $RendererBuild){throw 'Normal release preparation requires an explicit renderer build.'}
+if($ShellSourceDirectory -and -not $DevelopmentBaseline){throw 'A shell snapshot is accepted only for isolated development builds.'}
+if($DevelopmentBaseline -and (-not $QemuExecutable -or -not $BuildProvenancePath)){throw 'Development builds require explicit QEMU and provenance inputs.'}
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot)
 if(Test-Path -LiteralPath $OutputRoot){throw 'Output already exists; select a new preparation directory.'}
 $version=([IO.File]::ReadAllText((Join-Path $repoRoot 'app/release/version.txt'))).Trim()
@@ -22,19 +30,21 @@ foreach($relative in $paths){
     if($relative -match '(data[^/]*\.img|system[^/]*\.img|vendor\.img|guest/logs/|\.pre-)'){throw "Private/runtime state in allowlist: $relative"}
     $from=Join-Path $RuntimeRoot $relative
     if($relative -eq 'runtime/empty-data.zip' -or $relative -eq 'runtime/keymaps/generico.txt'){$from=Join-Path $repoRoot $relative}
-    if($relative -eq 'runtime/bin/libvirglrenderer-1.dll'){$from=Join-Path $RendererBuild 'build/src/libvirglrenderer-1.dll'}
+    if($relative -eq 'runtime/bin/libvirglrenderer-1.dll' -and $RendererBuild){$from=Join-Path $RendererBuild 'build/src/libvirglrenderer-1.dll'}
+    if($relative -eq 'runtime/bin/qemu-nostro.exe' -and $QemuExecutable){$from=$QemuExecutable}
     if($relative -eq 'guest/images/android/initramfs.img'){$from=$InitramfsPath}
     $to=Join-Path $stage $relative
     New-Item -ItemType Directory -Path (Split-Path $to -Parent) -Force|Out-Null
     if($relative -notin @('runtime/bin/Habumi.exe','runtime/bin/config.txt')){Copy-Item -LiteralPath $from -Destination $to}
 }
 $source=Join-Path $repoRoot 'app/guscio'
+if($ShellSourceDirectory){$source=(Resolve-Path -LiteralPath $ShellSourceDirectory).Path}
 $modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv')
 $files=@($modules|ForEach-Object {Join-Path $source "$_.c"})
-& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt
+& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32
 if($LASTEXITCODE){throw 'Release shell compilation failed.'}
 $encoding=[Text.UTF8Encoding]::new($false)
-$config="# Habumi $version native Vulkan prerelease`nvcpu=6`nmemory=6144`nwidth=800`nheight=1280`nguest_scale=yes`nhz=120`nbattery_hz=60`ndensity=426`ngl=wgl`ngl_flush_wait=no`nretries=3`nadb_port=15555`nclipboard_port=15556`naudio=on`nvariant=gapps`n"
+$config="# Habumi $version native Vulkan prerelease`nvcpu=6`nmemory=6144`nwidth=800`nheight=1280`nguest_scale=yes`nhz=120`nbattery_hz=60`ndensity=426`ngl=wgl`ngl_flush_wait=no`nretries=3`nadb_port=$AdbPort`nclipboard_port=$ClipboardPort`naudio=on`nvariant=gapps`n"
 [IO.File]::WriteAllText((Join-Path $stage 'runtime/bin/config.txt'),$config,$encoding)
 foreach($pair in @(@('Start-Vulkan.cmd','Start.cmd'),@('Start-Habumi.ps1','Start-Habumi.ps1'),@('README.txt','README.txt'))){
     $value=[IO.File]::ReadAllText((Join-Path $repoRoot ('app/release/'+$pair[0]))).Replace("`r`n","`n")
@@ -50,13 +60,20 @@ $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;Critic
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;
     UserDataIncluded=$false;RepeatedHibernateValidated=$false;
     ShaderBenchmarkOverheadGuarantee=$false;SourceRecipe='app/scripts/prepare-native-release.ps1'}
+if($DevelopmentBaseline){
+    Copy-Item -LiteralPath $BuildProvenancePath -Destination (Join-Path $stage 'development-build.json')
+    $manifest.CriticalFiles+=@{Path='development-build.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'development-build.json')).Hash}
+    $manifest.DevelopmentBuild='A0';$manifest.ExperimentalOmxProbe=$true
+    $manifest.ExperimentalSystemUiNullProbe=$true;$manifest.ExperimentalRendererRotation=$true
+}
 [IO.File]::WriteAllText((Join-Path $stage 'release-profile.json'),($manifest|ConvertTo-Json -Depth 6)+"`n",$encoding)
 $inventory=@(Get-ChildItem -LiteralPath $stage -Recurse -File|ForEach-Object {
     @{Path=$_.FullName.Substring($stage.Length+1).Replace('\','/');Bytes=$_.Length;SHA256=(Get-FileHash -LiteralPath $_.FullName).Hash}
 })
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'package-files.json'),($inventory|ConvertTo-Json -Depth 4)+"`n",$encoding)
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archive=Join-Path $OutputRoot "Habumi-$version.zip"
+$archiveName=if($DevelopmentBaseline){'Habumi-development-A0.zip'}else{"Habumi-$version.zip"}
+$archive=Join-Path $OutputRoot $archiveName
 [IO.Compression.ZipFile]::CreateFromDirectory($stage,$archive,[IO.Compression.CompressionLevel]::Optimal,$false)
 # Riapertura e confronto dei byte letti dall'archivio, non solo della directory.
 $zip=[IO.Compression.ZipFile]::OpenRead($archive)
@@ -71,6 +88,6 @@ try{
     }
 }finally{$zip.Dispose()}
 $archiveHash=(Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant()
-[IO.File]::WriteAllText((Join-Path $OutputRoot 'SHA256SUMS.txt'),"$archiveHash  Habumi-$version.zip`n",$encoding)
+[IO.File]::WriteAllText((Join-Path $OutputRoot 'SHA256SUMS.txt'),"$archiveHash  $archiveName`n",$encoding)
 Write-Output "PASS: $($inventory.Count) package entries verified; no installed Android data copied."
 Get-FileHash -LiteralPath $archive

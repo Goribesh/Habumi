@@ -1,0 +1,36 @@
+{
+  "SchemaVersion": 1,
+  "Name": "A0-native-rotation-host-power",
+  "QemuVersion": "11.0.3",
+  "RuntimeArchive": {
+    "Asset": "Habumi-0.3.0-rc.1.zip",
+    "SHA256": "1C0842B9AFE2BD398CD4F357FDDA800693E1920D73CEA6DF27C6CF0BDC25A278"
+  },
+  "ComponentVersions": {
+    "Mesa": "26.2.4",
+    "Kernel": "6.18.35",
+    "Adb": "37.0.0-14910828",
+    "RendererUpstream": "https://github.com/cmspam/winq-emu-virglrenderer.git",
+    "RendererCommit": "e80354b8f5a0dedc62374b905a181874682659cc",
+    "Android": "13 / Waydroid 20260927 arm64_only",
+    "AndroidOtaCommit": "026205c747d314865fa18398375ff3b0e7bd7f70"
+  },
+  "QemuSource": {
+    "Release": "https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1",
+    "Asset": "Habumi-0.3.0-rc.1-corresponding-source.zip",
+    "AssetSHA256": "7EF89F6EE159EDB2B061FF51739B49BA5766C4F95FF43FD75EE8AF63F4A85000",
+    "ArchiveName": "qemu-source-full.tar.gz",
+    "SHA256": "5A6EEA88B47B691EB9F432702110D2DF83DB05BE4639A174CABD8874FC8E0A13",
+    "Includes": ["WinQ", "WHPX host power", "resource error handling", "native Venus integration"]
+  },
+  "PinnedFiles": [
+    {"Path": "runtime/bin/libvirglrenderer-1.dll", "SHA256": "2AA9097D05B954ED6A509666C8BEC31BDE6426EAB5224C0F441CDCCC8328C091"},
+    {"Path": "runtime/bin/opengl32.dll", "SHA256": "36C6BEACBD7059F088CB15FC05E460C61BF27A3981AF59DB1233A7E079ED8DEA"},
+    {"Path": "guest/images/kernel-guest-arm64", "SHA256": "BA6DB93AF147EA5435B8EBD7E47E5086E4E7727924BE0159B3D14C4A7912C1A0"},
+    {"Path": "guest/images/android/initramfs.img", "SHA256": "C2B16486DC18115CF489C2A2430650A4A8B47CCF38497FECEB9E150C2CD3F937"},
+    {"Path": "runtime/empty-data.zip", "SHA256": "F2E42557A326282C725408A5D626CFFB836DF4AA40B6D8666D05BD1672511C86"}
+  ],
+  "ExperimentalOmxProbe": true,
+  "ExperimentalSystemUiNullProbe": true,
+  "Published": false
+}

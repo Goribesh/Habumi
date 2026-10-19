@@ -11,7 +11,7 @@
  * PERCHE' ESISTE. La pompa dei messaggi viveva dentro un timer del ciclo
  * principale di QEMU, quindi un ciclo modale di Windows -- tenere il bordo,
  * spostare la finestra -- fermava il ciclo principale e con lui la macchina
- * virtuale: MISURATO, un buco di 23.848 ms tenendo il bordo
+ * virtuale: MISURATO il 04/08/2026, un buco di 23.848 ms tenendo il bordo
  * contro zero buchi a riposo. La finestra e' passata su un thread proprio, e
  * questo modulo e' il confine fra i due.
  *
@@ -51,7 +51,9 @@ enum {
     WINQ_REC_ROTELLA,
     WINQ_REC_DIMENSIONE,
     WINQ_REC_ESPONI,
-    WINQ_REC_CHIUSURA
+    WINQ_REC_CHIUSURA,
+    WINQ_REC_HOST_SUSPEND,
+    WINQ_REC_HOST_RESUME
 };
 
 /* Il tipo di evento del puntatore.
@@ -96,6 +98,9 @@ typedef struct WinqRec {
     /* WINQ_REC_CHIUSURA */
     bool     guscio_ha_risposto;
     bool     inatteso;    /* il ciclo dei messaggi e' finito da solo: guasto */
+
+    /* HOST_SUSPEND: duplicated event handle owned by the consumer. */
+    uint64_t power_ack;
 } WinqRec;
 
 /* Da chiamare una volta, prima di qualunque altra: inizializza il lucchetto. */
