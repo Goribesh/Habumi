@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $repoRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $source=Join-Path $repoRoot 'app/guscio'
 $desktop=[Environment]::GetFolderPath('Desktop')
-$output=Join-Path $desktop 'Habumi-Compact-20261019/ui-tests'
+$output=Join-Path $desktop 'Habumi-Workspace/Builds/Checks/compact-window'
 New-Item -ItemType Directory -Path $output -Force|Out-Null
 $compiler='C:/msys64/clangarm64/bin/clang.exe'
 $modules=@('vm','comandi','adb','config','registro','tubo','dpi','apk','file',
