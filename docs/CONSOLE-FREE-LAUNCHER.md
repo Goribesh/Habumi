@@ -35,3 +35,36 @@ passed against that profile. The current Android session was not restarted;
 normal cold startup through the new shortcut remains a user acceptance check.
 The desktop shortcut **Habumi Compact (Test)** targets the root executable
 directly. The personal installation and published releases were not changed.
+
+## Follow-up: complete runtime chain
+
+The first check covered the bootstrap alone. The user still reported a black
+window while Android ran. Source inspection found that QEMU's console-subsystem
+executable was launched with only `CREATE_SUSPENDED`. Runtime startup now also
+uses `CREATE_NO_WINDOW`, while preserving the job assignment before resume and
+the inherited stdout/stderr pipe. The PowerShell wrapper starts the GUI shell
+with `UseShellExecute=false` and `CreateNoWindow=true`.
+
+A native regression invokes the real `vm_lancia` with the test executable in
+place of QEMU: it reports no console window, checks stderr is a pipe and verifies
+the received log marker and child exit code. No guest runs in this test. VM
+checks passed 126/126; all 13 shell suites passed (674 checks). Full package
+compilation and all 337 archive entries passed. The startup script is now hashed
+in both the release inventory and development provenance.
+
+Installed into `Desktop/Habumi-A1-Test` with previous software retained in
+`before-console-chain-fix`, preserving configuration/data. Real launcher
+validation passed; Android reached readiness in 36.062 seconds, guest health was
+ready and the native window displayed Home. The window inventory exposed only
+Habumi for this profile. Console-host processes still exist in the process tree;
+their count is not treated as proof of visible windows. Confirmation of the
+specific user-reported window remains pending its title or user observation.
+
+Evidence: `Habumi-Workspace/Builds/Checks/console-fix-20261019`. Package:
+`Habumi-Workspace/Packages/Habumi-Console-Fix-20261019/distribution`.
+
+| Artifact | SHA-256 |
+|---|---|
+| ZIP | `A9BA4AB3890F0CA176CFCCA1B1563B542F3D4B9AC755020A256F73E0499897BE` |
+| Shell | `D1B98AFBB0F40A95FE30F8989A14852008FE8C5B01410F6EF5A0EBAC2C7B47E9` |
+| Startup script | `DB057AB74E39105EAD964773D497FF5E60B6C05FF290751E86ABBC38BBFB723C` |

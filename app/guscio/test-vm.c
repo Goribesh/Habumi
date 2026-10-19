@@ -435,8 +435,74 @@ static void il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare(void)
     vm_c = NULL;
 }
 
+/* Esegue il vero vm_lancia con questo eseguibile al posto di QEMU. Nessun
+ * guest viene avviato: il figlio misura console e stderr prima di uscire. */
+static void qemu_non_crea_console_e_conserva_stderr(void)
+{
+    char previous[MAX_PATH], temporary[MAX_PATH], root[MAX_PATH], self[MAX_PATH];
+    char result[128] = {0}, logs[8192];
+    Config c;
+    FILE *file;
+    bool launched, marker = false;
+    CHECK(GetCurrentDirectoryA(sizeof(previous), previous) > 0);
+    CHECK(GetModuleFileNameA(NULL, self, sizeof(self)) > 0);
+    if (!GetTempPathA(sizeof(temporary), temporary) ||
+        !GetTempFileNameA(temporary, "hqc", 0, root)) { CHECK(false); return; }
+    CHECK(DeleteFileA(root));
+    CHECK(CreateDirectoryA(root, NULL));
+    if (!SetCurrentDirectoryA(root)) { CHECK(false); return; }
+    CHECK(CreateDirectoryA("runtime", NULL));
+    CHECK(CreateDirectoryA("runtime/bin", NULL));
+    CHECK(CreateDirectoryA("guest", NULL));
+    CHECK(CreateDirectoryA("guest/logs", NULL));
+    CHECK(CopyFileA(self, "runtime/bin/qemu-nostro.exe", TRUE));
+    config_default(&c);
+    vm_c = &c;
+    CHECK(SetEnvironmentVariableA("HABUMI_VM_CONSOLE_PROBE", "1"));
+    launched = vm_lancia();
+    SetEnvironmentVariableA("HABUMI_VM_CONSOLE_PROBE", NULL);
+    CHECK(launched);
+    if (launched) {
+        DWORD code = 0;
+        CHECK(WaitForSingleObject(vm_processo, 5000) == WAIT_OBJECT_0);
+        CHECK(GetExitCodeProcess(vm_processo, &code) && code == 23);
+        CHECK(WaitForSingleObject(vm_thread_stderr, 5000) == WAIT_OBJECT_0);
+        file = fopen("console-probe.txt", "rb");
+        CHECK(file != NULL);
+        if (file) {
+            fread(result, 1, sizeof(result) - 1, file);
+            fclose(file);
+            CHECK(strstr(result, "console=0") != NULL);
+            CHECK(strstr(result, "pipe=1") != NULL);
+        }
+        while (registro_nuove(logs, sizeof(logs)) > 0) {
+            if (strstr(logs, "qemu-console-free-stderr")) { marker = true; }
+        }
+        CHECK(marker);
+    }
+    vm_chiudi();
+    vm_c = NULL;
+    CHECK(DeleteFileA("runtime/bin/qemu-nostro.exe"));
+    CHECK(DeleteFileA("console-probe.txt"));
+    CHECK(RemoveDirectoryA("runtime/bin"));
+    CHECK(RemoveDirectoryA("runtime"));
+    CHECK(RemoveDirectoryA("guest/logs"));
+    CHECK(RemoveDirectoryA("guest"));
+    CHECK(SetCurrentDirectoryA(previous));
+    CHECK(RemoveDirectoryA(root));
+}
+
 int main(void)
 {
+    if (getenv("HABUMI_VM_CONSOLE_PROBE")) {
+        FILE *report = fopen("console-probe.txt", "wb");
+        if (!report) { return 2; }
+        fprintf(report, "console=%d\npipe=%d\n", GetConsoleWindow() != NULL,
+                GetFileType(GetStdHandle(STD_ERROR_HANDLE)) == FILE_TYPE_PIPE);
+        fclose(report);
+        fprintf(stderr, "qemu-console-free-stderr\n");
+        return 23;
+    }
     registro_apri();
     ci_sono_i_pezzi_indispensabili();
     il_mouse_c_e_e_non_e_legato_alla_console();
@@ -453,6 +519,7 @@ int main(void)
     ogni_stato_ha_la_sua_azione_di_chiusura();
     il_guardiano_distingue_vivo_e_lento_da_fermo();
     il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare();
+    qemu_non_crea_console_e_conserva_stderr();
     registro_chiudi();
 
     printf("test-vm: %d su %d passati\n", totali - fallimenti, totali);

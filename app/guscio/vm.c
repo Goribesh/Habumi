@@ -924,8 +924,11 @@ static bool vm_lancia(void)
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
     /* CREATE_SUSPENDED: si aggancia al job PRIMA che QEMU esegua un'istruzione.
+     * CREATE_NO_WINDOW evita la console separata del sottosistema console di
+     * QEMU; la finestra grafica WinQ resta gestita da QEMU normalmente.
      * Vedi vm_aggancia_al_job per il perche' della sospensione. */
-    if (!CreateProcessA(NULL, riga, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL,
+    if (!CreateProcessA(NULL, riga, NULL, NULL, TRUE,
+                        CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL,
                         NULL, &si, &pi)) {
         registro_riga(REG_GUSCIO, "cannot start QEMU (%lu)",
                       GetLastError());

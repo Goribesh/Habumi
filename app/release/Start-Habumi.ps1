@@ -52,7 +52,12 @@ try{
         Write-Output 'PASS: release files, native ICD, configuration and arguments validated; Android was not started.'
         exit 0
     }
-    $taskHabumi=Start-Process (Join-Path $taskRoot 'runtime/bin/Habumi.exe') -WorkingDirectory $taskRoot -WindowStyle Normal -PassThru
+    $taskStart=[Diagnostics.ProcessStartInfo]::new()
+    $taskStart.FileName=Join-Path $taskRoot 'runtime/bin/Habumi.exe'
+    $taskStart.WorkingDirectory=$taskRoot
+    $taskStart.UseShellExecute=$false
+    $taskStart.CreateNoWindow=$true
+    $taskHabumi=[Diagnostics.Process]::Start($taskStart)
     $taskHabumi.WaitForExit()
     exit $taskHabumi.ExitCode
 }catch{
