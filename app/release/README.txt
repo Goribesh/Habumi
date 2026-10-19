@@ -117,7 +117,19 @@ under maintenance/<transaction>/original. Interrupted replacement blocks startup
 until Recover completes. Failed or incomplete backups are never published at the
 requested destination; their .partial directories remain available for inspection.
 Diagnostics exports bounded recent logs and metadata, without data-image bytes.
-Storage growth and graphical data controls are separate development work.
+Development packages with guest/maintenance support offline data growth:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Grow -Image data-gapps.img -SizeGiB 16
+
+Use data.img instead for the non-GApps variant. The selected image must already
+exist. Only growth is supported (4-16 GiB); shrinking is refused. Habumi checks
+free space for a complete new disk, grows a staging copy using its bundled ARM64
+maintenance guest, verifies ext4 geometry/UUID/features and retains the original.
+No WSL installation is needed to use this command. Keep the previous image under
+maintenance/<transaction>/original until the enlarged profile is verified.
+If maintenance fails before replacement, the original remains active and the
+staged copy/logs remain under maintenance for inspection. An interrupted replacement
+uses the same Recover command as restore. Graphical data controls are pending.
 
 
 THE FIRST TIME, WINDOWS WILL WARN YOU

@@ -5,6 +5,7 @@ param([Parameter(Mandatory)][string]$RuntimeRoot,
       [string]$RendererBuild='',
       [Parameter(Mandatory)][string]$InitramfsPath,
       [Parameter(Mandatory)][string]$OutputRoot,
+      [string]$MaintenanceBuildRoot='',
       [string]$MsysBin='C:/msys64/clangarm64/bin',
       [string]$QemuExecutable='', [string]$BuildProvenancePath='',
       [string]$ShellSourceDirectory='',
@@ -56,13 +57,33 @@ foreach($pair in @(@('Start-Vulkan.cmd','Start.cmd'),@('Start-Habumi.ps1','Start
     [IO.File]::WriteAllText((Join-Path $stage $pair[1]),$value,$encoding)
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'app/release/LICENSES') -Destination (Join-Path $stage 'LICENSES') -Recurse
-foreach($name in @('Manage-Data.ps1','Profile-Data.psm1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
+foreach($name in @('Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
+if($MaintenanceBuildRoot){
+    $MaintenanceBuildRoot=(Resolve-Path -LiteralPath $MaintenanceBuildRoot).Path
+    $maintenance=Get-Content -LiteralPath (Join-Path $MaintenanceBuildRoot 'maintenance-build.json') -Raw|ConvertFrom-Json
+    if($maintenance.Schema -ne 'habumi.maintenance-build.v1' -or $maintenance.Protocol -ne 1 -or $maintenance.Architecture -ne 'aarch64' -or
+       $maintenance.E2fsprogs -ne '1.47.2' -or $maintenance.SourceSHA256 -ne '08242e64ca0e8194d9c1caad49762b19209a06318199b63ce74ae4ef2d74e63c' -or
+       (Get-FileHash -LiteralPath (Join-Path $MaintenanceBuildRoot 'maintenance-initramfs.img')).Hash -ne $maintenance.ImageSHA256 -or
+       (Get-FileHash -LiteralPath (Join-Path $MaintenanceBuildRoot 'e2fsprogs-1.47.2.tar.xz')).Hash -ne $maintenance.SourceSHA256 -or
+       (Get-FileHash -LiteralPath (Join-Path $MaintenanceBuildRoot 'e2fsprogs-maintenance.patch')).Hash -ne $maintenance.SourcePatchSHA256){throw 'Maintenance build identity check failed.'}
+    foreach($name in @('build-maintenance-initramfs.sh','maintenance-init.sh')){
+        $sourceInput=@($maintenance.Inputs|Where-Object Path -eq $name)
+        if($sourceInput.Count -ne 1 -or (Get-FileHash -LiteralPath (Join-Path $repoRoot ('guest/scripts/'+$name))).Hash -ne $sourceInput[0].SHA256){throw "Maintenance source differs from build receipt: $name"}
+    }
+    $maintenanceTarget=Join-Path $stage 'guest/maintenance';New-Item -ItemType Directory -Path $maintenanceTarget|Out-Null
+    foreach($name in @('maintenance-build.json','maintenance-initramfs.img')){Copy-Item -LiteralPath (Join-Path $MaintenanceBuildRoot $name) -Destination (Join-Path $maintenanceTarget $name)}
+    $maintenanceLicenses=Join-Path $stage 'LICENSES/maintenance';New-Item -ItemType Directory -Path $maintenanceLicenses|Out-Null
+    foreach($name in @('e2fsprogs-NOTICE','e2fsprogs-1.47.2.tar.xz','e2fsprogs-maintenance.patch')){Copy-Item -LiteralPath (Join-Path $MaintenanceBuildRoot $name) -Destination (Join-Path $maintenanceLicenses $name)}
+    foreach($name in @('build-maintenance-initramfs.sh','maintenance-init.sh')){Copy-Item -LiteralPath (Join-Path $repoRoot ('guest/scripts/'+$name)) -Destination (Join-Path $maintenanceLicenses $name)}
+}
 $critical=@()
-foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
+foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
     $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
 }
+if($MaintenanceBuildRoot){foreach($relative in @('guest/maintenance/maintenance-build.json','guest/maintenance/maintenance-initramfs.img')){$critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}}}
 $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;CriticalFiles=$critical;
     OfflineDataTools=$true;DataToolsSchema='habumi.backup.v1';
+    OfflineDataGrowth=[bool]$MaintenanceBuildRoot;
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;
     UserDataIncluded=$false;RepeatedHibernateValidated=$false;
     ShaderBenchmarkOverheadGuarantee=$false;SourceRecipe='app/scripts/prepare-native-release.ps1'}
@@ -84,10 +105,14 @@ $inventory=@(Get-ChildItem -LiteralPath $stage -Recurse -File|ForEach-Object {
     @{Path=$_.FullName.Substring($stage.Length+1).Replace('\','/');Bytes=$_.Length;SHA256=(Get-FileHash -LiteralPath $_.FullName).Hash}
 })
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'package-files.json'),($inventory|ConvertTo-Json -Depth 4)+"`n",$encoding)
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archiveName=if($DevelopmentBaseline){"Habumi-development-$DevelopmentName.zip"}else{"Habumi-$version.zip"}
 $archive=Join-Path $OutputRoot $archiveName
-[IO.Compression.ZipFile]::CreateFromDirectory($stage,$archive,[IO.Compression.CompressionLevel]::Optimal,$false)
+# .NET Framework's CreateFromDirectory uses backslash entry names. Explicit
+# portable names keep PS5 and PS7 packages identical in path semantics.
+$zip=[IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
+try{foreach($item in $inventory){$null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,(Join-Path $stage $item.Path),$item.Path,[IO.Compression.CompressionLevel]::Optimal)}}finally{$zip.Dispose()}
 # Riapertura e confronto dei byte letti dall'archivio, non solo della directory.
 $zip=[IO.Compression.ZipFile]::OpenRead($archive)
 try{

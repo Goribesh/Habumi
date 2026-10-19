@@ -2,8 +2,8 @@
 
 This is the first A2 milestone, not completion of the package. The development
 runtime now includes offline backup, staged restore, recovery and diagnostic
-tools. Storage growth through a maintenance guest and graphical data controls
-remain separate work. Nothing has been published.
+tools. The later [offline growth milestone](A2-DATA-GROWTH.md) adds the maintenance
+guest; graphical data controls remain pending. Nothing has been published.
 
 ## Operation and recovery contract
 
@@ -93,9 +93,9 @@ restore path, and was installed with another normal compact-profile restart.
 The final reopen reached readiness in 38.641 seconds, with a ready guest-health
 snapshot and storage status 2 confirming the active guard.
 
-## Next A2 work
+## Follow-up A2 work
 
-Build a pinned maintenance initramfs with static ARM64 e2fsck/resize2fs and its
-source recipe. Grow a disposable copy from 4 to 16 GiB, checking the filesystem,
-UUID/features and guest file preservation, then integrate transactional growth
-and native management controls. Do not require WSL on the user's machine.
+The [growth milestone](A2-DATA-GROWTH.md) records the static ARM64 tools, source
+recipe, staged 4-to-16-GiB growth and recovery integration. Native management
+controls and fuller diagnostic presentation remain. WSL is a development build
+dependency, not an end-user maintenance requirement.

@@ -7,7 +7,9 @@ isolated development profile unless explicitly packaged.
 
 Local implementation delta, 19 October: the [A2 data foundation](A2-DATA-FOUNDATION.md)
 adds verified offline CLI protection/restore and diagnostic export in a development
-package. Rows G26/G27/G29 reflect that progress; no BlueStacks claims were revised.
+package. The later [growth milestone](A2-DATA-GROWTH.md) adds staged resizing
+through a bundled maintenance guest. Rows G26/G27/G29/H01 reflect that progress;
+no BlueStacks claims were revised.
 
 ## Comparison boundary
 
@@ -167,7 +169,7 @@ added to the implementation plan.
 | S03 | Scope | BlueStacks has [phone profiles][bs-phone] and network-provider settings in its [preferences][bs-settings]. Habumi does not expose these; the existing roadmap excludes device/telephony simulation. |
 | S04 | Scope | The [toolbar][bs-toolbar] documents Play Together remote sessions. No Habumi equivalent was found; remote input/streaming would be a separate product area. |
 | S05 | Scope | The [feature overview][bs-overview] describes a proprietary store/cloud entry point. Habumi has the Android/GApps route, not that commercial catalog, rewards or vendor services. No matching ecosystem is proposed. |
-| H01 | P1, Partial | Storage growth exists as the profile-specific, offline development script `research/gfxstream/expand-native-storage.ps1` in the local/private research tree, not a general supported resize UI. Add capacity selection, preflight space checks, backup/recovery and filesystem verification. This is a Habumi usability requirement, not an asserted BlueStacks resize feature. |
+| H01 | P1, Partial | Offline CLI growth now stages a copy, uses bundled ARM64 ext4 tools, checks space/identity/features, and reuses journaled recovery while retaining originals. Isolated 4-to-16-GiB growth is covered in [A2 evidence](A2-DATA-GROWTH.md). Native capacity selection remains; locally development-packaged, not distributed. This is a Habumi requirement, not an asserted BlueStacks resize feature. |
 | H02 | P1, Partial | `battery_hz` is selected on startup. Add live AC/battery/background policy changes only after measuring their effect; Eco branding alone would not establish an energy saving. |
 | H03 | P1, Partial | Native rotation is fixed manually. Follow app-requested orientation changes, package the fix and validate physical touch, ANGLE and 2D fallback. |
 | H04 | P1, Missing | Sign distributed binaries and finish release provenance/dependency/license coverage. Portability without an installer remains a valid design choice. |

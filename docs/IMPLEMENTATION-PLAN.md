@@ -22,6 +22,10 @@ Provide offline backup and restore for configuration, keymaps, and all user data
 
 **Acceptance:** restore a verified backup into an isolated profile; reject corrupt or incomplete staged data; validate grow-only resizing and the exported migration and diagnostic metadata.
 
+**Progress:** [backup/restore foundation](A2-DATA-FOUNDATION.md) and
+[offline growth](A2-DATA-GROWTH.md) are implemented in local development packages.
+Native data controls and fuller diagnostic presentation remain; A2 is not closed.
+
 ### A3 — Settings and display controls
 
 Preserve settings, comments, and unknown configuration keys during edits; save atomically. Add reversible fullscreen, on-request PNG capture, and rotation behavior for G01, G09, G21, and H03.

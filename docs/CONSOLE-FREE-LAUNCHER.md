@@ -57,8 +57,9 @@ Installed into `Desktop/Habumi-A1-Test` with previous software retained in
 validation passed; Android reached readiness in 36.062 seconds, guest health was
 ready and the native window displayed Home. The window inventory exposed only
 Habumi for this profile. Console-host processes still exist in the process tree;
-their count is not treated as proof of visible windows. Confirmation of the
-specific user-reported window remains pending its title or user observation.
+their count is not treated as proof of visible windows. On 19 October the user
+confirmed the black window no longer appears; the unrelated title supplied
+earlier did not identify a remaining Habumi issue.
 
 Evidence: `Habumi-Workspace/Builds/Checks/console-fix-20261019`. Package:
 `Habumi-Workspace/Packages/Habumi-Console-Fix-20261019/distribution`.

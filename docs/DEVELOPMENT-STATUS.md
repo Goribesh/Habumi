@@ -1,24 +1,22 @@
 # Development status
 
-- **Commit:** runtime console suppression commit containing this checkpoint;
-  parent `ab076bc`. Recorded 19 October 2026; local, not pushed.
-- **Completed:** first A2 milestone: shared runtime/maintenance exclusion,
-  offline backup, verified staged restore, retained originals, interruption
-  recovery and bounded local diagnostic export. Existing A0/A1 and compact UI
-  remain. QEMU now starts without a console window and the PowerShell-to-shell
-  hop avoids ShellExecute. Use the [workspace layout](WORKSPACE-LAYOUT.md).
-- **Tests:** full shell build, 13 suites/674 checks including actual child spawn,
-  console/pipe/exit-code checks; 337 package entries and inputs verified. Live
-  compact profile boot/health/rendering passed. See
-  [console follow-up](CONSOLE-FREE-LAUNCHER.md) and the previous
-  [A2 data evidence](A2-DATA-FOUNDATION.md).
-- **Open limit:** A2 remains in progress: growth, native data controls and fuller
+- **Commit:** A2 offline growth commit containing this checkpoint; parent
+  `c07e64e`. Recorded 19 October 2026; local, not pushed.
+- **Completed:** pinned static ARM64 maintenance guest, staged offline growth,
+  ext4 identity/state checks, retained originals and shared journaled recovery.
+  The compact development profile includes the tools and is open. The user
+  confirmed the previous black window is resolved. See the
+  [workspace layout](WORKSPACE-LAYOUT.md) and [growth evidence](A2-DATA-GROWTH.md).
+- **Tests:** 56 data + 40 growth + 25 recovery checks; complete shell/launcher
+  compilation and 345 ZIP entries verified using PowerShell 5.1. Isolated
+  4-to-16-GiB growth passed; proof hash preserved offline and after a ready
+  Android boot (38.688 seconds). Normal shutdown passed; compact reopen was
+  ready in 39.218 seconds and real live-profile Grow was refused safely.
+- **Open limit:** A2 remains in progress: native data controls and fuller
   diagnostic presentation remain. Local development package, not distributed;
-  physical power-loss, broad hardware and prior release gates remain open. No
-  new graphics overhead or battery claim. User confirmation/title of the reported
-  black window remains pending; background console-host counts do not prove
-  visibility.
-- **Next:** confirm the reported window's visibility/title with the user, then
-  resume A2: build a pinned ARM64 maintenance initramfs with ext4 tools; verify
-  4-to-16-GiB growth and file preservation on a disposable copy, then integrate
-  transactional growth. See the [implementation plan](IMPLEMENTATION-PLAN.md).
+  broad hardware, physical power-loss and earlier release/signing/source-inventory
+  gates remain open. No new graphics overhead or battery claim.
+- **Next:** add native offline data controls for backup, restore, recovery and
+  grow-only capacity selection, calling the existing guarded operations
+  asynchronously with progress/errors; then complete diagnostic presentation
+  and A2 acceptance. See the [implementation plan](IMPLEMENTATION-PLAN.md).

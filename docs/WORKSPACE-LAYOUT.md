@@ -23,7 +23,9 @@ Current inputs and outputs, relative to `Desktop/Habumi-Workspace`:
 - QEMU baseline: `Builds/Habumi-A1-Qemu-20261019`.
 - Pinned runtime ZIP: `Packages/Habumi-dist/0.3.0-rc.1-publish/Habumi-0.3.0-rc.1.zip`.
 - Pinned initramfs: `Profiles/Habumi-Startup-Test/guest/images/android/initramfs.img`.
-- Latest candidate package: `Packages/Habumi-Console-Fix-20261019/distribution`.
+- Latest candidate package: `Packages/Habumi-A2-Growth-Accepted-20261019/distribution`.
+- Maintenance guest build: `Builds/A2-Maintenance-20261019/output-verified`.
+- Growth acceptance evidence: `Builds/Checks/a2-growth-live`.
 - Older Vulkan comparison profile: `Profiles/Habumi-Native-Vulkan`.
 - Compact window checks: `Builds/Checks/compact-window`.
 

@@ -91,6 +91,7 @@ if($ShellExecutable){
 Write-Host "Fixture: $root"
 Copy-Item -LiteralPath (Join-Path $repo 'app/release/Manage-Data.ps1') -Destination (Join-Path $fixture 'Manage-Data.ps1')
 Copy-Item -LiteralPath $module -Destination (Join-Path $fixture 'Profile-Data.psm1')
+Copy-Item -LiteralPath (Join-Path $repo 'app/release/Profile-Growth.ps1') -Destination (Join-Path $fixture 'Profile-Growth.ps1')
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Manage-Data.ps1') -Operation Backup -Path (Join-Path $root 'wrapper-backup')
 Check ($LASTEXITCODE -eq 0) 'packaged wrapper resolves its own profile root without an explicit argument'
 Check (Test-Path -LiteralPath (Join-Path $root 'wrapper-backup/backup.json')) 'packaged wrapper publishes a verified backup'

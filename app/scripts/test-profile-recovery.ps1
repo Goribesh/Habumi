@@ -66,4 +66,20 @@ $held=[IO.File]::Open((Join-Path $case.Root $case.Paths[1]),[IO.FileMode]::Open,
 try{MustFail {Restore-HabumiProfile $case.Root (Join-Path $base 'sharing-backup')} 'in-use original refuses restore'}finally{$held.Dispose()}
 Check ([IO.File]::ReadAllText((Join-Path $case.Root $case.Paths[0])) -eq 'original-0') 'in-use restore leaves earlier files unchanged'
 Check (-not(Test-Path -LiteralPath (Join-Path $case.Root 'storage-maintenance.lock'))) 'failed preflight needs no recovery marker'
+# Grow uses one data-image entry in the same journal. Simulate interruption
+# after moving the original aside, before installing the enlarged staged disk.
+$case=New-Interrupted 'growth-before-install'
+$journalPath=Join-Path $case.Directory 'journal.json'
+$journal=Get-Content -LiteralPath $journalPath -Raw|ConvertFrom-Json
+$journal.Files=@($journal.Files|Where-Object Path -eq 'guest/images/android/data-gapps.img')
+$journal|Add-Member -NotePropertyName Operation -NotePropertyValue Grow
+& $module {param($p,$j) Write-HabumiJson $p $j} $journalPath $journal
+$target=Join-Path $case.Root 'guest/images/android/data-gapps.img'
+$staged=Join-Path $case.Directory 'enlarged-staged.img'
+[IO.File]::Move($target,$staged)
+$result=Repair-HabumiProfile $case.Root
+Check ($result.Phase -eq 'Recovered') 'interrupted growth before installation recovers'
+Check ([IO.File]::ReadAllText($target) -eq 'original-1') 'interrupted growth restores original disk'
+Check (Test-Path -LiteralPath $staged) 'unused staged growth remains available for inspection'
+Check (-not(Test-Path -LiteralPath (Join-Path $case.Root 'storage-maintenance.lock'))) 'recovered growth releases startup marker'
 Write-Output "Recovery checks: $script:checks passed. Fixture: $base"

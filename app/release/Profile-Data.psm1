@@ -111,6 +111,7 @@ function Get-HabumiNewDestination([string]$Path,[string]$Root){
 function Get-HabumiMetadata([string]$Root){
     $images=@(foreach($relative in @('release-profile.json','development-build.json','native-profile.json',
         'guest/images/kernel-guest-arm64','guest/images/android/initramfs.img',
+        'guest/maintenance/maintenance-build.json','guest/maintenance/maintenance-initramfs.img',
         'guest/images/android/system.img','guest/images/android/system-gapps.img','guest/images/android/vendor.img')){
         $file=Join-Path $Root $relative
         if(Test-Path -LiteralPath $file -PathType Leaf){Assert-HabumiPlainPath $file;[ordered]@{Path=$relative;Bytes=(Get-Item -LiteralPath $file).Length;SHA256=(Get-FileHash -LiteralPath $file).Hash}}
@@ -311,4 +312,5 @@ function Export-HabumiDiagnostics {
         return [pscustomobject]@{Diagnostics=$destination;ContainsDataImages=$false}
     }finally{$guard.Dispose()}
 }
-Export-ModuleMember -Function Backup-HabumiProfile,Restore-HabumiProfile,Repair-HabumiProfile,Export-HabumiDiagnostics
+. (Join-Path $PSScriptRoot 'Profile-Growth.ps1')
+Export-ModuleMember -Function Backup-HabumiProfile,Restore-HabumiProfile,Repair-HabumiProfile,Export-HabumiDiagnostics,Expand-HabumiData
