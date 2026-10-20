@@ -1,19 +1,18 @@
 # Development status
 
-- **Commit:** maintenance-diagnostics commit containing this checkpoint; parent
-  `9ebc0d3`. Recorded 20 October 2026; local, not pushed.
-- **Completed:** bounded maintenance inventory and log tails in diagnostic
-  exports, including stages without a recovery marker. Actual interrupted
-  profile exported read-only: 8-GiB orphan stage, serial log, zero image files.
-  No repair or VM startup. See [A2 evidence](A2-NATIVE-DATA-UI.md).
-- **Tests:** 15 maintenance-diagnostic + 56 data + 43 worker checks and native
-  quoting probe passed; reparse test passed without skips. Reports in workspace
-  `Builds/Checks/a2-maintenance-diagnostics-20261020`. No native code changed.
-- **Open limit:** source-tested follow-up is not packaged. Existing candidate
-  remains the `9ebc0d3` snapshot. A2 runtime handoff/restart and real growth/close
-  remain unaccepted. The earlier host reset was triggered by hardware watchdog
-  after unresponsiveness; original cause remains unconfirmed. Installations,
-  interrupted images and published release are unchanged.
-- **Next:** test abrupt worker exit after restore's durable marker on synthetic
-  files, then verify recovery in a fresh process. No VM/GUI automation. Resolve
-  the host-reset investigation before runtime acceptance or installation.
+- **Commit:** abrupt-worker-exit verification commit containing this checkpoint;
+  parent `2fbe5e3`. Recorded 20 October 2026; local, not pushed.
+- **Completed:** fresh-process recovery after an abrupt restore-worker exit
+  following the durable marker, plus interrupted-backup publication checks.
+  Production code needs no test hook. See [A2 evidence](A2-NATIVE-DATA-UI.md).
+- **Tests:** 29 new interruption checks and 25 existing recovery checks passed
+  on synthetic files. No GUI or VM was started. Reports in workspace
+  `Builds/Checks/a2-worker-interruption-20261020`. Physical power loss is not
+  simulated; the interrupted restore exits before the first original move.
+- **Open limit:** A2 runtime handoff/restart and real growth/close acceptance
+  remain open after the earlier host watchdog reset; its trigger is unconfirmed.
+  No installation or release was updated. The updated offline candidate is
+  `Packages/Habumi-A2-Offline-20261020/distribution`; acceptance is offline only.
+- **Next:** begin independent A3 work on atomic configuration saves preserving
+  comments and unknown keys, using file-only tests. Keep A2 runtime acceptance
+  separate and resolve the host-reset investigation before any VM trial.

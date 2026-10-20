@@ -110,3 +110,27 @@ deletion or VM startup was performed. Evidence is under
 
 This follow-up is source-tested, not included in the earlier packaged ZIP
 identified above. Runtime installations and release status are unchanged.
+
+## Abrupt worker exit verification
+
+Follow-up to `2fbe5e3`: `test-worker-interruption.ps1` starts hidden inbox
+PowerShell children on tiny synthetic files. One exits immediately during
+backup copying; its incomplete staging manifest remains unpublished and live
+file hashes are unchanged. Another exits after restore flushes its recovery
+marker and journal, before the first original-file move. The marker blocks
+new operations. A fresh process recovers the journal, preserves all three live
+file hashes, clears the marker and releases the profile guard. Unused staged
+data remains inspectable. No production fault-injection hook was added.
+
+All 29 checks passed, together with the 25 existing recovery checks covering
+partially replaced files and growth journals. This simulates process exit,
+not physical power loss. Reports are under
+`Builds/Checks/a2-worker-interruption-20261020`. No GUI or VM was started.
+The updated offline candidate is recorded in the development checkpoint;
+runtime handoff and real growth acceptance remain open.
+
+The full native build and all 347 ZIP entries passed for
+`Packages/Habumi-A2-Offline-20261020/distribution`. ZIP SHA-256:
+`92442C2F14697247D1CF4BC38A538B4E52060DFFD81926501CA343EEF4009685`.
+It includes the maintenance-diagnostic follow-up, remains uninstalled and is
+not a runtime-accepted or distributed release.
