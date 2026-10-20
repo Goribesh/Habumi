@@ -40,3 +40,17 @@ The Desktop shortcut **Habumi Compact (Test)** still targets the current profile
 previous shortcut is saved in `Archives/Desktop-shortcuts`. Both launcher
 validations passed after relocation without starting Android. Every planned
 source directory was absent and destination present after the moves.
+
+Later on 19 October, a separate cleanup removed 17 superseded generated package
+directories and six synthetic growth-test directories, releasing about 36.09
+GiB. Their source snapshots, manifests and text logs were archived and hash
+verified before removal. See the local `cleanup-20261019.json` and
+`Archives/obsolete-receipts-20261019.zip` for the exact inventory. Historical
+paths for these removed outputs now identify archived evidence, not runnable
+packages. No runtime profile or source checkout was deleted.
+
+`Packages` retains `Habumi-dist`, `Habumi-A2-Growth-Accepted-20261019` and
+`Habumi-A2-Data-UI-20261019`. The last is an unaccepted development candidate:
+its real maintenance trial coincided with an unexpected host restart. The
+interrupted profile, staged disk and logs remain available for investigation;
+further VM trials are stopped.
