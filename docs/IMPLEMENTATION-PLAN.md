@@ -24,7 +24,9 @@ Provide offline backup and restore for configuration, keymaps, and all user data
 
 **Progress:** [backup/restore foundation](A2-DATA-FOUNDATION.md) and
 [offline growth](A2-DATA-GROWTH.md) are implemented in local development packages.
-Native data controls and fuller diagnostic presentation remain; A2 is not closed.
+[Native data controls and bounded diagnostics](A2-NATIVE-DATA-UI.md) are also
+implemented and source-tested. Runtime acceptance remains open after the host
+watchdog reset; further VM trials are stopped. A2 is not closed.
 
 ### A3 — Settings and display controls
 

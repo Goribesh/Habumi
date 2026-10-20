@@ -128,6 +128,10 @@ Diagnostics exports bounded recent logs, system/driver information, configured
 settings and metadata, without data-image bytes. Unknown config values are
 excluded; applied settings are marked unavailable until actual evidence exists.
 Diagnostic export is also available while recovery is pending, with Android off.
+It includes up to 16 maintenance summaries and the last 256 KiB of each serial
+and QEMU maintenance log. Staged/original disks contribute sizes only. Invalid
+metadata is reported without automatic repair; an unreferenced stage is a clue
+for diagnosis, not proof that live data needs recovery.
 Development packages with guest/maintenance support offline data growth:
 
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Grow -Image data-gapps.img -SizeGiB 16

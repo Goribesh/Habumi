@@ -83,3 +83,30 @@ panel-to-runtime restart, closing during real long-running work and real growth
 with the new exclusion still require acceptance. Investigate the host restart
 before further VM trials. The compact profile retains the previous accepted
 software; the personal installation and published release were not updated.
+
+## Follow-up: interrupted-maintenance diagnostics
+
+Source follow-up to `9ebc0d3`, 20 October: diagnostics now inventories maintenance
+directories independently of the recovery marker. A staged image with no valid
+matching marker is labelled `OrphanStage`; this is diagnostic evidence, not an
+instruction to delete it or repair live data. Images contribute only presence
+and length. A corrupt, oversized or unsupported marker/journal produces a
+bounded status; arbitrary metadata fields are excluded.
+
+The active marker's transaction is prioritized among at most 16 summaries.
+Metadata reads are capped at 64 KiB. Each transaction contributes at most the
+last 256 KiB of `serial.log` and `qemu.log`, under `maintenance/<id>/` in the
+export. Guest log tails remain capped at 4 MiB each, up to 16 files. Log reads
+are explicitly bounded even if a source changes. Reparse paths are not followed.
+The free-space preflight now reserves 80 MiB plus the existing 16-MiB margin.
+
+Fifteen maintenance-diagnostic checks, 56 data checks, 43 worker checks and the
+native quoting probe passed. The reparse test ran successfully, without skips.
+Read-only export from the actual interrupted profile identified transaction
+`bea0333a3f174577a2be65ac1be0de8b`, no marker, an 8-GiB orphan stage and its
+18,301-byte serial log. The export contains zero image files. No recovery,
+deletion or VM startup was performed. Evidence is under
+`Builds/Checks/a2-maintenance-diagnostics-20261020`.
+
+This follow-up is source-tested, not included in the earlier packaged ZIP
+identified above. Runtime installations and release status are unchanged.

@@ -301,24 +301,121 @@ function Restore-HabumiProfile {
         throw $failure
     }finally{$guard.Dispose()}
 }
+function Get-HabumiSupportFile([string]$Path){
+    try{
+        Assert-HabumiPlainPath $Path
+        if(-not(Test-Path -LiteralPath $Path)){return @{State='Missing';Bytes=0L}}
+        $file=Get-Item -LiteralPath $Path -Force
+        if($file.PSIsContainer){return @{State='Unavailable';Bytes=0L}}
+        return @{State='Present';Bytes=[long]$file.Length}
+    }catch{return @{State='Unavailable';Bytes=0L}}
+}
+function Read-HabumiSupportJson([string]$Path){
+    $file=Get-HabumiSupportFile $Path
+    if($file.State -ne 'Present'){return @{State=$file.State;Value=$null}}
+    if($file.Bytes -gt 64KB){return @{State='Oversized';Value=$null}}
+    $stream=$null;$reader=$null
+    try{
+        $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        if($stream.Length -gt 64KB){return @{State='Oversized';Value=$null}}
+        $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true)
+        $value=$reader.ReadToEnd()|ConvertFrom-Json
+        if($null -eq $value -or $value -isnot [pscustomobject]){return @{State='Unsupported';Value=$null}}
+        return @{State='Readable';Value=$value}
+    }catch{return @{State='Unreadable';Value=$null}}
+    finally{if($reader){$reader.Dispose()};if($stream){$stream.Dispose()}}
+}
+function Copy-HabumiDiagnosticLog([string]$Source,[string]$Target,[int]$Limit){
+    $file=Get-HabumiSupportFile $Source
+    if($file.State -ne 'Present'){return @{State=$file.State;SourceBytes=$file.Bytes;CapturedBytes=0L}}
+    try{$inputStream=[IO.File]::Open($Source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)}
+    catch{return @{State='Unavailable';SourceBytes=$file.Bytes;CapturedBytes=0L}}
+    try{
+        $sourceBytes=$inputStream.Length;$remaining=[Math]::Min([long]$Limit,$sourceBytes);$captured=0L
+        $inputStream.Position=$sourceBytes-$remaining
+        New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($Target)) -Force|Out-Null
+        $outputStream=[IO.File]::Create($Target)
+        try{
+            $buffer=New-Object byte[] 65536
+            while($remaining -gt 0){
+                $read=$inputStream.Read($buffer,0,[int][Math]::Min($buffer.Length,$remaining))
+                if(-not $read){break}
+                $outputStream.Write($buffer,0,$read);$remaining-=$read;$captured+=$read
+            }
+            $outputStream.Flush($true)
+        }finally{$outputStream.Dispose()}
+        return @{State='Copied';SourceBytes=$sourceBytes;CapturedBytes=$captured;Truncated=($captured -lt $sourceBytes)}
+    }finally{$inputStream.Dispose()}
+}
+function Get-HabumiMaintenanceDiagnostics([string]$Root,[string]$Stage){
+    # Inventory only fixed paths. Never hash/copy data images or export arbitrary
+    # journal fields; corrupt metadata must not prevent a support bundle.
+    $marker=Read-HabumiSupportJson (Join-Path $Root 'storage-maintenance.lock')
+    $markerState=$marker.State;$active=''
+    if($marker.State -eq 'Readable'){
+        $schema=$marker.Value.PSObject.Properties['Schema'];$transaction=$marker.Value.PSObject.Properties['Transaction']
+        if($schema -and $schema.Value -eq 'habumi.maintenance.v1' -and $transaction -and
+           $transaction.Value -is [string] -and $transaction.Value -cmatch '^[a-f0-9]{32}$'){
+            $markerState='Valid';$active=$transaction.Value
+        }else{$markerState='Unsupported'}
+    }
+    $result=[ordered]@{Schema='habumi.maintenance-diagnostics.v1';MarkerState=$markerState;ActiveTransaction=$active;
+        DirectoryState='Missing';Truncated=$false;Transactions=@()}
+    $parent=Join-Path $Root 'maintenance'
+    try{
+        Assert-HabumiPlainPath $parent
+        if(-not(Test-Path -LiteralPath $parent)){return $result}
+        $directories=@(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object {$_.Name -cmatch '^[a-f0-9]{32}$'})
+        $directories=@($directories | Sort-Object @{Expression={if($_.Name -eq $active){1}else{0}};Descending=$true},@{Expression={$_.LastWriteTimeUtc};Descending=$true})
+        $result.DirectoryState='Available';$result.Truncated=$directories.Count -gt 16
+    }catch{$result.DirectoryState='Unavailable';return $result}
+    foreach($directory in @($directories | Select-Object -First 16)){
+        $record=[ordered]@{Transaction=$directory.Name;MatchesMarker=($directory.Name -eq $active);JournalState='Missing';Phase='Unavailable';OrphanStage=$false;Images=@();Logs=@()}
+        $journal=Read-HabumiSupportJson (Join-Path $directory.FullName 'journal.json')
+        $record.JournalState=$journal.State
+        if($journal.State -eq 'Readable'){
+            $schema=$journal.Value.PSObject.Properties['Schema'];$phase=$journal.Value.PSObject.Properties['Phase']
+            $id=$journal.Value.PSObject.Properties['Transaction']
+            if($schema -and $schema.Value -eq 'habumi.restore.v1' -and $id -and $id.Value -eq $directory.Name -and
+               $phase -and $phase.Value -in 'Replacing','Recovered','Committed'){
+                $record.JournalState='Recognized';$record.Phase=$phase.Value
+            }else{$record.JournalState='Unsupported'}
+        }
+        foreach($location in @('new','original')){
+            foreach($image in @('data.img','data-gapps.img')){
+                $relative=$location+'/guest/images/android/'+$image
+                $file=Get-HabumiSupportFile (Join-Path $directory.FullName $relative)
+                $record.Images+=@{Path=$relative;State=$file.State;Bytes=$file.Bytes}
+                if($location -eq 'new' -and $file.State -eq 'Present' -and -not $record.MatchesMarker){$record.OrphanStage=$true}
+            }
+        }
+        foreach($name in @('serial.log','qemu.log')){
+            $destination=Join-Path $Stage ('maintenance/'+$directory.Name+'/'+$name)
+            $log=Copy-HabumiDiagnosticLog (Join-Path $directory.FullName $name) $destination 256KB
+            $record.Logs+=@{Name=$name;Capture=$log}
+        }
+        $result.Transactions+=$record
+    }
+    return $result
+}
 function Export-HabumiDiagnostics {
     [CmdletBinding()]param([Parameter(Mandatory)][string]$ProfileRoot,[Parameter(Mandatory)][string]$Destination)
     $root=Get-HabumiRoot $ProfileRoot;$guard=Open-HabumiDataGuard $root -Recovery
     try{
         $destination=Get-HabumiNewDestination $Destination $root
-        Assert-HabumiSpace $destination 64MB
+        Assert-HabumiSpace $destination 80MB
         $stage=$destination+'.partial-'+[guid]::NewGuid().ToString('N')
         New-Item -ItemType Directory -Path $stage|Out-Null
         Report-HabumiDataProgress 'Collecting diagnostics' 'System, drivers, configured settings and recent logs'
-        Write-HabumiJson (Join-Path $stage 'diagnostics.json') @{Schema='habumi.diagnostics.v1';Metadata=(Get-HabumiMetadata $root);Host=(Get-HabumiHostDiagnostics $root);RecoveryPending=(Test-Path -LiteralPath (Join-Path $root 'storage-maintenance.lock'));Data=@(foreach($relative in @(Get-HabumiDataFiles $root)){@{Path=$relative;Bytes=(Get-Item -LiteralPath (Get-HabumiDataPath $root $relative)).Length}})}
+        $maintenance=Get-HabumiMaintenanceDiagnostics $root $stage
+        Write-HabumiJson (Join-Path $stage 'diagnostics.json') @{Schema='habumi.diagnostics.v1';Metadata=(Get-HabumiMetadata $root);Host=(Get-HabumiHostDiagnostics $root);Maintenance=$maintenance;RecoveryPending=(Test-Path -LiteralPath (Join-Path $root 'storage-maintenance.lock'));Data=@(foreach($relative in @(Get-HabumiDataFiles $root)){@{Path=$relative;Bytes=(Get-Item -LiteralPath (Get-HabumiDataPath $root $relative)).Length}})}
         $logs=Join-Path $root 'guest/logs'
         if(Test-Path -LiteralPath $logs){
             Assert-HabumiPlainPath $logs
             New-Item -ItemType Directory -Path (Join-Path $stage 'logs')|Out-Null
             foreach($file in @(Get-ChildItem -LiteralPath $logs -File|Sort-Object LastWriteTime -Descending|Select-Object -First 16)){
                 Assert-HabumiPlainPath $file.FullName
-                $inputStream=[IO.File]::Open($file.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
-                try{$inputStream.Position=[Math]::Max(0,$inputStream.Length-4MB);$outputStream=[IO.File]::Create((Join-Path (Join-Path $stage 'logs') $file.Name));try{$inputStream.CopyTo($outputStream);$outputStream.Flush($true)}finally{$outputStream.Dispose()}}finally{$inputStream.Dispose()}
+                $null=Copy-HabumiDiagnosticLog $file.FullName (Join-Path (Join-Path $stage 'logs') $file.Name) 4MB
             }
         }
         [IO.Directory]::Move($stage,$destination)
