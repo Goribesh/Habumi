@@ -48,8 +48,9 @@ $provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild=$DevelopmentName;Publish
     PinnedFiles=$lock.PinnedFiles;QemuBuild=$build;ShellInputs=$inputs;
     SourceMode='Working-tree snapshots; file hashes, not HEAD alone, identify the built source.';
     LauncherInput=@{Path='app/release/launcher.c';SHA256=(Get-FileHash -LiteralPath (Join-Path $repo 'app/release/launcher.c')).Hash};
+    DataUiInputs=@(foreach($path in @('app/release/data-ui.c','app/release/data-ui.h','app/release/data-job.c','app/release/data-job.h','app/release/launcher.rc','app/release/launcher.manifest','app/scripts/build-native-launcher.ps1')){@{Path=$path;SHA256=(Get-FileHash -LiteralPath (Join-Path $repo $path)).Hash}});
     StartupScriptInput=@{Path='app/release/Start-Habumi.ps1';SHA256=(Get-FileHash -LiteralPath (Join-Path $repo 'app/release/Start-Habumi.ps1')).Hash};
-    DataToolInputs=@(foreach($path in @('app/release/Manage-Data.ps1','app/release/Profile-Data.psm1','app/release/Profile-Growth.ps1')){@{Path=$path;SHA256=(Get-FileHash -LiteralPath (Join-Path $repo $path)).Hash}});
+    DataToolInputs=@(foreach($path in @('app/release/Manage-Data.ps1','app/release/Profile-Data.psm1','app/release/Profile-Growth.ps1','app/release/Profile-SystemInfo.ps1','app/release/Data-Worker.ps1')){@{Path=$path;SHA256=(Get-FileHash -LiteralPath (Join-Path $repo $path)).Hash}});
     MaintenanceBuild=$(if($MaintenanceBuildRoot){Get-Content -LiteralPath (Join-Path $MaintenanceBuildRoot 'maintenance-build.json') -Raw|ConvertFrom-Json}else{$null});
     SourceDirty=[bool]@(& git -C $repo status --porcelain --untracked-files=normal -- app/guscio qemu/ui-winq app/scripts/prepare-development-baseline.ps1 qemu/scripts/build-development-baseline.ps1);
     ExperimentalOmxProbe=$true;ExperimentalSystemUiNullProbe=$true;

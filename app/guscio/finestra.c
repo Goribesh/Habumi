@@ -911,6 +911,7 @@ static void fin_menu_mostra(void)
         AppendMenuA(menu, MF_STRING | (enabled ? 0 : MF_GRAYED), actions[j], labels[j]);
     }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(menu, MF_STRING, ID_DATI, "Data management...");
     AppendMenuA(menu, MF_STRING, FIN_LOG, "Activity log...");
     SetForegroundWindow(fin_hwnd);
     UINT selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN,

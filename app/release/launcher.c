@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <wchar.h>
+#include "data-ui.h"
 
 #ifndef HABUMI_CHILD_WINDOW
 #define HABUMI_CHILD_WINDOW 0
@@ -23,12 +24,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
     PROCESS_INFORMATION process = {0};
     DWORD result = 1;
     int argc = 0;
-    BOOL validate = FALSE, single = HABUMI_CHILD_WINDOW;
+    BOOL validate = FALSE, single = HABUMI_CHILD_WINDOW, data = FALSE;
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     (void)instance; (void)previous; (void)command_line; (void)show;
     if (!argv) { return fail(L"Unable to read the launcher arguments.", FALSE); }
     for (int i = 1; i < argc; i++) {
         if (!wcscmp(argv[i], L"--validate")) { validate = TRUE; }
+        else if (!wcscmp(argv[i], L"--data")) { data = TRUE; }
         else if (!wcscmp(argv[i], L"--single-window")) { single = TRUE; }
         else { LocalFree(argv); return fail(L"Unknown launcher argument.", validate); }
     }
@@ -38,6 +40,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
     wchar_t *slash = wcsrchr(root, L'\\');
     if (!slash) { return fail(L"Unable to locate the Habumi folder.", validate); }
     *slash = L'\0';
+    if (validate && data) return fail(L"Choose either validation or data management.", TRUE);
+    wchar_t marker[32768];
+    if (swprintf(marker,32768,L"%ls\\storage-maintenance.lock",root)<0) return 1;
+    if (data || (!validate && GetFileAttributesW(marker)!=INVALID_FILE_ATTRIBUTES)) {
+        return data_ui_run(root);
+    }
+    if (!validate) {
+        HWND manager=data_ui_existing(root);
+        if(manager){ShowWindow(manager,SW_RESTORE);SetForegroundWindow(manager);return 0;}
+    }
     if (swprintf(script, 32768, L"%ls\\Start-Habumi.ps1", root) < 0 ||
         GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) {
         return fail(L"Start-Habumi.ps1 is missing. Extract the complete Habumi package.", validate);

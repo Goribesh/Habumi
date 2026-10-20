@@ -2,6 +2,12 @@
 # Offline profile operations. All paths are confined and restores retain originals.
 Set-StrictMode -Version 2
 $ErrorActionPreference='Stop'
+$script:HabumiDataProgress=$null
+function Set-HabumiDataProgress([scriptblock]$Callback){$script:HabumiDataProgress=$Callback}
+function Report-HabumiDataProgress([string]$Phase,[string]$Message){
+    # Reporting must never change the outcome of a disk transaction.
+    if($script:HabumiDataProgress){try{$null=& $script:HabumiDataProgress $Phase $Message}catch{}}
+}
 
 function Assert-HabumiPlainPath([string]$Path){
     $current=[IO.Path]::GetFullPath($Path)
@@ -82,6 +88,7 @@ function Get-HabumiOriginalRecord([string]$Path){
     finally{$stream.Dispose();$sha.Dispose()}
 }
 function Copy-HabumiFile([string]$Source,[string]$Target){
+    Report-HabumiDataProgress 'Verifying source' ([IO.Path]::GetFileName($Source))
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($Target)) -Force|Out-Null
     $inputStream=[IO.File]::Open($Source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
     $outputStream=$null;$sha=[Security.Cryptography.SHA256]::Create()
@@ -89,9 +96,11 @@ function Copy-HabumiFile([string]$Source,[string]$Target){
         $hash=([BitConverter]::ToString($sha.ComputeHash($inputStream))).Replace('-','')
         $length=$inputStream.Length;$inputStream.Position=0
         $outputStream=[IO.File]::Open($Target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        Report-HabumiDataProgress 'Copying' ([IO.Path]::GetFileName($Source))
         $inputStream.CopyTo($outputStream,1MB);$outputStream.Flush($true)
     }finally{if($outputStream){$outputStream.Dispose()};$inputStream.Dispose();$sha.Dispose()}
     $record=[pscustomobject]@{Bytes=$length;SHA256=$hash}
+    Report-HabumiDataProgress 'Verifying copy' ([IO.Path]::GetFileName($Target))
     Assert-HabumiFile $Target $record
     return $record
 }
@@ -191,6 +200,7 @@ function Get-HabumiRecovery([string]$Root){
     return @{Directory=$directory;Journal=$journal}
 }
 function Repair-HabumiUnderGuard([string]$Root){
+    Report-HabumiDataProgress 'Recovering' 'Checking the journal and retained originals'
     $recovery=Get-HabumiRecovery $Root;$directory=$recovery.Directory;$journal=$recovery.Journal
     if($journal.Phase -eq 'Committed'){
         foreach($file in @($journal.Files)){
@@ -239,6 +249,7 @@ function Restore-HabumiProfile {
     try{
         $backup=Get-HabumiRoot $BackupPath
         if($backup -eq $root -or $backup.StartsWith(($root+'\'),[StringComparison]::OrdinalIgnoreCase)){throw 'Backup must be outside the profile.'}
+        Report-HabumiDataProgress 'Verifying backup' 'Checking all payload hashes and reference images'
         $manifest=Read-HabumiBackup $backup
         Assert-HabumiReferenceImages $root $manifest
         foreach($entry in @($manifest.Files)){
@@ -270,6 +281,7 @@ function Restore-HabumiProfile {
         Write-HabumiJson (Join-Path $directory 'journal.json') $journal
         Write-HabumiJson (Join-Path $root 'storage-maintenance.lock') @{Schema='habumi.maintenance.v1';Transaction=$id}
         $marked=$true
+        Report-HabumiDataProgress 'Replacing data' 'Original files are retained for recovery'
         foreach($relative in $original){
             $saved=Get-HabumiDataPath (Join-Path $directory 'original') $relative
             New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($saved)) -Force|Out-Null
@@ -291,13 +303,14 @@ function Restore-HabumiProfile {
 }
 function Export-HabumiDiagnostics {
     [CmdletBinding()]param([Parameter(Mandatory)][string]$ProfileRoot,[Parameter(Mandatory)][string]$Destination)
-    $root=Get-HabumiRoot $ProfileRoot;$guard=Open-HabumiDataGuard $root
+    $root=Get-HabumiRoot $ProfileRoot;$guard=Open-HabumiDataGuard $root -Recovery
     try{
         $destination=Get-HabumiNewDestination $Destination $root
         Assert-HabumiSpace $destination 64MB
         $stage=$destination+'.partial-'+[guid]::NewGuid().ToString('N')
         New-Item -ItemType Directory -Path $stage|Out-Null
-        Write-HabumiJson (Join-Path $stage 'diagnostics.json') @{Schema='habumi.diagnostics.v1';Metadata=(Get-HabumiMetadata $root);Data=@(foreach($relative in @(Get-HabumiDataFiles $root)){@{Path=$relative;Bytes=(Get-Item -LiteralPath (Get-HabumiDataPath $root $relative)).Length}})}
+        Report-HabumiDataProgress 'Collecting diagnostics' 'System, drivers, configured settings and recent logs'
+        Write-HabumiJson (Join-Path $stage 'diagnostics.json') @{Schema='habumi.diagnostics.v1';Metadata=(Get-HabumiMetadata $root);Host=(Get-HabumiHostDiagnostics $root);RecoveryPending=(Test-Path -LiteralPath (Join-Path $root 'storage-maintenance.lock'));Data=@(foreach($relative in @(Get-HabumiDataFiles $root)){@{Path=$relative;Bytes=(Get-Item -LiteralPath (Get-HabumiDataPath $root $relative)).Length}})}
         $logs=Join-Path $root 'guest/logs'
         if(Test-Path -LiteralPath $logs){
             Assert-HabumiPlainPath $logs
@@ -313,4 +326,5 @@ function Export-HabumiDiagnostics {
     }finally{$guard.Dispose()}
 }
 . (Join-Path $PSScriptRoot 'Profile-Growth.ps1')
-Export-ModuleMember -Function Backup-HabumiProfile,Restore-HabumiProfile,Repair-HabumiProfile,Export-HabumiDiagnostics,Expand-HabumiData
+. (Join-Path $PSScriptRoot 'Profile-SystemInfo.ps1')
+Export-ModuleMember -Function Backup-HabumiProfile,Restore-HabumiProfile,Repair-HabumiProfile,Export-HabumiDiagnostics,Expand-HabumiData,Set-HabumiDataProgress

@@ -76,11 +76,11 @@ if($CrossProcessProbe){
   & $cc -std=c11 -Wall -Werror -O2 (Join-Path $repo 'app/guscio/test-profilo-lock.c') '-o' $probe
   if($LASTEXITCODE -ne 0){throw "clang probe compile failed: $LASTEXITCODE"}
   $old=Get-Location;Push-Location $fixture
-  try{$proc=Start-Process -FilePath $probe -PassThru -WorkingDirectory $fixture; $until=(Get-Date).AddSeconds(10);while(-not(Test-Path 'lock-ready.txt') -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 50};Check (Test-Path 'lock-ready.txt') 'cross-process probe acquired fixture profile lock';MustFail {Export-HabumiDiagnostics -ProfileRoot $fixture -Destination (Join-Path $root 'cross-process-diag')} 'cross-process exclusive lock rejects concurrent operation';$proc.WaitForExit();Check ($proc.ExitCode -eq 0) 'cross-process lock probe exits cleanly'}finally{Pop-Location}
+  try{$proc=Start-Process -FilePath $probe -WindowStyle Hidden -PassThru -WorkingDirectory $fixture; $until=(Get-Date).AddSeconds(10);while(-not(Test-Path 'lock-ready.txt') -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 50};Check (Test-Path 'lock-ready.txt') 'cross-process probe acquired fixture profile lock';MustFail {Export-HabumiDiagnostics -ProfileRoot $fixture -Destination (Join-Path $root 'cross-process-diag')} 'cross-process exclusive lock rejects concurrent operation';$proc.WaitForExit();Check ($proc.ExitCode -eq 0) 'cross-process lock probe exits cleanly'}finally{Pop-Location}
 }
 if($ShellExecutable){
   $shell=Join-Path $fixture 'runtime/bin/Habumi.exe';Copy-Item -LiteralPath $ShellExecutable -Destination $shell
-  function RunStatus([string]$Name){$out=Join-Path $root ($Name+'.out');$err=Join-Path $root ($Name+'.err');$p=Start-Process -FilePath $shell -ArgumentList '--storage-status' -WorkingDirectory $fixture -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $err;return $p.ExitCode}
+  function RunStatus([string]$Name){$out=Join-Path $root ($Name+'.out');$err=Join-Path $root ($Name+'.err');$p=Start-Process -FilePath $shell -ArgumentList '--storage-status' -WindowStyle Hidden -WorkingDirectory $fixture -PassThru -Wait -RedirectStandardOutput $out -RedirectStandardError $err;return $p.ExitCode}
   Check ((RunStatus 'available') -eq 0) 'shell reports storage available (exit 0)'
   Put (Join-Path $fixture 'storage-maintenance.lock') ([Text.Encoding]::UTF8.GetBytes('{"Schema":"habumi.maintenance.v1"}'))
   Check ((RunStatus 'pending') -eq 3) 'shell reports pending maintenance marker (exit 3)'
@@ -92,6 +92,7 @@ Write-Host "Fixture: $root"
 Copy-Item -LiteralPath (Join-Path $repo 'app/release/Manage-Data.ps1') -Destination (Join-Path $fixture 'Manage-Data.ps1')
 Copy-Item -LiteralPath $module -Destination (Join-Path $fixture 'Profile-Data.psm1')
 Copy-Item -LiteralPath (Join-Path $repo 'app/release/Profile-Growth.ps1') -Destination (Join-Path $fixture 'Profile-Growth.ps1')
+Copy-Item -LiteralPath (Join-Path $repo 'app/release/Profile-SystemInfo.ps1') -Destination (Join-Path $fixture 'Profile-SystemInfo.ps1')
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Manage-Data.ps1') -Operation Backup -Path (Join-Path $root 'wrapper-backup')
 Check ($LASTEXITCODE -eq 0) 'packaged wrapper resolves its own profile root without an explicit argument'
 Check (Test-Path -LiteralPath (Join-Path $root 'wrapper-backup/backup.json')) 'packaged wrapper publishes a verified backup'

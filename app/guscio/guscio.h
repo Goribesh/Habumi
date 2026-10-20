@@ -452,6 +452,7 @@ void finestra_messaggi_guscio(FinMsgGuscio f);
 #define ID_RUOTA    1007
 #define ID_TASTI    1008
 #define ID_VARIANTE 1009
+#define ID_DATI     1010
 
 /* --- tubo.c -------------------------------------------------------------- */
 

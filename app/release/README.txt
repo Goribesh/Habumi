@@ -102,7 +102,15 @@ YOU NEED above. To uninstall, see further down: you delete the folder.
 OFFLINE DATA TOOLS
 -----------------
 
-Close Android normally before running Manage-Data.ps1 from this folder.
+Open "Data management..." from Habumi's More menu. Android shuts down normally
+before the native data panel opens. You can also run "Habumi.exe --data" without
+starting Android. The panel provides backup, restore, grow-only capacity selection,
+interruption recovery and local diagnostic export. It shows operation phases;
+closing during work waits for completion. Failed operations remain visible with
+their details folder. "Start Android" returns to the runtime after maintenance.
+Pending recovery opens this panel automatically and blocks Android startup.
+
+Close Android normally before running Manage-Data.ps1 directly from this folder.
 Example commands (choose a new backup directory outside the installation):
 
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Backup -Path D:\Backups\Habumi-01
@@ -116,7 +124,10 @@ reference images, verifies a complete staging copy and retains previous files
 under maintenance/<transaction>/original. Interrupted replacement blocks startup
 until Recover completes. Failed or incomplete backups are never published at the
 requested destination; their .partial directories remain available for inspection.
-Diagnostics exports bounded recent logs and metadata, without data-image bytes.
+Diagnostics exports bounded recent logs, system/driver information, configured
+settings and metadata, without data-image bytes. Unknown config values are
+excluded; applied settings are marked unavailable until actual evidence exists.
+Diagnostic export is also available while recovery is pending, with Android off.
 Development packages with guest/maintenance support offline data growth:
 
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Grow -Image data-gapps.img -SizeGiB 16
@@ -129,7 +140,8 @@ No WSL installation is needed to use this command. Keep the previous image under
 maintenance/<transaction>/original until the enlarged profile is verified.
 If maintenance fails before replacement, the original remains active and the
 staged copy/logs remain under maintenance for inspection. An interrupted replacement
-uses the same Recover command as restore. Graphical data controls are pending.
+uses the same Recover command as restore. Native actions use these same guarded
+operations; the CLI remains available for diagnostics and scripted maintenance.
 
 
 THE FIRST TIME, WINDOWS WILL WARN YOU

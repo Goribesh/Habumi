@@ -1,5 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Loaded inside Profile-Data.psm1 to share its guard and recovery contract.
+function Get-HabumiQemuProcesses {
+    return @(Get-CimInstance -ClassName Win32_Process -Filter "Name='qemu-nostro.exe' OR Name='qemu-system-aarch64.exe'" -ErrorAction Stop)
+}
+function Open-HabumiMaintenanceGuard {
+    # Share the existing shell singleton name. Object creation, rather than a
+    # later ownership wait, is the handshake used by both old and new shells.
+    # Keep the handle throughout growth so a normal Habumi startup cannot race.
+    $created=$false;$hostGuard=$null
+    try{
+        $hostGuard=[Threading.Mutex]::new($false,'Local\AndroidRuntimeGuscio.istanza',[ref]$created)
+        if(-not $created){throw 'Close all Habumi windows before growing storage. Another runtime or maintenance operation is active.'}
+        try{$running=@(Get-HabumiQemuProcesses)}catch{throw 'Cannot verify that QEMU is stopped. Storage growth was not started.'}
+        if($running.Count){throw 'Close all Habumi/QEMU instances before growing storage, including other profiles and leftover processes.'}
+        return $hostGuard
+    }catch{if($hostGuard){$hostGuard.Dispose()};throw}
+}
 function Get-HabumiExt4([string]$Path){
     $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
     $super=New-Object byte[] 2048
@@ -46,6 +62,7 @@ function Get-HabumiMaintenanceTools([string]$Root){
     return $receipt
 }
 function Invoke-HabumiMaintenance([string]$Root,[string]$Transaction,[string]$Relative,[int]$TimeoutSeconds){
+    # Expand-HabumiData holds the session runtime gate for this entire call.
     # All QEMU arguments are fixed or validated profile-relative paths. This also
     # avoids drive-option comma parsing and Windows argument quoting ambiguity.
     if($Transaction -notmatch '^[a-f0-9]{32}$' -or $Relative -notin @('guest/images/android/data.img','guest/images/android/data-gapps.img')){throw 'Invalid maintenance target.'}
@@ -79,8 +96,10 @@ function Expand-HabumiData {
         [Parameter(Mandatory)][ValidateSet('data.img','data-gapps.img')][string]$Image,
         [Parameter(Mandatory)][ValidateRange(4,16)][int]$SizeGiB,
         [ValidateRange(10,3600)][int]$TimeoutSeconds=600)
-    $root=Get-HabumiRoot $ProfileRoot;$guard=Open-HabumiDataGuard $root;$marked=$false
+    $root=Get-HabumiRoot $ProfileRoot;$guard=Open-HabumiDataGuard $root;$marked=$false;$hostGuard=$null
     try{
+        Report-HabumiDataProgress 'Checking runtime' 'All Habumi and QEMU instances must be stopped before storage growth'
+        $hostGuard=Open-HabumiMaintenanceGuard
         $relative='guest/images/android/'+$Image;$target=Get-HabumiDataPath $root $relative
         $before=Get-HabumiExt4 $target;$bytes=[long]$SizeGiB*1GB
         if($bytes -le $before.Bytes -or $before.FilesystemBytes -ne $before.Bytes){throw 'Growth requires a larger target and a filesystem occupying the current raw image.'}
@@ -92,8 +111,10 @@ function Expand-HabumiData {
         $original=Copy-HabumiFile $target $stage
         $stream=[IO.File]::Open($stage,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::None)
         try{$stream.SetLength($bytes);$stream.Flush($true)}finally{$stream.Dispose()}
+        Report-HabumiDataProgress 'Growing filesystem' 'Offline ext4 checks and resize; this may take several minutes'
         Invoke-HabumiMaintenance $root $id $relative $TimeoutSeconds
         $after=Get-HabumiExt4 $stage;Assert-HabumiGrowthGeometry $before $after $bytes
+        Report-HabumiDataProgress 'Verifying enlarged disk' 'Checking identity and hashing the complete image'
         $new=Get-HabumiOriginalRecord $stage
         Assert-HabumiFile $target $original
         # Also check exclusive access before publishing the durable recovery marker.
@@ -105,6 +126,7 @@ function Expand-HabumiData {
         Write-HabumiJson (Join-Path $directory 'journal.json') $journal
         Write-HabumiJson (Join-Path $root 'storage-maintenance.lock') @{Schema='habumi.maintenance.v1';Transaction=$id}
         $marked=$true
+        Report-HabumiDataProgress 'Replacing disk' 'The original image is retained for recovery'
         $saved=Get-HabumiDataPath (Join-Path $directory 'original') $relative
         New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($saved)) -Force|Out-Null
         [IO.File]::Move($target,$saved);[IO.File]::Move($stage,$target)
@@ -115,5 +137,5 @@ function Expand-HabumiData {
         $failure=$_
         if($marked){try{$null=Repair-HabumiUnderGuard $root}catch{throw ('Recovery required; originals retained in '+$directory+'. '+$_.Exception.Message)}}
         throw $failure
-    }finally{$guard.Dispose()}
+    }finally{if($hostGuard){$hostGuard.Dispose()};$guard.Dispose()}
 }

@@ -46,8 +46,7 @@ $files=@($modules|ForEach-Object {Join-Path $source "$_.c"})
 & (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32
 if($LASTEXITCODE){throw 'Release shell compilation failed.'}
 $launcherMode=if($DevelopmentBaseline -and $DevelopmentName -eq 'A1'){'1'}else{'0'}
-& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -municode "-DHABUMI_CHILD_WINDOW=$launcherMode" -o (Join-Path $stage 'Habumi.exe') (Join-Path $repoRoot 'app/release/launcher.c') -luser32 -lshell32
-if($LASTEXITCODE){throw 'Graphical launcher compilation failed.'}
+& (Join-Path $PSScriptRoot 'build-native-launcher.ps1') -OutputPath (Join-Path $stage 'Habumi.exe') -ChildWindow $launcherMode -MsysBin $MsysBin
 $encoding=[Text.UTF8Encoding]::new($false)
 $config="# Habumi $version native Vulkan prerelease`nvcpu=6`nmemory=6144`nwidth=800`nheight=1280`nguest_scale=yes`nhz=120`nbattery_hz=60`ndensity=426`ngl=wgl`ngl_flush_wait=no`nretries=3`nadb_port=$AdbPort`nclipboard_port=$ClipboardPort`naudio=on`nvariant=gapps`n"
 [IO.File]::WriteAllText((Join-Path $stage 'runtime/bin/config.txt'),$config,$encoding)
@@ -57,7 +56,7 @@ foreach($pair in @(@('Start-Vulkan.cmd','Start.cmd'),@('Start-Habumi.ps1','Start
     [IO.File]::WriteAllText((Join-Path $stage $pair[1]),$value,$encoding)
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'app/release/LICENSES') -Destination (Join-Path $stage 'LICENSES') -Recurse
-foreach($name in @('Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
+foreach($name in @('Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
 if($MaintenanceBuildRoot){
     $MaintenanceBuildRoot=(Resolve-Path -LiteralPath $MaintenanceBuildRoot).Path
     $maintenance=Get-Content -LiteralPath (Join-Path $MaintenanceBuildRoot 'maintenance-build.json') -Raw|ConvertFrom-Json
@@ -77,12 +76,12 @@ if($MaintenanceBuildRoot){
     foreach($name in @('build-maintenance-initramfs.sh','maintenance-init.sh')){Copy-Item -LiteralPath (Join-Path $repoRoot ('guest/scripts/'+$name)) -Destination (Join-Path $maintenanceLicenses $name)}
 }
 $critical=@()
-foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
+foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
     $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
 }
 if($MaintenanceBuildRoot){foreach($relative in @('guest/maintenance/maintenance-build.json','guest/maintenance/maintenance-initramfs.img')){$critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}}}
 $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;CriticalFiles=$critical;
-    OfflineDataTools=$true;DataToolsSchema='habumi.backup.v1';
+    OfflineDataTools=$true;NativeDataManagement=$true;DataToolsSchema='habumi.backup.v1';
     OfflineDataGrowth=[bool]$MaintenanceBuildRoot;
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;
     UserDataIncluded=$false;RepeatedHibernateValidated=$false;

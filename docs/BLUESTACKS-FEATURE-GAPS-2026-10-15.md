@@ -11,6 +11,11 @@ package. The later [growth milestone](A2-DATA-GROWTH.md) adds staged resizing
 through a bundled maintenance guest. Rows G26/G27/G29/H01 reflect that progress;
 no BlueStacks claims were revised.
 
+Local delta, 20 October: the [native A2 data panel](A2-NATIVE-DATA-UI.md)
+implements those controls and bounded driver/config diagnostics in a new local
+candidate. Targeted tests pass; runtime handoff and real growth acceptance
+remain open after the unexpected Surface restart. No distribution status changed.
+
 ## Comparison boundary
 
 The reference is **BlueStacks 5 for Windows**, using its official support pages
@@ -107,9 +112,9 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 | G24 | P3 | Capture gallery/video editing | Missing | Optional gallery and basic clip management; editing is a separate cost from recording. |
 | G25 | P1 | In-app update checks/install | Missing | Add version checks and an update workflow with rollback and preserved user data. Manual GitHub downloads already exist. |
 | G26 | P1 | Upgrade/data migration | Partial | Schema/version/reference-image metadata and journaled restore exist in the A2 development package. Define broader upgrade/migration compatibility; mismatched Android images are currently refused. |
-| G27 | P1 | Instance backup/restore | Partial | Offline CLI backup/restore/recovery implemented; real isolated 4 GiB restore and startup exclusion verified. Native management workflow remains; development-packaged, not distributed. See [A2 evidence](A2-DATA-FOUNDATION.md). |
+| G27 | P1 | Instance backup/restore | Partial | Offline CLI and native panel implemented; real isolated CLI restore and fake-profile GUI restore verified. Native runtime handoff/acceptance remains open; development-packaged, not distributed. See [native A2 evidence](A2-NATIVE-DATA-UI.md). |
 | G28 | P2 | Disk reclaim/cleanup | Missing | Assess the raw-image format, guest discard and host space recovery. Removing an Android file alone does not prove Windows disk space was reclaimed. |
-| G29 | P1 | Diagnostic export/report | Partial | Offline bounded log/metadata directory export implemented and tested locally. Complete driver/config presentation and native export selection; no automatic upload. See [A2 evidence](A2-DATA-FOUNDATION.md). |
+| G29 | P1 | Diagnostic export/report | Partial | Native selection and bounded log/host/driver/config export implemented and tested locally. Applied settings remain explicitly unavailable; runtime workflow acceptance remains open. No automatic upload or distribution. See [native A2 evidence](A2-NATIVE-DATA-UI.md). |
 
 ## Instances and gaming controls
 
@@ -169,7 +174,7 @@ added to the implementation plan.
 | S03 | Scope | BlueStacks has [phone profiles][bs-phone] and network-provider settings in its [preferences][bs-settings]. Habumi does not expose these; the existing roadmap excludes device/telephony simulation. |
 | S04 | Scope | The [toolbar][bs-toolbar] documents Play Together remote sessions. No Habumi equivalent was found; remote input/streaming would be a separate product area. |
 | S05 | Scope | The [feature overview][bs-overview] describes a proprietary store/cloud entry point. Habumi has the Android/GApps route, not that commercial catalog, rewards or vendor services. No matching ecosystem is proposed. |
-| H01 | P1, Partial | Offline CLI growth now stages a copy, uses bundled ARM64 ext4 tools, checks space/identity/features, and reuses journaled recovery while retaining originals. Isolated 4-to-16-GiB growth is covered in [A2 evidence](A2-DATA-GROWTH.md). Native capacity selection remains; locally development-packaged, not distributed. This is a Habumi requirement, not an asserted BlueStacks resize feature. |
+| H01 | P1, Partial | Offline growth stages a copy, verifies geometry and retains originals with journaled recovery. Earlier isolated 4-to-16-GiB growth passed. Native capacity selection and runtime exclusion are implemented; real acceptance is stopped pending host-restart investigation. See [native A2 evidence](A2-NATIVE-DATA-UI.md). Development-packaged, not distributed; this is a Habumi requirement. |
 | H02 | P1, Partial | `battery_hz` is selected on startup. Add live AC/battery/background policy changes only after measuring their effect; Eco branding alone would not establish an energy saving. |
 | H03 | P1, Partial | Native rotation is fixed manually. Follow app-requested orientation changes, package the fix and validate physical touch, ANGLE and 2D fallback. |
 | H04 | P1, Missing | Sign distributed binaries and finish release provenance/dependency/license coverage. Portability without an installer remains a valid design choice. |

@@ -58,6 +58,26 @@ static HANDLE g_chiusura;
  * riaprire la VM ne' riscrivere config.txt -- vedi variante_richiedi
  * piu' sotto. */
 static bool g_chiudendo;
+static bool g_gestione_dati;
+
+/* Il gestore offline nasce dopo la chiusura normale e la pulizia dei thread.
+ * Non eredita handle del profilo e non passa dal percorso che avvia la VM. */
+static void gestione_dati_avvia(void)
+{
+    char exe[MAX_PATH], command[MAX_PATH + 32];
+    STARTUPINFOA startup = {0}; PROCESS_INFORMATION process = {0};
+    int n = snprintf(exe, sizeof(exe), "%s\\Habumi.exe", g_radice);
+    if (n < 0 || n >= (int)sizeof(exe)) return;
+    n = snprintf(command, sizeof(command), "\"%s\" --data", exe);
+    if (n < 0 || n >= (int)sizeof(command)) return;
+    startup.cb = sizeof(startup);
+    if (CreateProcessA(exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                       NULL, g_radice, &startup, &process)) {
+        CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    } else {
+        MessageBoxA(NULL,"Data management could not be opened. Start Habumi.exe --data from the installation folder.","Habumi",MB_OK|MB_ICONERROR);
+    }
+}
 
 /* Lo stato acceso/spento della mappa dei tasti sta QUI e in nessun altro
  * posto.
@@ -171,7 +191,9 @@ static bool istanza_unica(void)
     HANDLE m = CreateMutexA(NULL, TRUE, GUSCIO_MUTEX);
 
     if (!m) {
-        return true;   /* senza mutex si prosegue: peggio non partire */
+        MessageBoxA(NULL, "Habumi cannot acquire its runtime guard. Android was not started.",
+                    "Habumi", MB_OK | MB_ICONERROR);
+        return false;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND altra = NULL;
@@ -190,7 +212,12 @@ static bool istanza_unica(void)
         if (altra) {
             ShowWindow(altra, SW_RESTORE);
             SetForegroundWindow(altra);
+        } else {
+            MessageBoxA(NULL,
+                "Another Habumi instance is starting, closing or performing storage maintenance.\nWait for it to finish before starting Android.",
+                "Habumi", MB_OK | MB_ICONINFORMATION);
         }
+        CloseHandle(m);
         return false;
     }
     return true;
@@ -1923,6 +1950,19 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
         case ID_VARIANTE:
             variante_menu_mostra((HWND)lp);
             break;
+        case ID_DATI:
+            if (g_chiudendo) break;
+            if (vm_stato() != VM_PRONTO && vm_stato() != VM_MORTA && vm_stato() != VM_FALLITA && vm_stato() != VM_USCITO) {
+                MessageBoxA(finestra_handle(),"Wait for Android to finish starting before opening data management.","Habumi",MB_OK|MB_ICONINFORMATION);
+                break;
+            }
+            if (vm_viva() && MessageBoxA(finestra_handle(),
+                    "Android will shut down normally before data management opens. Continue?",
+                    "Habumi data management",MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION) != IDYES) break;
+            if (g_chiudendo) break;
+            g_gestione_dati = true;
+            PostMessageA(finestra_handle(),WM_APP+1,0,0);
+            break;
         default: break;
         }
         return;
@@ -2640,6 +2680,7 @@ int main(int argc, char **argv)
     {
         int status = profilo_proteggi();
         if (status) {
+            if (status == 3) { gestione_dati_avvia(); return 1; }
             MessageBoxA(NULL, status == 2 ?
                 "This profile is in use or undergoing data maintenance.\nClose it or wait for the operation to finish." :
                 "Interrupted data maintenance requires recovery.\nRun Manage-Data.ps1 -Operation Recover before starting Android.",
@@ -3015,7 +3056,9 @@ int main(int argc, char **argv)
         vm_chiudi();
         if (varianti_ferme && appunti_fermi && sessione_fermata) {
             registro_chiudi();
+            profilo_lock_chiudi();
         }
+        if (g_gestione_dati) gestione_dati_avvia();
     }
     return 0;
 }

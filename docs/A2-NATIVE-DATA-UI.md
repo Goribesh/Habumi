@@ -1,0 +1,85 @@
+# A2 native offline data management
+
+Implemented in the local development candidate on 20 October 2026. This is
+implementation and targeted test evidence, not A2 runtime acceptance or a
+published release.
+
+## Behavior
+
+The More menu's **Data management...** action requests normal Android shutdown,
+then opens the native offline panel. `Habumi.exe --data` opens it directly;
+a pending replacement-recovery marker also routes startup to this panel.
+Backup, restore, recovery, grow-only capacity selection and local diagnostics
+reuse the existing guarded storage operations. Backup and diagnostics suggest
+a new directory under Documents. Restore explicitly confirms replacement and
+retains previous files. Disk growth selects the actual data image and 8, 12 or
+16 GiB; shrinking is unavailable.
+
+A hidden inbox Windows PowerShell worker performs disk operations outside the
+UI thread. Requests are JSON data, with a version and session nonce. Atomic
+UTF-16 status messages show phases; success requires a matching final status
+and zero child exit code. The final status is read after process exit, avoiding
+a stale-progress race. Closing during work waits; errors retain the panel and
+operation details. A per-profile guard and manager identity prevent competing
+operations and duplicate managers. Temporary worker directories retain request,
+status, result and output for diagnosis.
+
+Diagnostics includes bounded Windows build, CPU, display-driver versions and
+known configured settings. Unknown setting values and Android data-image bytes
+are excluded. Applied settings are explicitly unavailable without runtime
+evidence. Pending recovery permits diagnostic export but still blocks startup.
+
+## Growth exclusion after the host restart
+
+Growth now creates the same session-local named mutex object used by existing
+Habumi shells, `Local\AndroidRuntimeGuscio.istanza`, and keeps its handle until
+the operation ends. Another runtime or growth operation is refused before
+staging. A process query also rejects existing `qemu-nostro.exe` and
+`qemu-system-aarch64.exe` processes; a failed query fails closed. The shell now
+refuses startup if its singleton guard cannot be created and reports a busy
+startup/maintenance state when no runtime window is available.
+
+This coordinates normal Habumi launches within the interactive session. A
+manually launched QEMU or another Windows session starting after the process
+query does not participate in that mutex protocol. Multi-session runtime
+isolation remains outside this milestone. No unrelated process is terminated.
+
+The 19 October trial started at 16:39:35 Rome time and coincided with an
+unexpected host restart; the next boot was at 16:40:53. Kernel-Power 41 recorded
+BugcheckCode 0. A follow-up read on 20 October also found Kernel-Power event
+142: Windows reports that the system was unresponsive and a hardware watchdog
+triggered the reset. This identifies the reset mechanism, not the original
+cause. No Windows restart command was issued. The compact Android VM was
+running when maintenance QEMU started.
+The maintenance log ends during resize2fs on the staged 8-GiB copy. The active
+image still has its original 4-GiB length. The staging image and logs remain
+untouched; no completion or recovery is claimed. The new exclusion reduces
+overlap risk but is not proof that the host-restart problem is fixed.
+
+## Verification and remaining gates
+
+On 20 October: all 13 shell suites (674 checks), 56 data checks, 25 recovery
+checks, 40 growth contract/error checks, 28 diagnostic checks, 43 native-worker
+checks and 14 runtime-gate checks passed. The gate tests include a separate
+shell-like process, old/new mutex-name compatibility, query failure and an
+injected orphan QEMU. Worker tests include Unicode/space paths, broken inherited
+module paths, stale nonce, missing status, premature exit and success with a
+nonzero process exit. These tests start no VM. Full shell and native launcher
+compilation passed with warnings treated as errors. Launcher regressions passed
+using a fake startup script; there was no new Android boot.
+
+The rebuilt package has 347 verified ZIP entries. Workspace-relative paths:
+
+- Candidate: `Packages/Habumi-A2-Data-UI-20261020/distribution`.
+- ZIP SHA-256: `9E36999D16734159AD18F4F326127509C5EF036D4E67F6BCFE35C024F7FC653E`.
+- Test reports: `Builds/Checks/a2-data-ui-20261020`.
+- Host event evidence: `Builds/Checks/a2-data-ui-20261020/host-restart-events.json`.
+- Interrupted profile: `Profiles/Habumi-A2-Native-Data-Test`.
+- Interrupted transaction: `bea0333a3f174577a2be65ac1be0de8b`.
+
+The earlier fake-profile GUI backup/restore passed on 19 October, including
+byte-for-byte restoration and retained originals. Runtime-to-panel handoff,
+panel-to-runtime restart, closing during real long-running work and real growth
+with the new exclusion still require acceptance. Investigate the host restart
+before further VM trials. The compact profile retains the previous accepted
+software; the personal installation and published release were not updated.
