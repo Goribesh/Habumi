@@ -134,3 +134,28 @@ The full native build and all 347 ZIP entries passed for
 `92442C2F14697247D1CF4BC38A538B4E52060DFFD81926501CA343EEF4009685`.
 It includes the maintenance-diagnostic follow-up, remains uninstalled and is
 not a runtime-accepted or distributed release.
+
+## A2 acceptance on the Surface, 22 October
+
+Offline growth now uses QEMU TCG, single thread, CPU `max`, 512 MiB and one
+vCPU. It does not use WHPX, graphics or networking. The runtime exclusion guard
+is retained. This avoids the maintenance hypervisor path implicated in the
+earlier overlapping-VM trial without claiming to identify the watchdog trigger.
+
+An independent 4-GiB image grew to 16 GiB in 88.275 seconds, passed ext4 checks
+and retained its original. A real backup and staged restore of the 16-GiB disk
+committed successfully; configuration comments and an unknown key were restored
+byte-for-byte. Android then reached ready in 34.094 seconds. The guest proof
+hash still matched `d9db90bc59f9a33694710c946ca38ffa0cf2960ec303ad275c16b12a5aa01aa7`.
+
+The user confirmed runtime -> data panel -> Start Android -> Home. The prior
+runtime shut down normally in 6.282 seconds; the reopened runtime reached ready
+in 29.516 seconds. A second guest check confirmed boot completion, 16-GiB data
+geometry and the same proof hash. The latest Kernel-Power 41 still dates from
+19 October. Forty maintenance-runner checks also passed, asserting the TCG
+arguments. Evidence: `Builds/Checks/a2-final-20261022`.
+
+A2 is accepted for this isolated Surface profile. Physical power-loss recovery,
+other hardware, general standby reliability and the original watchdog cause
+remain broader validation limits. The personal installation and published
+release were not changed by this acceptance.

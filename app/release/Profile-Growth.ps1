@@ -72,7 +72,9 @@ function Invoke-HabumiMaintenance([string]$Root,[string]$Transaction,[string]$Re
     $start.FileName=Join-Path $Root 'runtime/bin/qemu-nostro.exe'
     $start.WorkingDirectory=$Root;$start.UseShellExecute=$false;$start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
-    $start.Arguments='-M virt -accel whpx -cpu host -m 512 -smp 1 -nodefaults -no-reboot '+
+    # Offline maintenance needs no hardware acceleration. Keep it outside WHPX
+    # after the unexplained host watchdog reset; the Android runtime is separate.
+    $start.Arguments='-M virt -accel tcg,thread=single -cpu max -m 512 -smp 1 -nodefaults -no-reboot '+
         '-kernel guest/images/kernel-guest-arm64 -initrd guest/maintenance/maintenance-initramfs.img '+
         '-append "console=ttyAMA0 panic=-1 habumi.maintenance='+$Transaction+'" '+
         '-drive file='+$relativeImage+',format=raw,if=virtio,cache=writeback,aio=threads '+
@@ -120,7 +122,7 @@ function Expand-HabumiData {
         # Also check exclusive access before publishing the durable recovery marker.
         $current=Get-HabumiOriginalRecord $target
         if($current.SHA256 -ne $original.SHA256 -or $current.Bytes -ne $original.Bytes){throw 'Original data changed during maintenance; not replaced.'}
-        Write-HabumiJson (Join-Path $directory 'growth.json') @{Schema='habumi.growth.v1';Image=$relative;Before=$before;After=$after;Tools=$tools}
+        Write-HabumiJson (Join-Path $directory 'growth.json') @{Schema='habumi.growth.v1';Image=$relative;Before=$before;After=$after;Tools=$tools;Execution=@{Accelerator='tcg';Thread='single';Cpu='max';MemoryMiB=512;Vcpu=1}}
         $journal=[ordered]@{Schema='habumi.restore.v1';Operation='Grow';Transaction=$id;Phase='Replacing';StartedUtc=[DateTime]::UtcNow.ToString('o');
             Files=@(@{Path=$relative;HadOriginal=$true;Original=$original;HasNew=$true;New=$new})}
         Write-HabumiJson (Join-Path $directory 'journal.json') $journal
