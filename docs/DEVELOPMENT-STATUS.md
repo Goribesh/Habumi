@@ -24,6 +24,7 @@
   peak. Isolated Android returned to Home in 31 s (QEMU 31164), no PowerShell
   above 512 MiB. Local patch receipt: `Builds/A4/VisibilityFix/patch`;
   archive SHA-256 `0D035E022E873D564EDEF62017F6DA42FD4DCB4DFAE330724A8BB29887713F81`.
+  The user confirmed the reopened Home is visible and usable on 2 November.
 - **Open limit:** new-dialog manual acceptance remains unverified. Original
   F571 candidate lacks the visibility correction; the isolated profile has the
   verified local software patch, with rollback originals retained. Physical
