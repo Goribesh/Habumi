@@ -36,6 +36,12 @@ Preserve settings, comments, and unknown configuration keys during edits; save a
 
 **Acceptance:** round-trip known and unknown settings, survive interrupted saves, toggle fullscreen without losing window state, capture on request, and verify rotation across supported orientations.
 
+**Progress:** [settings, fullscreen and PNG capture](A3-SETTINGS-DISPLAY.md)
+are implemented and pass native checks. An isolated package boots and captures
+a valid Home PNG; manual fullscreen/input/orientation acceptance is pending.
+The settings comparison labels the session's launch request explicitly; it does
+not present requested values as a live query of the GPU or guest display.
+
 ### A4 — Library, export, and manual updates
 
 Implement library behavior for G17 and shortcuts for G18 through the Vulkan launcher, waiting for Android readiness. Add file export for G19 and manual staged update/rollback for G25 and G26. Do not add automatic background updates.

@@ -27,6 +27,19 @@ bash app/scripts/test-guscio.sh     # 13 suites, no virtual machine needed
 
 Both must be run from MSYS2 CLANGARM64, with an **absolute path** to the script.
 
+The A3 settings and display checks are a separate native Windows recipe; they
+are not part of the 13 shell suites. With the MSYS2 CLANGARM64 compiler
+installed at its default path, run from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <absolute-project-path>\app\scripts\test-a3.ps1
+```
+
+It compiles with `-std=c11 -Wall -Werror`, runs the config-edit, atomic
+config-save and fullscreen tests, and invokes the screenshot checks. It does
+not start a virtual machine. Test fixtures are retained under
+`Desktop\Habumi-Workspace\Builds\Checks`.
+
 **Green tests do not mean the product links.** `test-guscio.sh` compiles one
 suite at a time; a missing source file in the product's own link step passes
 every suite and then fails. For shell code changes, run both tests and the build.

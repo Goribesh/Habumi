@@ -41,11 +41,11 @@ foreach($relative in $paths){
 }
 $source=Join-Path $repoRoot 'app/guscio'
 if($ShellSourceDirectory){$source=(Resolve-Path -LiteralPath $ShellSourceDirectory).Path}
-$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv','sessione')
+$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv','sessione','config-edit','config-save','settings','fullscreen','screenshot')
 $files=@($modules|ForEach-Object {Join-Path $source "$_.c"})
-& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32
+& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32 -lole32 -luuid -lwindowscodecs
 if($LASTEXITCODE){throw 'Release shell compilation failed.'}
-$launcherMode=if($DevelopmentBaseline -and $DevelopmentName -eq 'A1'){'1'}else{'0'}
+$launcherMode=if($DevelopmentBaseline -and $DevelopmentName -eq 'A0'){'0'}else{'1'}
 & (Join-Path $PSScriptRoot 'build-native-launcher.ps1') -OutputPath (Join-Path $stage 'Habumi.exe') -ChildWindow $launcherMode -MsysBin $MsysBin
 $encoding=[Text.UTF8Encoding]::new($false)
 $config="# Habumi $version native Vulkan prerelease`nvcpu=6`nmemory=6144`nwidth=800`nheight=1280`nguest_scale=yes`nhz=120`nbattery_hz=60`ndensity=426`ngl=wgl`ngl_flush_wait=no`nretries=3`nadb_port=$AdbPort`nclipboard_port=$ClipboardPort`naudio=on`nvariant=gapps`n"
@@ -81,6 +81,7 @@ foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profil
 }
 if($MaintenanceBuildRoot){foreach($relative in @('guest/maintenance/maintenance-build.json','guest/maintenance/maintenance-initramfs.img')){$critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}}}
 $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;CriticalFiles=$critical;
+    ChildWindow=($launcherMode -eq '1');CompactInterface=($launcherMode -eq '1');
     OfflineDataTools=$true;NativeDataManagement=$true;DataToolsSchema='habumi.backup.v1';
     OfflineDataGrowth=[bool]$MaintenanceBuildRoot;
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;

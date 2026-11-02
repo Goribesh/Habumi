@@ -15,10 +15,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <shlobj.h>
 #include "guscio.h"
 #include "scarica.h"
 #include "immagine-stato.h"
 #include "profilo-lock.h"
+#include "settings.h"
+#include "config-save.h"
+#include "screenshot.h"
 
 #define GUSCIO_MUTEX  "AndroidRuntimeGuscio.istanza"
 
@@ -1103,79 +1107,18 @@ static void variante_classifica_avvia(void)
     }
 }
 
-/* Riscrive SOLO la selezione "variant=..." di config.txt (chiave
- * eventualmente indentata, con o senza spazi attorno all'uguale, come
- * config_carica gia' tollera), lasciando ogni altra riga -- commenti compresi
- * -- intatta: e' la configurazione dell'UTENTE, non uno stato del programma
- * (quello e' runtime/variants.txt), e riscriverla da zero perderebbe ogni
- * commento che l'utente avesse aggiunto.
- *
- * Se la chiave compare piu' di una volta (caso anomalo: config_carica la
- * scriverebbe una volta sola, ma un file modificato a mano potrebbe averne
- * due) tutte le occorrenze si tolgono e ne resta esattamente una, nella
- * posizione della prima -- lasciarne una seconda invariata vorrebbe dire che
- * l'ultima riga del file deciderebbe di nuovo, e il cambio scomparirebbe al
- * prossimo avvio senza che nulla lo dica.
- *
- * "wb" e non "w" in scrittura, per lo stesso motivo di var_stato_scrivi in
- * varianti.c: su Windows "w" tradurrebbe ogni \n in \r\n. Su ogni fallimento
- * (file non leggibile, piu' grande del buffer, non riscrivibile) si registra
- * e non si cambia nulla su disco: g_c.variante in memoria e' gia' quella
- * nuova per QUESTA sessione (variante_applica assegna g_c.variante PRIMA di
- * chiamare questa funzione), ma la prossima sessione leggerebbe ancora la
- * vecchia -- si dichiara, non si finge un successo. */
+/* Il cambio di variante usa la stessa sostituzione atomica delle impostazioni.
+ * Un errore lascia disponibile il file precedente e viene dichiarato nel log. */
 static void variante_scrivi_configurazione(VarNome v)
 {
-    char percorso[MAX_PATH];
-    static char contenuto[65536];
-    static char nuovo[65536];
-    FILE *f;
-    size_t letti;
-    size_t scritti = 0;
-
-    guscio_percorso_accanto("config.txt", percorso, sizeof(percorso));
-
-    f = fopen(percorso, "rb");
-    if (!f) {
-        registro_riga(REG_GUSCIO, "variant: cannot read %s to "
-                      "write variant=%s: the change applies only to "
-                      "this run", percorso, var_testo(v));
+    char path[MAX_PATH],error[256];
+    guscio_percorso_accanto("config.txt",path,sizeof(path));
+    ConfigChange change={"variant",var_testo(v)};
+    if(!config_save(path,&change,1,error,sizeof(error))){
+        registro_riga(REG_GUSCIO,"variant: %s The change applies only to this session.",error);
         return;
     }
-    letti = fread(contenuto, 1, sizeof(contenuto) - 1, f);
-    if (!feof(f)) {
-        /* Piu' grande del buffer: si rifiuta invece di troncare "un po'",
-         * stesso principio di dati_comando_estrai su un comando che non ci
-         * sta. */
-        fclose(f);
-        registro_riga(REG_GUSCIO, "variant: %s is larger than %zu bytes, "
-                      "not rewriting it: the change applies only to this "
-                      "run", percorso, sizeof(contenuto) - 1);
-        return;
-    }
-    fclose(f);
-    contenuto[letti] = '\0';
-
-    scritti = var_config_riscrivi(contenuto, v, nuovo, sizeof(nuovo));
-    if (!scritti) {
-        registro_riga(REG_GUSCIO, "variant: %s not rewritten, the new "
-                      "configuration does not fit the buffer", percorso);
-        return;
-    }
-
-    f = fopen(percorso, "wb");
-    if (!f) {
-        registro_riga(REG_GUSCIO, "variant: cannot rewrite %s: the "
-                      "change applies only to this run", percorso);
-        return;
-    }
-    if (fwrite(nuovo, 1, scritti, f) != scritti) {
-        registro_riga(REG_GUSCIO, "variant: write of %s incomplete: the "
-                      "change may not have been saved", percorso);
-    }
-    fclose(f);
-    registro_riga(REG_GUSCIO, "variant: %s updated with variant=%s",
-                  percorso, var_testo(v));
+    registro_riga(REG_GUSCIO,"variant: config.txt saved atomically with variant=%s",var_testo(v));
 }
 
 /* Il cambio VERO, da chiamare SOLO col thread della finestra e SOLO a VM
@@ -1824,11 +1767,48 @@ static void guscio_chiudi_finestra(void)
  * girano sullo stesso thread della finestra di prima -- cambia soltanto CHI
  * le raggiunge. */
 #define UI_CONTROLLI_TIMER 2
+static bool g_screenshot;
+static wchar_t g_screenshot_folder[MAX_PATH];
 static void CALLBACK ui_controlli_timer(HWND h, UINT messaggio, UINT_PTR id, DWORD ora)
 {
     (void)messaggio; (void)ora;
     comandi_passo();
-    if (!comandi_in_corso()) { KillTimer(h, id); }
+    if(g_screenshot){
+        wchar_t message[256];int result=screenshot_poll(message,256);
+        if(result){
+            g_screenshot=false;char text[256]={0};
+            WideCharToMultiByte(CP_UTF8,0,message,-1,text,sizeof(text),NULL,NULL);
+            registro_riga(REG_GUSCIO,"screenshot: %s",text);
+            finestra_avviso(result>0?"Screenshot saved to Pictures\\Habumi.":text,false);
+        }
+    }
+    if (!comandi_in_corso() && !g_screenshot) { KillTimer(h, id); }
+}
+
+static bool screenshot_folder(void)
+{
+    wchar_t pictures[MAX_PATH];
+    if(FAILED(SHGetFolderPathW(NULL,CSIDL_MYPICTURES,NULL,SHGFP_TYPE_CURRENT,pictures)))return false;
+    if(swprintf(g_screenshot_folder,MAX_PATH,L"%ls\\Habumi",pictures)<0)return false;
+    return CreateDirectoryW(g_screenshot_folder,NULL) || GetLastError()==ERROR_ALREADY_EXISTS;
+}
+static void screenshot_request(void)
+{
+    if(g_chiudendo || vm_stato()!=VM_PRONTO || g_screenshot){finestra_avviso("Screenshot unavailable: Android is not ready or a capture is running.",g_screenshot);return;}
+    wchar_t target[MAX_PATH],adb_wide[MAX_PATH];char adb[MAX_PATH],utf8[MAX_PATH*3];SYSTEMTIME now;
+    GetLocalTime(&now);adb_percorso(adb,sizeof(adb));
+    if(!screenshot_folder() || !MultiByteToWideChar(CP_ACP,0,adb,-1,adb_wide,MAX_PATH) ||
+       !WideCharToMultiByte(CP_UTF8,0,adb_wide,-1,utf8,sizeof(utf8),NULL,NULL) ||
+       swprintf(target,MAX_PATH,L"%ls\\Habumi-%04u%02u%02u-%02u%02u%02u-%llu.png",g_screenshot_folder,
+        now.wYear,now.wMonth,now.wDay,now.wHour,now.wMinute,now.wSecond,(unsigned long long)GetTickCount64())<0){
+        finestra_avviso("Screenshot folder could not be prepared.",false);return;
+    }
+    if(!screenshot_start(utf8,g_c.porta_adb,target)){finestra_avviso("Screenshot could not be started.",false);return;}
+    g_screenshot=true;finestra_avviso("Saving screenshot...",true);
+    if(!SetTimer(finestra_handle(),UI_CONTROLLI_TIMER,50,ui_controlli_timer)){
+        screenshot_stop();g_screenshot=false;finestra_avviso("Screenshot cancelled: polling timer unavailable.",false);
+        registro_riga(REG_GUSCIO,"screenshot: polling timer unavailable; capture cancelled");
+    }
 }
 
 static void ui_accoda(ComandoUi tipo, int valore)
@@ -1962,6 +1942,14 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
             if (g_chiudendo) break;
             g_gestione_dati = true;
             PostMessageA(finestra_handle(),WM_APP+1,0,0);
+            break;
+        case ID_SETTINGS: {
+            char path[MAX_PATH];guscio_percorso_accanto("config.txt",path,sizeof(path));
+            settings_open(finestra_handle(),&g_c,path);break;
+        }
+        case ID_SCREENSHOT:screenshot_request();break;
+        case ID_OPEN_SHOTS:
+            if(screenshot_folder())ShellExecuteW(finestra_handle(),L"open",g_screenshot_folder,NULL,NULL,SW_SHOWNORMAL);
             break;
         default: break;
         }
@@ -2924,6 +2912,7 @@ int main(int argc, char **argv)
     vm_apri(&g_c);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
+        if(settings_message(&msg))continue;
         if (finestra_tastiera(&msg)) {
             continue;
         }
@@ -3052,6 +3041,7 @@ int main(int argc, char **argv)
         bool varianti_ferme = variante_ferma();
         bool appunti_fermi = appunti_ferma();
         bool sessione_fermata = sessione_ferma();
+        screenshot_stop();
 
         vm_chiudi();
         if (varianti_ferme && appunti_fermi && sessione_fermata) {

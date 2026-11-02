@@ -406,6 +406,7 @@ void finestra_schermo(int width, int height);
 /* Tab/Shift+Tab e Invio: solo i controlli del guscio, prima del dispatch. */
 bool finestra_tastiera(const MSG *msg);
 void finestra_fase(const char *nome, const char *esito);
+void finestra_avviso(const char *text,bool capturing);
 void finestra_bottoni(bool attivi);
 void finestra_bottone_variante(bool attivo);
 
@@ -453,6 +454,9 @@ void finestra_messaggi_guscio(FinMsgGuscio f);
 #define ID_TASTI    1008
 #define ID_VARIANTE 1009
 #define ID_DATI     1010
+#define ID_SETTINGS 1011
+#define ID_SCREENSHOT 1012
+#define ID_OPEN_SHOTS 1013
 
 /* --- tubo.c -------------------------------------------------------------- */
 

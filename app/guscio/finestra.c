@@ -27,6 +27,7 @@
 #include <commctrl.h>
 #include "guscio.h"
 #include "layout-compatto.h"
+#include "fullscreen.h"
 
 #define FIN_CLASSE   "AndroidRuntimeGuscio"
 #define FIN_LARGHEZZA 760
@@ -36,6 +37,7 @@
 #define FIN_MENU      1100
 #define FIN_LOG       1101
 #define FIN_ADATTA    1102
+#define FIN_FULLSCREEN 1103
 
 /* LE COSTANTI DI POSIZIONE, tutte a 96 DPI e tutte qui. Prima vivevano due
  * volte -- una nella creazione dei controlli e una nel gestore di WM_SIZE -- con
@@ -121,12 +123,15 @@ _Static_assert(FIN_LOG_TETTO > FIN_LOG_TRONCA + 8192,
  * finito. */
 static const Config *fin_config;
 static HWND fin_hwnd;
+static FullscreenState fin_fullscreen;
 static HWND fin_titolo;
 static HWND fin_fasi;
 static HWND fin_log_label;
 static HWND fin_log;
 static HWND fin_vista;
 static HWND fin_more, fin_log_finestra, fin_tooltips;
+static char fin_avviso[256];
+static bool fin_catturando;
 static int fin_guest_w, fin_guest_h;
 static void fin_disponi(int w, int a, UINT dpi);
 static void fin_adatta(bool iniziale);
@@ -420,6 +425,7 @@ static void fin_bordi(UINT dpi, int *width, int *height)
 
 static void fin_adatta(bool iniziale)
 {
+    if(fin_fullscreen.active)return;
     MONITORINFO monitor = {.cbSize = sizeof(monitor)};
     RECT current, client;
     int bx, by;
@@ -894,12 +900,25 @@ static void fin_apri_log(void)
     finestra_passo();
 }
 
+void finestra_avviso(const char *text,bool capturing)
+{
+    snprintf(fin_avviso,sizeof(fin_avviso),"%s",text?text:"");fin_catturando=capturing;
+    if(fin_tooltips && fin_more){
+        TOOLINFOA info={.cbSize=sizeof(info),.uFlags=TTF_IDISHWND,.hwnd=fin_hwnd,.uId=(UINT_PTR)fin_more,.lpszText=fin_avviso};
+        SendMessageA(fin_tooltips,TTM_UPDATETIPTEXTA,0,(LPARAM)&info);
+    }
+}
 static void fin_menu_mostra(void)
 {
     HMENU menu = CreatePopupMenu();
     RECT r;
     if (!menu || !GetWindowRect(fin_more, &r)) { if (menu) DestroyMenu(menu); return; }
     AppendMenuA(menu, MF_STRING, FIN_ADATTA, "Fit window");
+    AppendMenuA(menu, MF_STRING, FIN_FULLSCREEN, fin_fullscreen.active?"Exit full screen":"Full screen");
+    AppendMenuA(menu, MF_STRING, ID_SETTINGS, "Settings...");
+    AppendMenuA(menu, MF_STRING|(fin_catturando?MF_GRAYED:0), ID_SCREENSHOT, "Save screenshot");
+    AppendMenuA(menu, MF_STRING, ID_OPEN_SHOTS, "Open screenshots folder");
+    if(fin_avviso[0])AppendMenuA(menu,MF_STRING|MF_GRAYED,0,fin_avviso);
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     const int actions[] = {ID_POWER, ID_VOL_SU, ID_VOL_GIU, ID_TASTI, ID_VARIANTE};
     const char *labels[] = {"Power", "Volume up", "Volume down", "Key mapping...", "Android variant..."};
@@ -920,6 +939,7 @@ static void fin_menu_mostra(void)
     PostMessageA(fin_hwnd, WM_NULL, 0, 0);
     if (selected == FIN_LOG) { fin_apri_log(); }
     else if (selected == FIN_ADATTA) { fin_adatta(true); }
+    else if (selected == FIN_FULLSCREEN) { fullscreen_toggle(fin_hwnd,&fin_fullscreen); }
     else if (selected) { PostMessageA(fin_hwnd, WM_APP + 2, selected, (LPARAM)fin_more); }
 }
 
@@ -988,6 +1008,7 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_GETMINMAXINFO: {
+        if(fin_fullscreen.active)return 0;
         MINMAXINFO *misure = (MINMAXINFO *)lp;
         UINT dpi = dpi_di_finestra(h);
         if (fin_vista) {
@@ -1080,7 +1101,17 @@ static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         DragFinish((HDROP)wp);
         return 0;
 
+    case WM_DISPLAYCHANGE:
+        if(fin_fullscreen.active)fullscreen_monitor(h,&fin_fullscreen);
+        return 0;
     case WM_DPICHANGED: {
+        if(fin_fullscreen.active){
+            RECT cliente;
+            fullscreen_monitor(h,&fin_fullscreen);
+            GetClientRect(h,&cliente);
+            fin_disponi(cliente.right,cliente.bottom,HIWORD(wp));
+            return 0;
+        }
         /* LA FINESTRA E' PASSATA SU UNO SCHERMO CON SCALA DIVERSA.
          *
          * lParam porta il rettangolo SUGGERITO da Windows: si applica quello
