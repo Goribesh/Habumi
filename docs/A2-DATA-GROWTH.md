@@ -1,5 +1,10 @@
 # A2 offline data growth
 
+Publication update, 2 November 2026: the accepted A2 workflow is distributed in
+the [0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2).
+The earlier local milestones below retain their original dates and scope.
+
+
 This extends the [data foundation](A2-DATA-FOUNDATION.md). It is development
 functionality, not a published release or completion of A2's native data UI.
 

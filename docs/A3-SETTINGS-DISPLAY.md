@@ -40,7 +40,9 @@ and Android disks were preserved. Android reached readiness in 35.515 seconds;
 one on-request 1600x2560 PNG decoded correctly and visually showed Home. The A2
 proof-file hash and 16-GiB data capacity were rechecked. Evidence lives under
 `Habumi-Workspace/Builds/Checks/A3-20261102`. These are development observations,
-not a performance benchmark. Runtime distribution is pending.
+not a performance benchmark. A2/A3 are now distributed in the
+[0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2);
+the development package hash above remains a separate historical artifact.
 
 ## Manual acceptance, 2 November 2026
 

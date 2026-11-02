@@ -1,5 +1,10 @@
 # A2 data protection foundation - 19 October 2026
 
+Publication update, 2 November 2026: the accepted A2 workflow is distributed in
+the [0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2).
+The earlier local milestones below retain their original dates and scope.
+
+
 This is the first A2 milestone, not completion of the package. The development
 runtime now includes offline backup, staged restore, recovery and diagnostic
 tools. The later [offline growth milestone](A2-DATA-GROWTH.md) adds the maintenance

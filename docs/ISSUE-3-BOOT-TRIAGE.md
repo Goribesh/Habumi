@@ -16,7 +16,7 @@ machine has not been reproduced locally.
 
 ## What the repository establishes
 
-The published launcher retries by halving the configured vCPU count when a boot
+The rc.1 launcher retries by halving the configured vCPU count when a boot
 produces no serial lines, and it also degrades after repeated hangs at the same
 line count. Equal line counts do not establish equal stopping points. Its
 quiet-boot watchdog judges serial progress. The older report that
@@ -49,7 +49,9 @@ normalization, differing line counts, different stop messages, CPU changes,
 silence versus other exits, incomplete/overlong serial input and launch reset.
 The complete development shell links with `-Wall -Werror`. No VM was launched,
 no personal installation was modified, and no boot fix on the reported Surface
-is established. This change has not been published.
+is established. The shell recovery correction is included in
+[0.3.0-rc.2](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2);
+the underlying hardware issue remains open.
 
 ## Evidence needed
 

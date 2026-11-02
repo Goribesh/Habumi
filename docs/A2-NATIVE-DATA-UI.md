@@ -1,5 +1,10 @@
 # A2 native offline data management
 
+Publication update, 2 November 2026: the accepted A2 workflow is distributed in
+the [0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2).
+The earlier local milestones below retain their original dates and scope.
+
+
 Implemented in the local development candidate on 20 October 2026. This is
 implementation and targeted test evidence, not A2 runtime acceptance or a
 published release.
