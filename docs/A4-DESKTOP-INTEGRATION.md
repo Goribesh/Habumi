@@ -1,8 +1,8 @@
 # A4 desktop integration
 
-Local development, based on 0.3.0-rc.2. These additions are not part of the
-published rc.2 archive. The personal installation and published comparison
-package remain unchanged. Native UI acceptance is a separate gate.
+Accepted in the isolated development profile on 2 November 2026, based on
+0.3.0-rc.2. These additions are not part of the published rc.2 archive. The
+personal installation and published comparison package remain unchanged.
 
 ## Apps and Windows shortcuts
 
@@ -111,8 +111,13 @@ processes and terminates its own timed-out child. The new timeout regression
 and five existing mocked Check cases pass under Windows PowerShell 5.1:
 4.1 seconds, 85 MiB parent peak under an external resource guard. Android then
 returned to Home in 31 seconds without a high-memory PowerShell process.
+The user subsequently confirmed that the update panel is visible and Check
+completes successfully. This accepts the manual check workflow; it does not
+claim a future GitHub download/install or physical power-loss test.
 
 Evidence lives under `Habumi-Workspace/Builds/Checks/A4-*` and the A4 package
 directory. Live app-launch evidence is recorded in the development checkpoint
-after execution. Manual acceptance of the new
-dialogs remains open until the user confirms it.
+after execution. The user confirmed Apps opens Calculator, file export
+completes, Updates is visible and Check succeeds, and the reopened Home is
+usable. A4 is accepted on this profile. A5 packaging and release validation
+remain separate gates.

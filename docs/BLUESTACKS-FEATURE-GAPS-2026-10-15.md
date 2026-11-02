@@ -99,9 +99,9 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 
 | ID | Priority | Capability | Status | Work remaining in Habumi |
 | --- | --- | --- | --- | --- |
-| G17 | P2 | Integrated app library | Implemented locally; pending UI acceptance/release | The Habumi shell lists installed launcher apps by human-readable name and launches a selected app. App-info and uninstall are not included. |
-| G18 | P1 | Windows app shortcuts | Implemented locally; pending UI acceptance/release | Shortcuts target the selected app and profile; startup waits for Android readiness. Not yet published. |
-| G19 | P1 | Media browser/export | Partial; export implemented locally | File import exists. A guest-path to Windows single-file export with an explicit destination is implemented locally; a verified 65,539-byte export matched its expected hash. UI acceptance and release inclusion are pending. |
+| G17 | P2 | Integrated app library | Accepted in isolated profile; unpublished | The Habumi shell lists installed launcher apps by human-readable name and launches a selected app. App-info and uninstall are not included. |
+| G18 | P1 | Windows app shortcuts | Accepted in isolated profile; unpublished | Shortcuts target the selected app and profile; startup waits for Android readiness. Not yet published. |
+| G19 | P1 | Media browser/export | Partial; export implemented locally | File import exists. A guest-path to Windows single-file export with an explicit destination is implemented locally; a verified 65,539-byte export matched its expected hash. UI acceptance passed in the isolated profile; release inclusion remains pending. |
 | G20 | P2 | XAPK/split APK installation | Missing | Ordinary APK installation is present. Add archive/split validation and OBB/data handling where applicable. |
 | G21 | P1 | Screenshot action | Partial | More captures an on-request validated PNG to Pictures/Habumi and can open that folder. A destination chooser and video recording are not included. |
 | G22 | P2 | Video recording | Missing | Add start/stop, output path, audio policy and a validated encoder path without forcing unnecessary extra copies. |
@@ -194,7 +194,7 @@ added to the implementation plan.
 RC2 closes the settings, fullscreen, screenshot and manual rotation portions of
 G01, G09, G21 and H03. The local A4 work adds the app library, Windows
 shortcuts, verified single-file export and a manual staged updater with
-rollback. UI acceptance and release inclusion remain pending; see [A4 desktop
+rollback. UI acceptance passed in the isolated profile; release inclusion remains pending; see [A4 desktop
 integration](A4-DESKTOP-INTEGRATION.md). RC2 backup/restore remains the released
 G26 capability. Store/gaming parity, split APK handling and app uninstall are
 not claimed. Continue with app-requested orientation, applied-settings

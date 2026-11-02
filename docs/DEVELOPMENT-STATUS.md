@@ -1,6 +1,6 @@
 # Development status
 
-- **Commit:** local A4 correction; parent `43e591c`. Not pushed.
+- **Commit:** A4 correction `705ed76`; Home confirmation `27183e9`. Not pushed.
 - **Completed:** local app library and launcher-based Windows shortcuts;
   verified shared-storage file export; manual staged software update, rollback
   and recovery. Candidate: `Packages/Habumi-A4-20261102-acceptance`, 356 entries,
@@ -25,14 +25,17 @@
   above 512 MiB. Local patch receipt: `Builds/A4/VisibilityFix/patch`;
   archive SHA-256 `0D035E022E873D564EDEF62017F6DA42FD4DCB4DFAE330724A8BB29887713F81`.
   The user confirmed the reopened Home is visible and usable on 2 November.
-- **Open limit:** new-dialog manual acceptance remains unverified. Original
+  The user also confirmed Updates is visible and Check completes successfully.
+  The user confirmed Apps opens Calculator and the file-export dialog completes
+  the shared-storage export. A4 is accepted on this isolated profile.
+- **Open limit:** Original
   F571 candidate lacks the visibility correction; the isolated profile has the
   verified local software patch, with rollback originals retained. Physical
   power-loss, signing and broader hardware remain A5 gates.
 - **Distribution:** public rc.2 and the personal installation are unchanged.
-  A4 is implemented locally, not accepted or distributed.
-- **Next:** user acceptance of More > Apps, Export Android file, and Updates.
-  Record results before marking A4 accepted or preparing A5. Do not repeat
-  inventories/builds without a new change or an unresolved regression.
+  A4 is accepted locally, not distributed.
+- **Next:** A5: consolidate the visibility correction into a complete candidate,
+  then validate installation, variants, media, clipboard and standby; record
+  signing/provenance gates. Reuse A4 evidence instead of repeating its suites.
 
 Details and evidence: [A4 desktop integration](A4-DESKTOP-INTEGRATION.md).
