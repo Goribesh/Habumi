@@ -1,6 +1,44 @@
 # Release notes
 
-## 0.3.0-rc.1 — native Vulkan prerelease
+## 0.3.0-rc.2 — A2 data tools and A3 interface
+
+This prerelease includes a compact Android window with a thin right toolbar.
+More provides settings, fullscreen, screenshot capture and data maintenance.
+Settings cover CPU, memory, guest dimensions, refresh limits, density, audio
+and guest scaling. They save atomically while preserving comments and unknown
+keys; restart Habumi to apply them. Startup config lists requested settings,
+not GPU-applied values. The graphics backend is fixed to native Vulkan.
+Screenshots are on-demand validated PNG files saved to Pictures/Habumi.
+
+Offline data maintenance provides backup, restore, recovery, diagnostics and
+grow-only 4-to-16-GiB capacity using TCG. Growth verifies a staged copy and
+retains the original. These operations require the matching pinned system and
+vendor images; image migration is not provided.
+
+The fresh 347-entry RC2 candidate package created a new 4 GiB data image using
+the pinned read-only GApps and vendor images. It reached Android ready in
+51.578 seconds at density 426 and 1600x2560, presented a valid launcher PNG,
+and shut down normally in 5.500 seconds. One Vulkan device was enumerated;
+`gpuvkjson` returned `[{}]`, which does not establish a physical GPU version.
+Navigation passed. No FATAL, RCU stall or kernel panic was observed in this run.
+
+The development build passed 13 shell suites / 702 checks and 57 focused A3
+checks, plus screenshot failure cases. Manual acceptance passed fullscreen
+entry and exit, screenshots, rotation, and physical touch and keyboard in both
+orientations. The settings UI saved 90 Hz; the first close took 5.547 seconds.
+After restart, the QEMU log confirmed 90 Hz and Android reached ready in
+36.000 seconds. The second close took 4.500 seconds; settings were atomically
+restored to 120 Hz while preserving an unknown key and comment. The profile
+was left offline. These checks do not establish behavior on other hardware.
+
+Issue #3 retry logic has been corrected, but the reported target-CPU slowdown
+around `chr_dev_init` and THP remains unresolved and needs raw logs and hardware
+confirmation. The original hardware-watchdog trigger is unknown. Other devices,
+overnight use and hibernation remain unvalidated. Binaries are unsigned, the
+full dependency/license inventory is incomplete, and the A4 updater is not
+implemented. No general performance or battery-life guarantee is made.
+
+## Historical — 0.3.0-rc.1 native Vulkan prerelease
 
 This prerelease introduces native Qualcomm Vulkan through Venus;
 GLES rendering and window composition use Zink. On the development machine,
@@ -61,7 +99,7 @@ switch in both directions still need validation. These limits are recorded in
 The following entries record the state and tests from the 0.2.4 preparation
 period. Statements about local installation, the running process or whether an
 archive had been rebuilt apply only to that historical period; see the current
-0.3.0-rc.1 section above for the present candidate status.
+0.3.0-rc.2 section above for the present candidate status.
 
 ARM WHPX exit statistics and periodic program-counter probes now require
 `WINQ_WHPX_STAT=1`. Normal runs skip their counters/timings, statistic-thread

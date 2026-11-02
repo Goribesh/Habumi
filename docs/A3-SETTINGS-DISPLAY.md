@@ -40,14 +40,20 @@ and Android disks were preserved. Android reached readiness in 35.515 seconds;
 one on-request 1600x2560 PNG decoded correctly and visually showed Home. The A2
 proof-file hash and 16-GiB data capacity were rechecked. Evidence lives under
 `Habumi-Workspace/Builds/Checks/A3-20261102`. These are development observations,
-not a performance benchmark. Manual acceptance and distribution are pending.
+not a performance benchmark. Runtime distribution is pending.
 
-## Acceptance still needed
+## Manual acceptance, 2 November 2026
 
-- On a real display, enter fullscreen and exit through the always-visible More
-  menu; verify that the original window state returns.
-- Save settings, close and reopen Habumi, and confirm the requested values at
-  startup.
-- Capture both portrait and landscape Android screens and inspect the PNGs.
-- Check physical keyboard and touch input in both orientations.
-- Multi-monitor behavior has not been tested on physical displays.
+The user confirmed fullscreen entry/exit, the screenshot action, rotation and
+physical keyboard/touch in both orientations. They then saved the refresh limit
+as 90 Hz in Settings and closed normally (5.547 s). The next launch requested
+90 Hz; QEMU confirmed both its presentation interval and the rate announced to
+Android. Readiness took 36.000 s. Normal close took 4.500 s; the native atomic
+save routine restored 120 Hz while offline, preserving the A2 comment/unknown
+key. The profile is left closed for release preparation.
+
+A3's daily-use workflow is accepted on this Surface. Multi-monitor behavior is
+not physically tested. The settings comparison deliberately identifies launch
+requests rather than presenting them as current GPU/guest queries. Signing,
+broader hardware and long standby validation belong to the remaining release
+gates; no general stability or performance guarantee follows.

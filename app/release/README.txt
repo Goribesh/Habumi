@@ -1,354 +1,95 @@
-Habumi - README
-=======================
+Habumi 0.3.0-rc.2 prerelease
+===========================
 
-RELEASE STATUS: 0.3.0-rc.1 PRERELEASE
-------------------------------------------
+STATUS: experimental prerelease; not a stable release
 
-This prerelease uses native Qualcomm Vulkan through Venus and Zink for GLES
-rendering and window composition. Release downloads and checksum files are at:
-https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1
-A development-machine test completed 3DMark Wild Life with visible scenes, but
-this is not broad hardware coverage or a guarantee for other applications.
-The benchmark displayed "Maxed out", so its internal score is not an official
-comparative score. A clean-data boot, readable Home, Vulkan enumeration, navigation and normal shutdown passed locally.
+Habumi runs Android 13 on Windows 11 ARM64. Graphics require a compatible
+Qualcomm Vulkan driver. This package was checked on one development PC; other
+GPUs and computers have not been validated. No general performance or battery
+life guarantee is made.
 
-The final package reboot reached readiness in 27.656 seconds and closed
-normally in 5.016 seconds. A SystemUI AppOps exception occurred during first
-initialization before Home recovered. Repeated overnight standby/hibernation,
-other hardware, Google sign-in, first-run download dialogs and bidirectional
-variant switching still need validation. This release is experimental.
-
-Use a new, separate installation directory. The package contains no user's
-Android data. System and vendor images are downloaded and checked against
-published hashes, and the candidate creates a new 4 GiB data image. Do not
-overwrite an older installation or reuse its writable data image. A 16 GiB
-data image was used only in a local test profile and is not the release target.
-
-Expected starting configuration: GApps, 800x1280 logical display, density 426,
-1600x2560 guest framebuffer at 200% Windows scale,
-120 Hz on AC and 60 Hz on battery. These settings do not promise battery or
-energy savings.
-
-Initial graphics support is limited to Qualcomm Snapdragon Windows ARM64
-systems with a compatible native Vulkan ICD. If the ICD is missing, startup
-reports an error; it must not silently fall back to software rendering. The
-host Mesa 26.2.4 Zink build comes from the pinned mmozeiko/build-mesa asset.
-The machine's stock Vulkan driver is not redistributed. Other GPUs and
-hardware remain unverified.
-
-Async startup, shutdown, navigation, density and guest rotation passed live
-test-profile checks. Thirteen public shell suites (648 checks) and 133 async
-control checks passed; a normal test-profile shutdown took about five seconds.
-Windows suspend/resume callback handling is experimental and opt-in. A
-callback and post-resume boot query were observed, but repeated hibernation
-reliability has not been established. A clean-data packaged boot and normal shutdown passed locally.
-
-An archived synthetic Vulkan prototype estimated 9.2% median frame-time
-overhead, with an uncertainty interval crossing 10% and no confirmed FPS gain.
-It was not adopted as an optimization. No battery or energy benefit is claimed.
-Signing, an updater, hardware coverage and the complete runtime DLL license
-inventory remain outstanding.
-
-
-WHAT THIS IS
-------------
-
-An Android emulator for Windows 11 ARM64: it runs NATIVE ARM64 Android,
-with no instruction translation at all. Your PC's processor executes
-directly the same ARM64 instructions a real phone would run, instead of
-translating them from another architecture: that is why it runs well on
-a Windows PC with an ARM64 processor.
-
-
-WHAT YOU NEED
--------------
-
-- Windows 11 ARM64. The program uses the "tar.exe" included in
-  Windows 11 to extract the images it downloads: that is a real
-  dependency, not a detail.
-- About 8 GB of free disk space.
-- About 805 MB of network traffic on the first run (see below).
-- The Windows feature "Windows Hypervisor Platform" enabled.
-  If it is missing, the program tells you at startup and shows you the
-  command to enable it. It is the only thing that needs administrator
-  rights, it is done once, and it wants a reboot.
-
-
-HOW TO START IT
----------------
-
-Unpack this archive into whatever folder you like - any path works -
-and double-click:
-
-    Habumi.exe
-
-which sits in the main folder, the one you see right after unpacking.
-This graphical launcher starts Windows PowerShell without creating a console,
-prepares Vulkan and launches the shell at
-
-    runtime\bin\Habumi.exe
-
-through `Start-Habumi.ps1`. Do not start `runtime\bin\Habumi.exe` directly
-for Vulkan: the launcher selects the native ICD and sets the required process
-environment for Venus and Zink. Start.cmd remains available for compatibility;
-opening a .cmd file can still briefly display a command-prompt window.
-
-There is nothing to install: no Windows registry entries and no
-administrator rights to USE the program. The only thing that needs them
-is enabling Windows virtualization, if it is not already on - see WHAT
-YOU NEED above. To uninstall, see further down: you delete the folder.
-
-
-OFFLINE DATA TOOLS
------------------
-
-Open "Data management..." from Habumi's More menu. Android shuts down normally
-before the native data panel opens. You can also run "Habumi.exe --data" without
-starting Android. The panel provides backup, restore, grow-only capacity selection,
-interruption recovery and local diagnostic export. It shows operation phases;
-closing during work waits for completion. Failed operations remain visible with
-their details folder. "Start Android" returns to the runtime after maintenance.
-Pending recovery opens this panel automatically and blocks Android startup.
-
-Close Android normally before running Manage-Data.ps1 directly from this folder.
-Example commands (choose a new backup directory outside the installation):
-
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Backup -Path D:\Backups\Habumi-01
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Restore -Path D:\Backups\Habumi-01
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Recover
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Diagnostics -Path D:\Backups\Habumi-diagnostics-01
-
-Backup includes both existing data images, configuration and keymaps. Reference
-Android images are identified by hashes, not copied. Restore requires matching
-reference images, verifies a complete staging copy and retains previous files
-under maintenance/<transaction>/original. Interrupted replacement blocks startup
-until Recover completes. Failed or incomplete backups are never published at the
-requested destination; their .partial directories remain available for inspection.
-Diagnostics exports bounded recent logs, system/driver information, configured
-settings and metadata, without data-image bytes. Unknown config values are
-excluded; applied settings are marked unavailable until actual evidence exists.
-Diagnostic export is also available while recovery is pending, with Android off.
-It includes up to 16 maintenance summaries and the last 256 KiB of each serial
-and QEMU maintenance log. Staged/original disks contribute sizes only. Invalid
-metadata is reported without automatic repair; an unreferenced stage is a clue
-for diagnosis, not proof that live data needs recovery.
-Development packages with guest/maintenance support offline data growth:
-
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Manage-Data.ps1 -Operation Grow -Image data-gapps.img -SizeGiB 16
-
-Use data.img instead for the non-GApps variant. The selected image must already
-exist. Only growth is supported (4-16 GiB); shrinking is refused. Habumi checks
-free space for a complete new disk, grows a staging copy using its bundled ARM64
-maintenance guest, verifies ext4 geometry/UUID/features and retains the original.
-No WSL installation is needed to use this command. Keep the previous image under
-maintenance/<transaction>/original until the enlarged profile is verified.
-If maintenance fails before replacement, the original remains active and the
-staged copy/logs remain under maintenance for inspection. An interrupted replacement
-uses the same Recover command as restore. Native actions use these same guarded
-operations; the CLI remains available for diagnostics and scripted maintenance.
-
-
-THE FIRST TIME, WINDOWS WILL WARN YOU
---------------------------------------
-
-This program is not signed with a certificate: signing costs money, and
-for now it is not signed. On the first run Windows will therefore show
-the blue "Windows protected your PC" screen. To go ahead: "More info",
-then "Run anyway".
-
-It is a warning about where the file CAME FROM, not about what is in it:
-Windows is saying it does not know who wrote it, not that it found
-something.
-
-
-WHAT HAPPENS ON THE FIRST RUN
-------------------------------
-
-On the first run the program finds the Android images missing and
-downloads them by itself, from the official images of the Waydroid
-project hosted on SourceForge:
-
-- "vendor.img" (an archive of about 74 MB)
-- "system.img" (an archive of about 728 MB)
-
-For each of them it verifies the sha256 the Waydroid project publishes
-before using it, so an interrupted or corrupted download does not pass
-unnoticed. At the end it also creates the Android "/data" by itself
-(starting from an empty image included in the package).
-
-So an Internet connection is needed on the first run. On later runs the
-images are already on disk and are not downloaded again.
-
-
-THE TWO VARIANTS: VANILLA AND GAPPS
-------------------------------------
-
-The program can run Android in two variants. The 0.3.0-rc.1 candidate is
-expected to start with GApps by default:
-
-- VANILLA: without the Google apps (Play Store, Gmail, and so on).
-- GAPPS: with the Google apps included.
-
-You choose with the "variant" button in the program window. The first
-time you choose GAPPS, the program downloads its image (about 1.17 GB)
-and asks you before doing it, telling you how many bytes it will
-download.
-
-The two variants live side by side: each has its own separate "/data",
-that is, its own installed apps and its own data. Switching from one to
-the other does NOT erase anything: you can go back to the previous
-variant and find everything as you left it.
-
-
-THE KEY MAP
------------
-
-For games that play better with a keyboard than with fingers, the "keys"
-button opens a menu with the available mapping profiles, in
-"runtime\keymaps\" (.txt files): each profile assigns a key to a point
-on the Android screen, and the "WASD" keys can become a virtual stick.
-
-There is also a quick shortcut, "Ctrl+Alt+T", which turns the last
-chosen profile on or off even when the program window is not the active
-one.
-
-WARNING: while the program is open, the "Ctrl+Alt+T" combination is
-taken away from ALL of Windows, not just from the program. If another
-application uses that same shortcut, it will not work while
-Habumi.exe is running.
-
-
-SETTINGS
---------
-
-"runtime\bin\config.txt" holds the settings: number of virtual CPUs,
-memory, resolution, refresh rate, and a few more. Every key carries,
-right next to it, the measurement that decided its value - so you can
-tell what you are trading before you change one.
-
-A key that cannot be read, or that is out of range, does NOT stop the
-program: it is ignored and the reason goes into the log.
-
-
-HOW TO UNINSTALL
+BEFORE YOU START
 ----------------
 
-Delete the folder where you unpacked the archive. The program leaves
-nothing anywhere else: no registry entries, no files outside its own
-folder.
+Use a new, separate folder for Habumi. Do not overwrite an older installation
+or reuse its Android data. Allow about 12 GB of free disk space and about
+1.3 GB of first-run network traffic for the default GApps profile. The first
+run downloads the pinned 20260927 GApps and vendor images and checks their
+published hashes. Windows Hypervisor Platform must be enabled. Ordinary use
+does not require administrator rights; enabling virtualization may require
+them and a restart.
 
+START AND STOP
+--------------
 
-IF SOMETHING GOES WRONG
-------------------------
+Unpack the archive, then run Habumi.exe from the top-level folder. The launcher
+prepares the graphics environment. Do not start runtime\bin\Habumi.exe
+directly. Close Habumi normally and let Android shut down before moving,
+backing up, or restoring profile files.
 
-The program's logs are in the "guest\logs\" folder: in particular
-"registro-guscio.log" (the program's own decisions) and
-"sessione-viva.log" (what Android says while booting). The last ten
-sessions are archived in "guest\logs\archivio\", so a problem that
-happened on the previous run is not lost when you restart.
+ANDROID DATA
+------------
 
-In the log, lines are tagged by who wrote them: [shell] is this program,
-[qemu] is the emulator, [guest] is Android itself.
+The More menu opens Data management while Android is stopped. It can back up,
+restore, recover an interrupted operation, export diagnostics, and grow the
+selected data image from 4 GiB to 16 GiB. Growth uses software emulation (TCG),
+verifies the expanded copy and retains the original. Growth is one-way; shrinking
+is not supported. Backup and restore require the matching pinned system and
+vendor images; migrating between image versions is not provided. Backups include
+profile data, configuration and key maps. Store backups outside this folder.
+Diagnostics contain logs and system details, not data-image contents.
+Manage-Data.ps1 is also included for command-line maintenance.
 
-One thing in the log is expected and is not a fault. Android keeps
-looking for an old media component called OMX, about once a second and
-forever, because this system image does not ship it: it uses the newer
-Codec2 path instead, and video and audio decoding work through that.
-Those lines would fill the log, so the program hides them and keeps
-count, writing "OMX HAL lookups suppressed so far: N" every hundred.
-Seeing that number grow is normal.
+SETTINGS AND DISPLAY
+--------------------
 
+Choose More > Settings to change CPU cores, memory, guest width and height,
+refresh limits, density, audio, and guest scaling. Saving is atomic and keeps
+comments and unknown configuration entries. Close and reopen Habumi to apply
+saved settings. Startup config shows requested values; it does not read back
+applied display values from the GPU. This build uses its fixed native Vulkan
+graphics backend.
 
-LICENSES AND SOURCE CODE
-=========================
+Choose More > Full screen to enter fullscreen. More remains available; choose
+Exit full screen to return to the previous window. No F11 shortcut is promised.
+Use the Rotate control to change Android orientation. Check that apps and input
+work as expected after rotation.
 
-This program includes third-party components under different licenses.
-The full texts are in the "LICENSES\" folder, next to this file.
+Choose More > Save screenshot to capture Android on request. Validated PNG
+files are saved under Pictures\Habumi. Choose More > Open screenshots folder
+to view them. Capture uses ADB when requested; it does not continuously copy
+frames.
 
-QEMU, AND IT IS MODIFIED
--------------------------
+KEYS AND CONTROLS
+-----------------
 
-The heart of the emulation is QEMU, which is free software under the
-GNU General Public License version 2 (GPLv2). Our copy of QEMU is NOT
-the original one: it contains "winq", a display backend written by us,
-integrated into QEMU's source tree. The GPL requires anyone who
-redistributes a modified binary to offer the corresponding source - and
-this is that offer, made precisely rather than generically:
+The compact right toolbar provides Android navigation and rotation. More
+contains additional actions. Habumi supports touch and keyboard input, though
+physical input on other hardware has not been established. Key-map profiles
+are available under runtime\keymaps; Ctrl+Alt+T toggles the selected profile
+while Habumi is open and reserves that shortcut from other Windows apps.
 
-- Starting point: QEMU version 11.0.3, downloadable from the project's
-  official site, https://www.qemu.org (sources also at
-  https://download.qemu.org/qemu-11.0.3.tar.xz).
-- Our changes: the patches included in "qemu/patches/" in this
-  project's repository. Applied on top of exactly the version named
-  above, they reproduce the code running in this package.
-- The full text of the license: "LICENSES\QEMU-COPYING.txt", copied
-  verbatim from our own copy of QEMU.
+KNOWN LIMITS
+------------
 
-Anyone who wants the corresponding source can write to the address
-given on the page you obtained this archive from.
+This prerelease has been exercised on one development computer. Manual
+acceptance covered fullscreen entry and exit, screenshots, rotation, and
+physical touch and keyboard in both orientations. Other hardware, multiple
+physical monitors, overnight use, and sleep or hibernation need further testing.
+The original hardware-watchdog trigger is unknown. Issue #3 retry logic was
+corrected, but a slowdown around chr_dev_init/THP remains open and needs
+target-hardware logs. No general stability or performance claim follows from
+the local checks.
 
-MESA OPENGL IMPLEMENTATION
-----------------------------
+The program is unsigned, so Windows may show a publisher warning. Signing,
+complete third-party license review, broader hardware checks, and overnight
+and hibernation validation remain pending. There is no automatic updater.
+Consult LICENSES for notices and source information. This is not a stable
+release.
 
-"opengl32.dll" in "runtime\bin" is Mesa 26.2.4 with the Zink driver,
-based on the pinned Windows ARM64 asset from mmozeiko/build-mesa. It is
-not the OpenGL implementation shipped with Windows. The development machine's
-Qualcomm Vulkan ICD is selected by the launcher and is not redistributed by
-this package. If the required ICD is unavailable, the launcher reports an
-error rather than choosing software rendering.
-
-The Mesa starting point, license text and the fact that Mesa is not uniformly
-MIT are documented in "LICENSES\MESA-NOTA.txt". Other GPUs have not been
-validated for this candidate.
-
-
-VIRGLRENDERER, ALSO MODIFIED
------------------------------
-
-"libvirglrenderer-1.dll" is virglrenderer, MIT: it turns the guest's
-graphics commands into commands for the host's GPU. Our copy carries a
-fork's worth of changes, and the patches are in "research/patches/" in
-this project's repository. The license is MIT; the upstream project is
-at https://gitlab.freedesktop.org/virgl/virglrenderer.
-
-
-The third-party libraries in runtime\bin
------------------------------------------
-
-The 107 DLLs in "runtime\bin" - "opengl32.dll" is ours and is
-counted separately, above - come from the MSYS2 project (built for
-ARM64 with clang) and are all needed for QEMU to work: a census measured
-against the running program verified that nearly all of them are loaded
-directly by QEMU, and the two remaining ones are needed by "adb.exe".
-See "LICENSES\DLL-MSYS2-NOTA.txt" for the details, where they come from,
-and - stated openly - what is still missing: the exact license text of
-each of the 107 DLLs has not been collected individually. That is work
-to be completed before a release aimed at a wider audience than one
-internal test, not an oversight being hidden.
-
-adb and its two DLLs
----------------------
-
-"adb.exe", "AdbWinApi.dll" and "AdbWinUsbApi.dll" come from Google's
-Android SDK Platform-Tools, distributed under the Apache License 2.0.
-The official license text, as Google distributes it together with those
-files, is in "LICENSES\ANDROID-PLATFORM-TOOLS-NOTICE.txt".
-
-The audio HAL derived from Waydroid
-------------------------------------
-
-A small 19 KB file ("audio.primary.waydroid.so", included in this
-project's initramfs) is derived from the audio HAL of the Waydroid
-project, itself based on the Android Open Source Project, under the
-Apache License 2.0 - a license that allows redistributing a modified
-binary, provided its origin is attributed. The license text is in
-"LICENSES\APACHE-2.0.txt", and the detailed attribution (what was
-changed and why) is in "LICENSES\HAL-AUDIO-ATTRIBUZIONE.txt".
-
-The Android images
+REPORTING A PROBLEM
 -------------------
 
-"vendor.img" and "system.img" (see "WHAT HAPPENS ON THE FIRST RUN") are
-not redistributed by this package: they download themselves, unmodified,
-from the Waydroid project's official sources on the first run, so their
-licenses do not apply to the archive you unpacked.
+Include the Windows version, CPU model, and files from guest\logs, especially
+registro-guscio.log and sessione-viva.log. Remove personal information before
+sharing logs or diagnostics.

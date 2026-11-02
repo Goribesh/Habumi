@@ -1,10 +1,9 @@
 # Known issues
 
 This page describes known limits of the
-[0.3.0-rc.1 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1).
-Historical observations are identified as such; a documentation update is not
-a new runtime test. Package checks are recorded in
-[the release validation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
+[0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2).
+Historical observations are identified as such. Package checks are recorded in
+[the RC2 validation record](docs/RELEASE-READINESS-0.3.0-rc.2.md).
 
 ## Hardware and boot
 
@@ -22,19 +21,12 @@ succeeded, but repeated hangs have also been observed. `vcpu=1` in
 machine. Retries halve the vCPU count after no serial output, or after repeated
 hangs at the same serial position. The shipped default remains `vcpu=6`.
 
-**Issue #3 reports a separate slow boot on a Surface Pro 12".** The reporter
-describes a vanilla 0.3.0-rc.1 boot on Snapdragon X / Adreno X1-45 where six
-and three vCPUs stop at `chr_dev_init` for more than 290 seconds, while one
-vCPU continues. They also report that `transparent_hugepage=never` reduced the
-zygote interval from 647 to 315 seconds, with severe slowness remaining. These
-are reporter observations, not locally confirmed measurements; no raw logs or
-target-machine reproduction were supplied. The earlier `vcpu=1` result was
-reliable on a different reporting machine and is not a guarantee for this
-report. Published retry degradation compares serial line counts. Development
-now compares normalized final serial content for two silence timeouts at the
-same vCPU count. Shell regression tests pass; this is not a target-hardware
-fix or a released change. See
-[the issue 3 triage record](docs/ISSUE-3-BOOT-TRIAGE.md).
+**Issue #3 retry handling is corrected, but the reported CPU slowdown remains
+unresolved.** The Surface Pro 12" report describes a slowdown around
+`chr_dev_init` and THP with multiple vCPUs. Retry logic now compares normalized
+serial progress to avoid an incorrect retry decision, but that does not fix or
+explain the underlying slowdown. Raw logs and target-hardware confirmation are
+still needed. See [the issue 3 triage record](docs/ISSUE-3-BOOT-TRIAGE.md).
 
 **Older boot-watchdog descriptions are obsolete.** 0.2.1 and earlier could
 kill a healthy but slow boot. The current kernel-progress watchdog uses a
@@ -47,11 +39,13 @@ the historical 0.2.4 cleanup fixes.
 
 ## Android stability and audio
 
-**A fresh prerelease startup recorded a SystemUI exception.** The clean
+**A historical fresh startup recorded a SystemUI exception.** The earlier clean
 20260927 GApps initialization captured an AppOps-related null-pointer exception
 in SystemUI; Android subsequently reached a readable Home and accepted
-navigation. Its recurrence rate is not established. See the
-[release preparation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
+navigation. The RC2 clean boot reached ready without a FATAL, RCU stall or
+kernel panic, but one boot does not establish that the historical exception or
+other Android faults cannot recur. See the
+[RC2 validation record](docs/RELEASE-READINESS-0.3.0-rc.2.md).
 
 Development after 0.3.0-rc.1 reproduced the same exception on another fresh
 data image. A new shell check waits for stable SystemUI/compositor PIDs before
@@ -95,32 +89,21 @@ The ring size is not a measurement of end-to-end audio latency.
 
 ## Graphics and window
 
-**Manual rotation is fixed in the development profile; published builds retain
-the older presentation limitation.** The native WGL/Zink candidate passed
-upright portrait/landscape rendering and matching mouse clicks. It also fits
-the host window within the monitor work area. Automatic app-requested orientation
-changes and the ANGLE path remain unvalidated. See
-[the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md).
+**Manual rotation and physical input passed RC2 acceptance on one PC.** The
+candidate passed portrait and landscape checks with touch and keyboard. This
+does not validate app-requested orientation changes, other GPU paths, DPI
+transitions or multiple physical monitors. See
+[the RC2 validation record](docs/RELEASE-READINESS-0.3.0-rc.2.md).
 
-**Vulkan is verified on the development machine, not across supported
-hardware.** A test-only candidate using native Qualcomm Vulkan through Venus
-and Zink booted Android, presented visible frames and completed 3DMark Wild
-Life; the user confirmed the 3D scenes were visible. The result was marked
-“Maxed out” because portions exceeded 60 FPS, so its internal score is not an
-official comparative score. A separate archived prototype estimated 9.2%
-median frame-time overhead for one synthetic workload, but its uncertainty
-interval crossed 10%, no FPS improvement was confirmed, and it was not adopted
-as a product optimization. Neither result guarantees performance or rendering
-correctness on other devices or applications. The standard installation does
-not use the test profile; there, the HAL override applied only to the benchmark
-process, leaving other apps on the stock HAL. See the dated
-[Venus WSI report](docs/NATIVE-VULKAN.md) and [control confirmation](docs/NATIVE-VULKAN.md).
+**Vulkan was checked on one development PC.** The clean RC2 candidate enumerated
+one Vulkan device and showed a valid launcher image. Its `gpuvkjson` output was
+`[{}]`, so no physical-device identity or version is claimed. Earlier Wild Life
+and synthetic-overhead measurements are profile-specific and do not establish
+general performance. Other Qualcomm drivers, GPUs and apps remain unverified.
 
-**The published runtime does not include the new presentation/input rotation
-transform.** Its earlier async-control checks covered Android settings and
-requested dimensions; they did not establish upright host rendering. The
-post-release development fix is recorded above and has not replaced release
-assets. See [the interface test record](docs/NATIVE-INTERFACE-2026-10-15.md).
+**App-requested orientation changes remain unverified.** The manual rotate
+control passed on the RC2 candidate, but automatic changes requested by Android
+apps have not been accepted across apps and graphics paths.
 
 **The boot animation occupies only part of the screen in the recorded setup.**
 Cropping versus scaling still needs verification before changing its dimensions.
@@ -141,14 +124,10 @@ measurement. The frame budget at the shipped 120 Hz is 8.3 ms.
 
 ## Host and lifecycle
 
-**The prepared 0.2.4 archive still needs the variant-restart fixes.** During
-a switch, the shell can keep its own serial reader open and then fail to
-rotate that file, refusing the new boot. Its writer also uses `variante`
-while the reader accepts `variant`, so the selected variant may not persist.
-The current sources close the reader before rotation and save one canonical
-`variant` entry, removing legacy and duplicate entries. These fixes were
-tested on Windows and installed locally; they are not in the existing archive.
-See [RELEASE-NOTES.md](RELEASE-NOTES.md).
+**Only one Android variant runs at a time.** Vanilla and GApps profiles have
+separate data images and are selected at startup. Variant restart handling is
+included in RC2; both switch directions and all first-run recovery cases still
+need broader acceptance. See [RELEASE-NOTES.md](RELEASE-NOTES.md).
 
 **Suspend/resume callbacks are observed, but repeated reliability is not
 established.** The test profile logged Windows Modern Standby and hibernation
@@ -169,13 +148,12 @@ and writable data images; see [ROADMAP.md](ROADMAP.md).
 ## Packaging and licensing
 
 **Binaries are unsigned and there is no updater.** SmartScreen can warn or
-block execution under some policies. New
-versions require a manual download; there is no automatic notification or data
-migration.
+block execution under some policies. Updates require a manual download; the A4
+updater is not implemented.
 
-**The runtime DLL license inventory is incomplete.** The release ships 107
-MSYS2 DLLs; a per-library inventory remains outstanding. See
-`app/release/LICENSES/DLL-MSYS2-NOTA.txt` and [NOTICE.md](NOTICE.md).
+**The complete dependency and license inventory is unfinished.** See
+`app/release/LICENSES/DLL-MSYS2-NOTA.txt` and [NOTICE.md](NOTICE.md); do not
+interpret available notices as a completed per-component audit.
 
 **The first run depends on Waydroid's image servers.** Android system and vendor
 images are downloaded rather than redistributed, with their published hashes

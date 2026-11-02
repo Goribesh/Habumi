@@ -22,18 +22,24 @@ int wmain(int argc, wchar_t **argv)
     char *adb;
     wchar_t message[256];
     ULONGLONG deadline;
-    int result;
-    if (argc != 4) return 2;
+    int result, port = 17555;
+    if (argc != 4 && argc != 5) return 2;
+    if (argc == 5) {
+        wchar_t *end;
+        long value = wcstol(argv[4], &end, 10);
+        if (!argv[4][0] || *end || value < 1 || value > 65535) return 2;
+        port = (int)value;
+    }
     adb = utf8(argv[2]);
     if (!adb) return 2;
     if (wcscmp(argv[1], L"existing") == 0) {
-        result = screenshot_start(adb, 17555, argv[3]);
+        result = screenshot_start(adb, port, argv[3]);
         free(adb);
         return result ? 3 : 0;
     }
-    if (!screenshot_start(adb, 17555, argv[3])) { free(adb); return 3; }
+    if (!screenshot_start(adb, port, argv[3])) { free(adb); return 3; }
     free(adb);
-    if (screenshot_start("invalid", 17555, argv[3])) return 4;
+    if (screenshot_start("invalid", port, argv[3])) return 4;
     if (wcscmp(argv[1], L"cancel") == 0) {
         Sleep(500);
         if (screenshot_stop()) return 5;

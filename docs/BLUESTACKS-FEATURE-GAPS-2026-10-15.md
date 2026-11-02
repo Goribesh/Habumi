@@ -1,20 +1,17 @@
 # BlueStacks comparison and Habumi feature backlog
 
-Reviewed 15 October 2026 against Habumi development commit `628db63`.
-This is a documentation/source audit, not a new compatibility or performance test.
-The published Habumi runtime remains 0.3.0-rc.1; recent fixes run only in the
-isolated development profile unless explicitly packaged.
+Reviewed 15 October 2026 against Habumi development commit `628db63`; this
+catalog is an evolving source and feature audit, not a compatibility or
+performance guarantee. Status below reflects the 0.3.0-rc.2 package checked on
+one development PC. Stable release remains 0.2.3. RC2 validation is recorded in
+[the release-readiness report](RELEASE-READINESS-0.3.0-rc.2.md).
 
-Local implementation delta, 19 October: the [A2 data foundation](A2-DATA-FOUNDATION.md)
-adds verified offline CLI protection/restore and diagnostic export in a development
-package. The later [growth milestone](A2-DATA-GROWTH.md) adds staged resizing
-through a bundled maintenance guest. Rows G26/G27/G29/H01 reflect that progress;
-no BlueStacks claims were revised.
-
-Local delta, 20 October: the [native A2 data panel](A2-NATIVE-DATA-UI.md)
-implements those controls and bounded driver/config diagnostics in a new local
-candidate. Targeted tests pass; runtime handoff and real growth acceptance
-remain open after the unexpected Surface restart. No distribution status changed.
+The RC2 package includes the A2 offline data panel and A3 compact interface.
+Manual acceptance covers settings save/restart, fullscreen entry/exit,
+screenshots, manual rotation, and physical touch and keyboard in both
+orientations. App-requested orientation, other hardware, multiple monitors,
+overnight use and hibernation remain open. This update changes Habumi status;
+it does not change the BlueStacks reference claims.
 
 ## Comparison boundary
 
@@ -74,7 +71,7 @@ BlueStacks references: [settings][bs-settings], [performance modes][bs-performan
 
 | ID | Priority | Capability | Status | Work remaining in Habumi |
 | --- | --- | --- | --- | --- |
-| G01 | P1 | Graphical settings | Partial | Expose existing CPU/RAM/display/DPI/refresh/audio settings, validate input and explain restart requirements. |
+| G01 | P1 | Graphical settings | Partial | More > Settings edits CPU/RAM, dimensions, refresh, density, audio and guest scaling, with atomic saves that preserve comments/unknown keys. Restart is required; applied GPU values are unavailable and graphics-backend selection is not exposed. |
 | G02 | P1 | Eco/background mode | Partial | Existing idle heartbeat and startup `battery_hz` are useful foundations. Add user controls and measure guest work reduction; do not equate fewer host polls with fewer rendered frames. |
 | G03 | P1 | FPS/performance overlay | Missing | Present an optional app/guest frame-rate view with clearly defined counters; diagnostic logs alone are not an overlay. |
 | G04 | P2 | Memory trimming | Missing | Add measured host/guest memory reclamation with evidence of usable RAM recovery; not just changing a working-set number. |
@@ -82,7 +79,7 @@ BlueStacks references: [settings][bs-settings], [performance modes][bs-performan
 | G06 | P2 | Graphics/GPU selection | Partial | WGL/ANGLE selection exists in text and native Vulkan uses a launch environment. Expose supported choices and report actual GPU/API; do not offer incompatible drivers. |
 | G07 | P2 | ASTC decoding preference | Missing | No product setting or supported decoding-policy workflow found; first audit actual native-driver capabilities. This is not a claim that ASTC is universally absent. |
 | G08 | P2 | Audio device selection/mute | Partial | Existing playback/capture, volume controls and startup audio switch need host speaker/mic selection and an immediate mute workflow. |
-| G09 | P1 | Fullscreen | Missing | Add a reversible fullscreen mode with a reliable exit shortcut and correct DPI/input geometry. Maximize is not fullscreen. |
+| G09 | P1 | Fullscreen | Available | More toggles fullscreen and remains available for Exit full screen. There is no F11 promise; additional DPI, multi-monitor and hardware checks remain. |
 | G10 | P1 | Cursor confinement | Missing | Add explicit lock/unlock and release on focus loss; ordinary mouse-as-touch does not provide confinement. |
 | G11 | P2 | Fullscreen preference per app | Missing | Remember app-specific launch/display choices after a package-aware launcher exists. |
 | G12 | P2 | Configurable shortcuts | Partial | Tab navigation and the key-map hotkey exist. Add a conflict-aware shortcut editor for product actions. |
@@ -98,7 +95,7 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 [backup/restore][bs-backup], [disk cleanup][bs-cleanup], [updates/settings][bs-settings],
 [problem reporting][bs-report]. Habumi evidence: [APK](../app/guscio/apk.c),
 [file transfer](../app/guscio/file.c), [initial data creation](../app/guscio/dati.c),
-[logging](../app/guscio/registro.c), [release validation](RELEASE-READINESS-0.3.0-rc.1.md).
+[logging](../app/guscio/registro.c), [release validation](RELEASE-READINESS-0.3.0-rc.2.md).
 
 | ID | Priority | Capability | Status | Work remaining in Habumi |
 | --- | --- | --- | --- | --- |
@@ -106,15 +103,15 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 | G18 | P1 | Windows app shortcuts | Missing | Create shortcuts that start the correct profile/environment, wait for readiness and launch the selected package. |
 | G19 | P1 | Media browser/export | Partial | File import exists. Add guest file selection and export to Windows with clear destinations and filename handling. |
 | G20 | P2 | XAPK/split APK installation | Missing | Ordinary APK installation is present. Add archive/split validation and OBB/data handling where applicable. |
-| G21 | P1 | Screenshot action | Missing | Add a product button/hotkey and destination selection. Existing diagnostic screenshots are not a capture feature. |
+| G21 | P1 | Screenshot action | Partial | More captures an on-request validated PNG to Pictures/Habumi and can open that folder. A destination chooser and video recording are not included. |
 | G22 | P2 | Video recording | Missing | Add start/stop, output path, audio policy and a validated encoder path without forcing unnecessary extra copies. |
 | G23 | P3 | Rolling highlight capture | Missing | Optional recent-gameplay buffer with an explicit memory/power budget; vendor documentation gives differing durations, so none is used as an acceptance target. |
 | G24 | P3 | Capture gallery/video editing | Missing | Optional gallery and basic clip management; editing is a separate cost from recording. |
-| G25 | P1 | In-app update checks/install | Missing | Add version checks and an update workflow with rollback and preserved user data. Manual GitHub downloads already exist. |
-| G26 | P1 | Upgrade/data migration | Partial | Schema/version/reference-image metadata and journaled restore exist in the A2 development package. Define broader upgrade/migration compatibility; mismatched Android images are currently refused. |
-| G27 | P1 | Instance backup/restore | Partial | Offline CLI and native panel implemented; real isolated CLI restore and fake-profile GUI restore verified. Native runtime handoff/acceptance remains open; development-packaged, not distributed. See [native A2 evidence](A2-NATIVE-DATA-UI.md). |
+| G25 | P1 | In-app update checks/install | Missing | There is no automatic updater. Add version checks and an update workflow with rollback and preserved user data; manual GitHub downloads remain available. |
+| G26 | P1 | Upgrade/data migration | Partial | Version/reference-image metadata and journaled recovery support maintenance. Cross-version Android image migration is not supported; backup/restore requires matching pinned system/vendor images. |
+| G27 | P1 | Instance backup/restore | Available | The offline data panel and CLI back up and restore profiles when matching pinned images are present. This does not provide simultaneous instances or cross-image migration. |
 | G28 | P2 | Disk reclaim/cleanup | Missing | Assess the raw-image format, guest discard and host space recovery. Removing an Android file alone does not prove Windows disk space was reclaimed. |
-| G29 | P1 | Diagnostic export/report | Partial | Native selection and bounded log/host/driver/config export implemented and tested locally. Applied settings remain explicitly unavailable; runtime workflow acceptance remains open. No automatic upload or distribution. See [native A2 evidence](A2-NATIVE-DATA-UI.md). |
+| G29 | P1 | Diagnostic export/report | Partial | The data panel exports bounded logs, host/driver details and requested config. Applied settings remain unavailable; there is no automatic upload. |
 
 ## Instances and gaming controls
 
@@ -174,9 +171,9 @@ added to the implementation plan.
 | S03 | Scope | BlueStacks has [phone profiles][bs-phone] and network-provider settings in its [preferences][bs-settings]. Habumi does not expose these; the existing roadmap excludes device/telephony simulation. |
 | S04 | Scope | The [toolbar][bs-toolbar] documents Play Together remote sessions. No Habumi equivalent was found; remote input/streaming would be a separate product area. |
 | S05 | Scope | The [feature overview][bs-overview] describes a proprietary store/cloud entry point. Habumi has the Android/GApps route, not that commercial catalog, rewards or vendor services. No matching ecosystem is proposed. |
-| H01 | P1, Partial | Offline growth stages a copy, verifies geometry and retains originals with journaled recovery. Earlier isolated 4-to-16-GiB growth passed. Native capacity selection and runtime exclusion are implemented; real acceptance is stopped pending host-restart investigation. See [native A2 evidence](A2-NATIVE-DATA-UI.md). Development-packaged, not distributed; this is a Habumi requirement. |
+| H01 | P1, Available | Offline TCG maintenance grows a selected image from 4 to 16 GiB, verifies the staged copy and retains the original. Growth does not support shrinking. |
 | H02 | P1, Partial | `battery_hz` is selected on startup. Add live AC/battery/background policy changes only after measuring their effect; Eco branding alone would not establish an energy saving. |
-| H03 | P1, Partial | Native rotation is fixed manually. Follow app-requested orientation changes, package the fix and validate physical touch, ANGLE and 2D fallback. |
+| H03 | P1, Partial | Manual rotation and physical touch/keyboard passed in portrait and landscape. App-requested orientation, other graphics paths and additional hardware remain unverified. |
 | H04 | P1, Missing | Sign distributed binaries and finish release provenance/dependency/license coverage. Portability without an installer remains a valid design choice. |
 
 ## Validation gates: completion is not just more buttons
@@ -192,18 +189,17 @@ added to the implementation plan.
 | V07 | Validate | Windows light/dark/high-contrast/live theme changes, resizing, keyboard navigation, fullscreen and DPI across monitors as those features evolve. |
 | V08 | Validate | Matched-resolution/API/workload native-Windows vs Android measurements, frame-time distributions and energy per useful workload. No universal <=10% overhead claim. This is separate from BlueStacks feature parity. |
 
-## Proposed execution order
+## Remaining work
 
-1. Close V01-V06 release/stability/data gates; make H01/G27/G26 recovery paths
-   reviewable before expanding storage/profile workflows.
-2. Add G01 graphical settings, G09 fullscreen, G21 screenshots and G18 app
-   shortcuts; complete H03 orientation and G19 file export.
-3. Add G03 measurement display and G02/H02 power controls, then evaluate V08 with
-   fixed workload, resolution, refresh, power source and warm-up conditions.
-4. Extend G34 mapping/editor and G41 gamepads before G37-G45 advanced automation.
-5. Design G30/G31 instance isolation before G32/G33 batch/sync features.
-6. Choose remaining P2/P3 and scope entries explicitly; they are not all required
-   to release a useful native ARM64 runtime.
+The RC2 implementation closes the settings, fullscreen, screenshot and manual
+rotation portions of G01, G09, G21 and H03. Continue with app-requested
+orientation, destination selection, applied-settings reporting, G18 shortcuts,
+and release validation gates. The wider parity backlog remains open; these
+entries do not imply that A5 or the broader catalog is complete.
+
+Prioritize stability, data-recovery and hardware validation before expanding
+storage/profile workflows. Keep performance and power comparisons tied to a
+fixed workload, resolution, refresh, power source and warm-up condition.
 
 Every implementation should name the IDs it closes, record what was tested,
 and distinguish source completion, isolated-profile validation and release inclusion.

@@ -37,8 +37,10 @@ Preserve settings, comments, and unknown configuration keys during edits; save a
 **Acceptance:** round-trip known and unknown settings, survive interrupted saves, toggle fullscreen without losing window state, capture on request, and verify rotation across supported orientations.
 
 **Progress:** [settings, fullscreen and PNG capture](A3-SETTINGS-DISPLAY.md)
-are implemented and pass native checks. An isolated package boots and captures
-a valid Home PNG; manual fullscreen/input/orientation acceptance is pending.
+are implemented and pass native checks. The isolated package boots and captures
+a valid Home PNG. On 2 November the user accepted fullscreen, screenshot,
+rotation and physical input; a saved 90-Hz request applied on restart and was
+then restored to 120 Hz offline. A3's workflow is accepted on this Surface.
 The settings comparison labels the session's launch request explicitly; it does
 not present requested values as a live query of the GPU or guest display.
 

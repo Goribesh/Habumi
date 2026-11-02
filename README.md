@@ -1,12 +1,11 @@
 # Habumi
 
-**Run Android apps natively on Windows on ARM.**
+**Run Android 13 apps on Windows 11 ARM64.**
 
-Habumi runs Android 13 on Windows 11 ARM64 machines — Snapdragon X Plus,
-X Elite and similar — with **no instruction translation at all**. Your CPU
-executes the same ARM64 instructions a phone would. That is the whole point: an emulator that
-translates x86 Android to ARM, or ARM to x86, pays for it in every frame. This
-one does not.
+Habumi is a portable Android environment for ARM64 Windows PCs, currently
+targeting Snapdragon systems with a compatible Qualcomm Vulkan driver. It
+uses QEMU, a Linux guest kernel and a native display backend. Hardware support
+is limited and no general performance guarantee is made.
 
 Under the hood it is QEMU with a display backend written for this project, a
 Linux guest kernel built here, and an initramfs that assembles Android without
@@ -16,11 +15,9 @@ modifying the vendor images.
 
 ## Status — read this before you install
 
-The full feature and performance measurements come from a Surface Pro 11.
-External reports from Surface Pro 12" machines helped fix boot failures in
-0.2.3, but multi-vCPU boot on that hardware is still intermittent. Hardware
-coverage remains limited; see [KNOWN-ISSUES.md](KNOWN-ISSUES.md) for the measured
-fallback and the remaining limitations.
+The current prerelease is **0.3.0-rc.2**. It has been packaged and
+checked on one development PC; that does not establish compatibility on other
+devices. Read [KNOWN-ISSUES.md](KNOWN-ISSUES.md) for remaining limits.
 
 **[KNOWN-ISSUES.md](KNOWN-ISSUES.md) is the full list** of what does not work
 yet, ordered by what it costs you. The short version: no code signing, so
@@ -38,16 +35,12 @@ to Waydroid OTA commit `026205c747d314865fa18398375ff3b0e7bd7f70` (build `202609
 change the bugs by itself; and **comments and internal documentation are in
 Italian**, see [Language](#language) below.
 
-**[0.3.0-rc.1](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.1)**
-is the native Vulkan prerelease: Venus forwards Android Vulkan to the Qualcomm
-driver, while Zink handles GLES composition. It also includes asynchronous
-Android controls, variant-restart fixes and English product text. The latest
-stable release remains [0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3).
-The prerelease passed a clean-data boot and a final packaged reboot on the
-maintainer's PC; a first-initialization SystemUI exception and repeated
-overnight resume remain open. See [RELEASE-NOTES.md](RELEASE-NOTES.md),
-[the native Vulkan guide](docs/NATIVE-VULKAN.md), and
-[the validation record](docs/RELEASE-READINESS-0.3.0-rc.1.md).
+**[0.3.0-rc.2 prerelease](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2)**
+adds offline data maintenance and a compact interface with settings, fullscreen,
+screenshots and rotation. The latest stable release remains
+[0.2.3](https://github.com/Goribesh/Habumi/releases/tag/0.2.3). See
+[release notes](RELEASE-NOTES.md) and the
+[RC2 validation record](docs/RELEASE-READINESS-0.3.0-rc.2.md).
 
 If it breaks, send `guest\logs\registro-guscio.log`. Previous sessions are
 preserved in `guest\logs\archivio\`.
@@ -67,31 +60,35 @@ is a real dependency, not an implementation detail.
 
 ## Install
 
-1. Download [Habumi-0.3.0-rc.1.zip](https://github.com/Goribesh/Habumi/releases/download/0.3.0-rc.1/Habumi-0.3.0-rc.1.zip), verify it against the release's `SHA256SUMS.txt`, and unpack it into a new directory.
-2. Run **`Start.cmd`**, which selects the native graphics driver and launches Habumi.
+1. Download [Habumi-0.3.0-rc.2.zip](https://github.com/Goribesh/Habumi/releases/download/0.3.0-rc.2/Habumi-0.3.0-rc.2.zip), verify it against `SHA256SUMS.txt`, and unpack it into a new directory.
+2. Run **`Habumi.exe`** from the top-level folder. The launcher prepares the native graphics environment.
 
-For this prerelease, use a new directory. Keep your existing installation and
-Android data separately. Launching `runtime\bin\Habumi.exe` directly bypasses
-the Vulkan setup.
+Use a new directory. Keep older installations and Android data separately.
+Launching `runtime\bin\Habumi.exe` directly bypasses launcher setup.
 
 There is nothing to install: no registry entries, no administrator rights, no
 services. To uninstall, delete the folder.
 
-On first run Habumi notices the Android images are missing and downloads them
-from the [Waydroid](https://waydro.id/) project's official images, verifying the
-sha256 each project publishes before using them. It then creates the Android
-`/data` filesystem from an empty image included in the package. Later runs skip
-all of this.
+On first run Habumi downloads the pinned, read-only GApps and vendor images from
+the [Waydroid](https://waydro.id/) project and checks their published hashes.
+It creates a new 4 GiB Android data image. The clean RC2 candidate booted to
+ready in 51.578 seconds at density 426 and 1600x2560, then closed normally in
+5.500 seconds. These measurements describe one development PC.
 
 ## What works
 
-Measured on a Surface Pro 11 — Snapdragon X Plus X1P64100, 10 cores, Adreno
-X1-85. These feature measurements do not establish compatibility on every
-Windows ARM machine:
+RC2 candidate features checked on one development PC:
 
-- **Touch, multi-touch and guest rotation**. Development now adds matching host
-  presentation/input rotation and window fitting; this is not in published assets.
-  See [the interface checks](docs/NATIVE-INTERFACE-2026-10-15.md)
+- **Compact right toolbar** for Android navigation and More actions
+- **Settings** for CPU, memory, display size, refresh, density, audio and guest
+  scaling. Saves preserve comments and unknown keys; restart to apply settings.
+- **Fullscreen** with entry and exit in the always-available More menu
+- **On-request screenshots** saved as validated PNG files under Pictures\Habumi
+- **Manual rotation and physical touch/keyboard** checked in portrait and
+  landscape. App-requested orientation changes remain unverified.
+- **Offline data tools** for backup, restore, recovery and diagnostic export;
+  grow data from 4 to 16 GiB with software emulation while retaining the
+  original until verification
 - **Audio playback and input**, through an audio HAL with a 4096-frame ring.
   The measured starvation gaps were fixed; audio during physical interaction
   still needs a controlled check
@@ -103,9 +100,10 @@ Windows ARM machine:
 - **Two Android variants** — with and without Google apps — stored separately,
   each keeping its own apps and data. One VM runs at a time; switching does
   not erase anything
-- **Native Vulkan in the development profile**, through Venus on Qualcomm;
-  Wild Life completed with visible scenes. The release package requires its
-  own fresh-install validation; this is not general app or device coverage
+- **Native Vulkan** through Venus on the Qualcomm driver. The clean package
+  enumerated one Vulkan device and presented a valid launcher image. The
+  `gpuvkjson` response did not identify a physical-device version, so no GPU
+  version claim is made. App and device coverage remains limited.
 - **Asynchronous boot checks, shutdown and controls**, including density,
   navigation and guest rotation. A pending ADB client no longer holds the UI
   timer for the duration of the request
@@ -126,9 +124,9 @@ QEMU is built separately; the patches that add the `winq` display backend are in
 
 The native renderer uses the pinned upstream revision and linear patch set in
 `app/scripts/build-native-renderer.ps1`. The corresponding-source bundle and
-component manifest must accompany the prerelease. See
-[release preparation](docs/RELEASE-READINESS-0.3.0-rc.1.md) for package-specific
-validation and remaining gates.
+component manifest accompany the prerelease. See
+[RC2 validation](docs/RELEASE-READINESS-0.3.0-rc.2.md) for package checks and
+remaining gates.
 
 For repeatable host GPU/CPU and battery measurements, see
 [the measurement protocol](qemu/HOST-OVERHEAD.md). The sampler reads counters

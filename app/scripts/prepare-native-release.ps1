@@ -18,8 +18,18 @@ $repoRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $RuntimeRoot=(Resolve-Path -LiteralPath $RuntimeRoot).Path
 if($RendererBuild){$RendererBuild=(Resolve-Path -LiteralPath $RendererBuild).Path}
 if(-not $DevelopmentBaseline -and -not $RendererBuild){throw 'Normal release preparation requires an explicit renderer build.'}
+if($RendererBuild){
+    $rendererInputs=Get-Content -LiteralPath (Join-Path $RendererBuild 'build-inputs.json') -Raw|ConvertFrom-Json
+    if((Get-FileHash -LiteralPath (Join-Path $RendererBuild 'build/src/libvirglrenderer-1.dll')).Hash -ne $rendererInputs.LibrarySHA256){throw 'Renderer differs from its input receipt.'}
+}
 if($ShellSourceDirectory -and -not $DevelopmentBaseline){throw 'A shell snapshot is accepted only for isolated development builds.'}
 if($DevelopmentBaseline -and (-not $QemuExecutable -or -not $BuildProvenancePath)){throw 'Development builds require explicit QEMU and provenance inputs.'}
+if(-not $DevelopmentBaseline -and $QemuExecutable){
+    if(-not $BuildProvenancePath){throw 'An explicit QEMU executable requires its build receipt.'}
+    $qemuInputs=Get-Content -LiteralPath $BuildProvenancePath -Raw|ConvertFrom-Json
+    if($qemuInputs.State -ne 'built' -or $qemuInputs.OriginalQemuTreeUsed -or $qemuInputs.CachedObjectsUsed -or
+       (Get-FileHash -LiteralPath $QemuExecutable).Hash -ne $qemuInputs.QemuSHA256){throw 'QEMU differs from its clean-build receipt.'}
+}
 $OutputRoot=[IO.Path]::GetFullPath($OutputRoot)
 if(Test-Path -LiteralPath $OutputRoot){throw 'Output already exists; select a new preparation directory.'}
 $version=([IO.File]::ReadAllText((Join-Path $repoRoot 'app/release/version.txt'))).Trim()
@@ -76,6 +86,14 @@ if($MaintenanceBuildRoot){
     foreach($name in @('build-maintenance-initramfs.sh','maintenance-init.sh')){Copy-Item -LiteralPath (Join-Path $repoRoot ('guest/scripts/'+$name)) -Destination (Join-Path $maintenanceLicenses $name)}
 }
 $critical=@()
+if($RendererBuild){
+    Copy-Item -LiteralPath (Join-Path $RendererBuild 'build-inputs.json') -Destination (Join-Path $stage 'renderer-inputs.json')
+    $critical+=@{Path='renderer-inputs.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'renderer-inputs.json')).Hash}
+}
+if(-not $DevelopmentBaseline -and $QemuExecutable){
+    Copy-Item -LiteralPath $BuildProvenancePath -Destination (Join-Path $stage 'qemu-inputs.json')
+    $critical+=@{Path='qemu-inputs.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'qemu-inputs.json')).Hash}
+}
 foreach($relative in @('Habumi.exe','Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1','runtime/bin/Habumi.exe','runtime/bin/qemu-nostro.exe','runtime/bin/libvirglrenderer-1.dll','runtime/bin/opengl32.dll','guest/images/kernel-guest-arm64','guest/images/android/initramfs.img','runtime/empty-data.zip')){
     $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
 }
