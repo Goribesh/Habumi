@@ -372,6 +372,35 @@ static void il_guardiano_distingue_vivo_e_lento_da_fermo(void)
     CHECK(vm_righe_nuove(10, 2144) == 0);
 }
 
+static void il_punto_di_blocco_non_e_il_numero_di_righe(void)
+{
+    char a[512], b[512], piccolo[8];
+    vm_punto_normalizza("[ 35.210] calling chr_dev_init+0x0/0xa8 @ 1\r", a, sizeof(a));
+    vm_punto_normalizza("[ 98.789] calling chr_dev_init+0x4/0xb0 @ 42", b, sizeof(b));
+    CHECK(!strcmp(a, "calling chr_dev_init"));
+    CHECK(!strcmp(a, b));
+    /* 164 e 168 righe arrivano allo stesso initcall: il totale non decide. */
+    CHECK(vm_riprova_vcpu(6, 164, true, a, b, 6) == 3);
+    CHECK(vm_riprova_vcpu(6, 168, true, a, b, 6) == 3);
+    CHECK(vm_riprova_vcpu(3, 168, true, a, b, 6) == 3);
+    CHECK(vm_riprova_vcpu(3, 168, true, a, b, 3) == 1);
+    CHECK(vm_riprova_vcpu(1, 168, true, a, b, 1) == 1);
+    vm_punto_normalizza("[ 98.789] calling another_init+0x0/0xa8 @ 1", b, sizeof(b));
+    CHECK(vm_riprova_vcpu(6, 164, true, a, b, 6) == 6);
+    CHECK(vm_riprova_vcpu(6, 164, false, a, a, 6) == 6);
+    CHECK(vm_riprova_vcpu(6, 164, true, "", "", 6) == 6);
+    CHECK(vm_riprova_vcpu(6, 0, true, "", "", 0) == 3);
+    CHECK(vm_riprova_vcpu(6, 0, false, "", "", 0) == 6);
+    vm_punto_normalizza("[ 1.23] ordinary message 123", a, sizeof(a));
+    CHECK(!strcmp(a, "ordinary message 123"));
+    vm_punto_normalizza("[not a timestamp] preserve this", a, sizeof(a));
+    CHECK(!strcmp(a, "[not a timestamp] preserve this"));
+    vm_punto_normalizza("[ 1.23]   \r\n", a, sizeof(a));
+    CHECK(!a[0]);
+    vm_punto_normalizza("different suffixes must not match", piccolo, sizeof(piccolo));
+    CHECK(!piccolo[0]);
+}
+
 static void il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare(void)
 {
     char precedente[MAX_PATH];
@@ -400,6 +429,35 @@ static void il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare(void)
     }
     vm_seriale = fopen("guest/logs/sessione-viva.log", "rb");
     CHECK(vm_seriale != NULL);
+    vm_seriale_pos = 0;
+    vm_seriale_frammento = false;
+    CHECK(vm_segui_seriale() == 1);
+    CHECK(!strcmp(vm_punto_seriale, "prova della sessione precedente"));
+    f = fopen("guest/logs/sessione-viva.log", "ab");
+    CHECK(f != NULL);
+    if (f) {
+        fputs("[ 35.210] calling chr_dev_init", f);
+        fclose(f);
+    }
+    CHECK(vm_segui_seriale() == 0);
+    CHECK(!strcmp(vm_punto_seriale, "prova della sessione precedente"));
+    f = fopen("guest/logs/sessione-viva.log", "ab");
+    CHECK(f != NULL);
+    if (f) {
+        fputs("+0x0/0xa8 @ 1\n", f);
+        fclose(f);
+    }
+    CHECK(vm_segui_seriale() == 1);
+    CHECK(!strcmp(vm_punto_seriale, "calling chr_dev_init"));
+    f = fopen("guest/logs/sessione-viva.log", "ab");
+    CHECK(f != NULL);
+    if (f) {
+        for (int i = 0; i < 1200; i++) { fputc('x', f); }
+        fputc('\n', f);
+        fclose(f);
+    }
+    CHECK(vm_segui_seriale() > 1);
+    CHECK(!vm_punto_seriale[0]);
     CHECK(!DeleteFileA("guest/logs/sessione-viva.log"));
     CHECK(GetLastError() == ERROR_SHARING_VIOLATION);
     config_default(&c);
@@ -408,6 +466,7 @@ static void il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare(void)
      * La rotazione deve pero' essere gia' riuscita, senza perdere la prova. */
     CHECK(!vm_lancia());
     CHECK(vm_seriale == NULL);
+    CHECK(!vm_punto_seriale[0] && !vm_blocco_silenzio && !vm_seriale_frammento);
     CHECK(GetFileAttributesA("guest/logs/sessione-viva.log") ==
           INVALID_FILE_ATTRIBUTES);
     ricerca = FindFirstFileA("guest/logs/archivio/sessione-viva-*.log", &dato);
@@ -518,6 +577,7 @@ int main(void)
     vm_verifica_file_riporta_un_nome_utile_se_manca_qualcosa();
     ogni_stato_ha_la_sua_azione_di_chiusura();
     il_guardiano_distingue_vivo_e_lento_da_fermo();
+    il_punto_di_blocco_non_e_il_numero_di_righe();
     il_riavvio_chiude_il_proprio_lettore_prima_di_ruotare();
     qemu_non_crea_console_e_conserva_stderr();
     registro_chiudi();

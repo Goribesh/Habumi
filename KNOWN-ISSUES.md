@@ -22,6 +22,20 @@ succeeded, but repeated hangs have also been observed. `vcpu=1` in
 machine. Retries halve the vCPU count after no serial output, or after repeated
 hangs at the same serial position. The shipped default remains `vcpu=6`.
 
+**Issue #3 reports a separate slow boot on a Surface Pro 12".** The reporter
+describes a vanilla 0.3.0-rc.1 boot on Snapdragon X / Adreno X1-45 where six
+and three vCPUs stop at `chr_dev_init` for more than 290 seconds, while one
+vCPU continues. They also report that `transparent_hugepage=never` reduced the
+zygote interval from 647 to 315 seconds, with severe slowness remaining. These
+are reporter observations, not locally confirmed measurements; no raw logs or
+target-machine reproduction were supplied. The earlier `vcpu=1` result was
+reliable on a different reporting machine and is not a guarantee for this
+report. Published retry degradation compares serial line counts. Development
+now compares normalized final serial content for two silence timeouts at the
+same vCPU count. Shell regression tests pass; this is not a target-hardware
+fix or a released change. See
+[the issue 3 triage record](docs/ISSUE-3-BOOT-TRIAGE.md).
+
 **Older boot-watchdog descriptions are obsolete.** 0.2.1 and earlier could
 kill a healthy but slow boot. The current kernel-progress watchdog uses a
 60-second grace period, 45 seconds of serial silence and a five-minute ceiling.

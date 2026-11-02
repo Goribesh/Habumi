@@ -28,28 +28,10 @@
  * cioe' non configura la seriale e ignora tutti gli androidboot.*. Il sintomo e'
  * un guest che sembra inchiodato e una finestra su "Display output is not
  * active" -- nessuna delle due righe nomina il quoting. */
-/* I vCPU DI QUESTO TENTATIVO, che non sono per forza quelli configurati.
- *
- * PERCHE'. I tre tentativi esistevano per rigiocare una corsa non
- * deterministica, e rigiocavano la stessa identica configurazione. Se il guasto
- * e' invece DETERMINISTICO, tre tentativi identici sono tre volte lo stesso
- * fallimento -- e sono cinquanta secondi buttati prima di dire all'utente una
- * cosa che non lo aiuta.
- *
- * DUE MACCHINE lo hanno mostrato: su Surface Pro 12" (Snapdragon X Plus a 8
- * core) con vcpu=6 la seriale produce ZERO righe a ogni tentativo, mentre con
- * vcpu=1 il kernel parte. Zero righe vuol dire che il guest non esegue
- * nemmeno la prima istruzione: non e' la bring-up SMP del kernel, e' WHPX che
- * non riesce a creare le vCPU in piu'.
- *
- * QUINDI IL RITENTATIVO DEGRADA: se un tentativo non ha prodotto UNA SOLA
- * riga, il successivo dimezza i vCPU. Con il default di 6 la sequenza e'
- * 6 -> 3 -> 1, e su quelle due macchine il terzo tentativo sarebbe partito
- * senza che nessuno leggesse un registro.
- *
- * Si dimezza SOLO a zero righe, non a "poche": poche righe vuol dire che il
- * guest esegue, e allora il numero di vCPU non e' il sospetto -- lo tratta il
- * guardiano del progresso qui sopra. */
+/* I vCPU di questo tentativo possono essere diversi da config.txt.
+ * Si degrada dopo un timeout senza seriale o due timeout con la stessa ultima
+ * riga normalizzata. Il conteggio non identifica il punto di blocco (issue #3).
+ * Il fallback non prova un guasto di WHPX e non garantisce che una CPU basti. */
 static int vm_vcpu_ora;
 
 /* PERCHE' IL KERNEL STA IN guest/images/ E LE IMMAGINI IN
@@ -541,6 +523,57 @@ static bool vm_riga_omx(const char *riga)
             strstr(riga, "ctl.interface_start") != NULL);
 }
 
+/* Issue #3: le righe SMP cambiano col numero di CPU. Per confrontare il punto
+ * finale togliamo solo il timestamp printk e, per initcall_debug, offset e PID.
+ * Un contenuto uguale resta un indizio, non la prova di un difetto WHPX. */
+static char vm_punto_seriale[512];
+static char vm_punto_blocco_prec[512];
+static int vm_cpu_blocco_prec;
+static bool vm_blocco_silenzio;
+static bool vm_seriale_frammento;
+
+static void vm_punto_normalizza(const char *riga, char *out, size_t cap)
+{
+    const char *p = riga, *fine;
+    size_t n;
+    if (!cap) { return; }
+    out[0] = 0;
+    if (*p == '[') {
+        const char *q = p + 1;
+        bool cifra = false;
+        while ((*q >= '0' && *q <= '9') || *q == ' ' || *q == '.') {
+            if (*q >= '0' && *q <= '9') { cifra = true; }
+            q++;
+        }
+        if (cifra && *q == ']') { p = q + 1; }
+    }
+    while (*p == ' ' || *p == '\t') { p++; }
+    fine = p + strlen(p);
+    while (fine > p && (fine[-1] == '\r' || fine[-1] == '\n' ||
+                        fine[-1] == ' ' || fine[-1] == '\t')) { fine--; }
+    if (!strncmp(p, "calling ", 8)) {
+        const char *q = p + 8;
+        while ((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') ||
+               (*q >= '0' && *q <= '9') || *q == '_') { q++; }
+        if (q > p + 8 && *q == '+') { fine = q; }
+    }
+    n = (size_t)(fine - p);
+    /* Non confrontare prefissi troncati: potrebbero nascondere la differenza. */
+    if (n >= cap) { return; }
+    memcpy(out, p, n);
+    out[n] = 0;
+}
+
+static int vm_riprova_vcpu(int cpu, int righe, bool silenzio,
+                           const char *punto, const char *precedente,
+                           int cpu_precedente)
+{
+    if (cpu <= 1 || !silenzio) { return cpu; }
+    if (righe == 0 || (cpu == cpu_precedente && punto[0] &&
+                      !strcmp(punto, precedente))) { return cpu / 2; }
+    return cpu;
+}
+
 static int vm_segui_seriale(void)
 {
     char riga[512];
@@ -592,6 +625,8 @@ static int vm_segui_seriale(void)
              * la si scarta, per non perdere quello che dice), e si avanza
              * vm_seriale_pos cosi' il giro successivo prosegue oltre. */
             ungetc(prossimo, vm_seriale);
+            vm_seriale_frammento = true;
+            vm_punto_seriale[0] = 0;
             registro_riga(REG_GUEST, "%s...(line truncated, over 511 characters)",
                           riga);
             vm_seriale_pos = pos_dopo;
@@ -605,6 +640,11 @@ static int vm_segui_seriale(void)
             break;
         }
         riga[l - 1] = '\0';
+        if (!vm_seriale_frammento) {
+            vm_punto_normalizza(riga, vm_punto_seriale,
+                                sizeof(vm_punto_seriale));
+        }
+        vm_seriale_frammento = false;
         if (vm_riga_omx(riga)) {
             /* Si sopprime, ma si CONTA come riga vista: il conteggio serve al
              * guardiano dell'avvio (VM_RIGHE_SANE), e togliere righe dal conto
@@ -637,10 +677,6 @@ static int vm_segui_seriale(void)
 }
 
 static int vm_righe_totali;
-/* Il conteggio di righe a cui si e' bloccato il tentativo PRECEDENTE: serve
- * al secondo degrado (il muro), vedi il commento in VM_AVVIA. -1 = nessun
- * blocco ancora. */
-static int vm_righe_blocco_prec = -1;
 /* Le righe totali all'ultima dichiarazione dei due minuti, e quante
  * dichiarazioni sono gia' state fatte. Distinguono "vivo e lento" da "fermo":
  * vedi VM_ATTESA_ANDROID. -1 = non si e' ancora dichiarato niente. */
@@ -826,6 +862,9 @@ static bool vm_lancia(void)
         }
     }
     vm_righe_totali = 0;
+    vm_punto_seriale[0] = 0;
+    vm_blocco_silenzio = false;
+    vm_seriale_frammento = false;
     /* Si azzera anche qui, non solo dentro VM_ATTESA_ANDROID: cosi' il primo
      * controllo di adb_pronto in quello stato scatta subito, invece di
      * aspettare 2 s residui di un tentativo precedente che non c'entra piu'. */
@@ -1199,58 +1238,42 @@ VmStato vm_passo(void)
             }
             registro_riga(REG_GUSCIO, "%d attempts failed, down to %d vCPU. "
                           "If every attempt produced ZERO serial lines the "
-                          "guest never ran at all, which on some machines is "
-                          "WHPX failing to create the vCPUs; if it produced "
+                          "guest produced no observable serial progress; if it "
+                          "produced "
                           "some and then stopped, look at the [guest] lines "
                           "for where it stopped.", vm_c->riprove, vm_vcpu_ora);
             vm_vai(VM_FALLITA);
             break;
         }
-        /* Quanti vCPU per QUESTO tentativo. vm_righe_totali qui contiene
-         * ancora il conto del tentativo precedente: vm_lancia lo azzera dopo.
-         *
-         * IL SECONDO DEGRADO, quello del muro. Il primo (zero righe) copre il
-         * guest che non esegue nemmeno un'istruzione. Ma sull'issue #1 e'
-         * arrivato l'altro caso: tre tentativi a 6 vCPU morti TUTTI a 164
-         * righe, sulla stessa identica riga -- il primo initcall che aspetta
-         * una risposta da un'altra CPU, con gli interrupt fra processori che
-         * su quella macchina a volte si perdono anche con le feature
-         * sintetiche concesse. Non e' una corsa da rigiocare: e' un muro, e
-         * si sposta solo col numero di vCPU. Due blocchi consecutivi sullo
-         * STESSO conteggio di righe non capitano per varianza (gli avvii veri
-         * oscillano di decine di righe): da li' in poi si dimezza, come per
-         * lo zero. */
+        /* Si confrontano solo due scadenze per silenzio sulla stessa CPU,
+         * mai un'uscita di QEMU o un avvio che produce ancora progresso. */
         if (vm_tentativo == 1) {
             vm_vcpu_ora = vm_c->vcpu;
-            vm_righe_blocco_prec = -1;
-        } else if (vm_righe_totali == 0 && vm_vcpu_ora > 1) {
+            vm_punto_blocco_prec[0] = 0;
+            vm_cpu_blocco_prec = 0;
+        } else {
             int prima = vm_vcpu_ora;
-
-            vm_vcpu_ora /= 2;
-            if (vm_vcpu_ora < 1) {
-                vm_vcpu_ora = 1;
+            int prossima = vm_riprova_vcpu(prima, vm_righe_totali,
+                vm_blocco_silenzio, vm_punto_seriale, vm_punto_blocco_prec,
+                vm_cpu_blocco_prec);
+            if (prossima != prima) {
+                registro_riga(REG_GUSCIO, "boot silence timeout: %s. "
+                    "Retrying with %d vCPU instead of %d; this is a "
+                    "compatibility fallback, not a diagnosis.",
+                    vm_righe_totali == 0 ? "no serial output" :
+                    "two attempts ended at the same normalized message",
+                    prossima, prima);
             }
-            registro_riga(REG_GUSCIO, "the last attempt produced no serial "
-                          "output at all, so the guest never ran a single "
-                          "instruction: retrying with %d vCPU instead of %d",
-                          vm_vcpu_ora, prima);
-        } else if (vm_righe_totali > 0 &&
-                   vm_righe_totali == vm_righe_blocco_prec &&
-                   vm_vcpu_ora > 1) {
-            int prima = vm_vcpu_ora;
-
-            vm_vcpu_ora /= 2;
-            if (vm_vcpu_ora < 1) {
-                vm_vcpu_ora = 1;
+            if (vm_blocco_silenzio) {
+                memcpy(vm_punto_blocco_prec, vm_punto_seriale,
+                       sizeof(vm_punto_blocco_prec));
+                vm_cpu_blocco_prec = prima;
+            } else {
+                vm_punto_blocco_prec[0] = 0;
+                vm_cpu_blocco_prec = 0;
             }
-            registro_riga(REG_GUSCIO, "two attempts in a row hung at the "
-                          "same line (%d): that is a wall, not a race, and "
-                          "on some machines it moves with the vCPU count. "
-                          "Retrying with %d vCPU instead of %d",
-                          vm_righe_totali, vm_vcpu_ora, prima);
+            vm_vcpu_ora = prossima;
         }
-        vm_righe_blocco_prec = vm_righe_totali;
-
         if (!vm_lancia()) {
             vm_vai(VM_FALLITA);
             break;
@@ -1295,10 +1318,11 @@ VmStato vm_passo(void)
             /* Il messaggio dice QUALE dei due e' successo, perche' mandano a
              * cercare in posti diversi: una seriale muta e' un guest fermo, un
              * tetto raggiunto e' un guest vivo e troppo lento per noi. */
-            if (da_riga >= VM_KERNEL_SILENZIO_MS) {
-                registro_riga(REG_GUSCIO, "boot hung: %d serial lines, then "
-                              "nothing for %lu s -- more than the %lu s a live "
-                              "boot is allowed to go quiet (needs %d lines): "
+            vm_blocco_silenzio = da_riga >= VM_KERNEL_SILENZIO_MS;
+            if (vm_blocco_silenzio) {
+                registro_riga(REG_GUSCIO, "boot silence timeout: %d serial lines, then "
+                              "nothing for %lu s -- reached the %lu s "
+                              "silence limit (needs %d lines): "
                               "closing and retrying",
                               vm_righe_totali, (unsigned long)(da_riga / 1000),
                               (unsigned long)(VM_KERNEL_SILENZIO_MS / 1000),
