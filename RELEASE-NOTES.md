@@ -99,7 +99,7 @@ switch in both directions still need validation. These limits are recorded in
 The following entries record the state and tests from the 0.2.4 preparation
 period. Statements about local installation, the running process or whether an
 archive had been rebuilt apply only to that historical period; see the current
-0.3.0-rc.2 section above for the present candidate status.
+0.3.0-rc.2 section above for the current prerelease status.
 
 ARM WHPX exit statistics and periodic program-counter probes now require
 `WINQ_WHPX_STAT=1`. Normal runs skip their counters/timings, statistic-thread

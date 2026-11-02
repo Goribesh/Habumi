@@ -26,6 +26,11 @@ Install in a new directory and retain older installations/data separately.
   `B016F52B9E173085C41EB9BEB16E3A20E20B61CD0B1922607329D6634005E037`.
   This identifies the tested candidate, not the final metadata/documentation
   package. Final asset hashes are supplied separately in `SHA256SUMS.txt`.
+- The final 347-entry runtime archive is
+  `C75C3A5920345C938968798A4BA718CA9842FDF6FE1BFC9504F3C3F66C3D9C92`.
+  Its binaries/manifest were installed into the clean test profile and checked
+  against the final inventory. The final packaged reboot reached readiness in
+  28.516 s and shut down normally in 4.500 s. The profile was left closed.
 - The extracted candidate created a new 4-GiB data image. Pinned official
   read-only GApps/vendor images were reused; no existing writable Android data
   was copied. Readiness took 51.578 s, the 1600x2560 launcher/app drawer was

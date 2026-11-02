@@ -51,7 +51,8 @@ Development after 0.3.0-rc.1 reproduced the same exception on another fresh
 data image. A new shell check waits for stable SystemUI/compositor PIDs before
 marking startup ready. A proposed upstream source null-list guard is recorded;
 an isolated Dex prototype subsequently passed one fresh-data boot and a short
-codec/storage workload. This is not yet a distributed guest fix. See
+codec/storage workload. RC2 includes that compatibility probe in its initramfs;
+it is not a verified general fix or an upstream vendor-image change. See
 [the startup investigation](docs/ANDROID-STARTUP-READINESS-2026-10-15.md).
 The prototype's build gates and runtime limits are in
 [the SystemUI probe record](docs/ANDROID-SYSTEMUI-NULL-PROBE-2026-10-15.md).
