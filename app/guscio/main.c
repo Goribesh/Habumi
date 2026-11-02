@@ -23,6 +23,8 @@
 #include "settings.h"
 #include "config-save.h"
 #include "screenshot.h"
+#include "app-library.h"
+#include "file-export.h"
 
 #define GUSCIO_MUTEX  "AndroidRuntimeGuscio.istanza"
 
@@ -63,6 +65,7 @@ static HANDLE g_chiusura;
  * piu' sotto. */
 static bool g_chiudendo;
 static bool g_gestione_dati;
+static bool g_gestione_aggiornamento;
 
 /* Il gestore offline nasce dopo la chiusura normale e la pulizia dei thread.
  * Non eredita handle del profilo e non passa dal percorso che avvia la VM. */
@@ -72,7 +75,7 @@ static void gestione_dati_avvia(void)
     STARTUPINFOA startup = {0}; PROCESS_INFORMATION process = {0};
     int n = snprintf(exe, sizeof(exe), "%s\\Habumi.exe", g_radice);
     if (n < 0 || n >= (int)sizeof(exe)) return;
-    n = snprintf(command, sizeof(command), "\"%s\" --data", exe);
+    n = snprintf(command, sizeof(command), "\"%s\" %s", exe,g_gestione_aggiornamento?"--update":"--data");
     if (n < 0 || n >= (int)sizeof(command)) return;
     startup.cb = sizeof(startup);
     if (CreateProcessA(exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
@@ -214,6 +217,9 @@ static bool istanza_unica(void)
          * inaffidabile. */
         EnumWindows(istanza_trova_finestra, (LPARAM)&altra);
         if (altra) {
+            if(apps_requested() && !apps_forward(altra)){
+                MessageBoxA(NULL,"The app request was refused. Check that this profile is open and no launch is pending.","Habumi",MB_OK|MB_ICONINFORMATION);
+            }
             ShowWindow(altra, SW_RESTORE);
             SetForegroundWindow(altra);
         } else {
@@ -1773,6 +1779,7 @@ static void CALLBACK ui_controlli_timer(HWND h, UINT messaggio, UINT_PTR id, DWO
 {
     (void)messaggio; (void)ora;
     comandi_passo();
+    apps_tick(&g_c,vm_stato()==VM_PRONTO,g_chiudendo);
     if(g_screenshot){
         wchar_t message[256];int result=screenshot_poll(message,256);
         if(result){
@@ -1829,6 +1836,12 @@ static void ui_accoda(ComandoUi tipo, int valore)
 static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
 {
     if (m == WM_APP + 1) {
+        if(file_export_busy()){
+            wchar_t root[MAX_PATH];GetCurrentDirectoryW(MAX_PATH,root);
+            file_export_open(finestra_handle(),root,g_c.porta_adb);
+            finestra_avviso("Wait for the file export to finish before closing Android.",false);
+            return;
+        }
         /* chiusura chiesta dall'utente. La decisione (quale azione, per
          * quale stato) vive in vm_azione_chiusura: qui si esegue soltanto,
          * vedi vm.c per la ragione di ogni stato -- in particolare per il
@@ -1931,16 +1944,21 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
             variante_menu_mostra((HWND)lp);
             break;
         case ID_DATI:
+        case ID_UPDATES:
             if (g_chiudendo) break;
+            if(file_export_busy()){
+                finestra_avviso("Wait for the file export to finish before opening management tools.",false);break;
+            }
             if (vm_stato() != VM_PRONTO && vm_stato() != VM_MORTA && vm_stato() != VM_FALLITA && vm_stato() != VM_USCITO) {
                 MessageBoxA(finestra_handle(),"Wait for Android to finish starting before opening data management.","Habumi",MB_OK|MB_ICONINFORMATION);
                 break;
             }
             if (vm_viva() && MessageBoxA(finestra_handle(),
-                    "Android will shut down normally before data management opens. Continue?",
-                    "Habumi data management",MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION) != IDYES) break;
+                    "Android will shut down normally before the management panel opens. Continue?",
+                    "Habumi",MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION) != IDYES) break;
             if (g_chiudendo) break;
             g_gestione_dati = true;
+            g_gestione_aggiornamento=(int)wp==ID_UPDATES;
             PostMessageA(finestra_handle(),WM_APP+1,0,0);
             break;
         case ID_SETTINGS: {
@@ -1948,6 +1966,15 @@ static void guscio_messaggio(UINT m, WPARAM wp, LPARAM lp)
             settings_open(finestra_handle(),&g_c,path);break;
         }
         case ID_SCREENSHOT:screenshot_request();break;
+        case ID_APPS:
+            apps_open(finestra_handle(),&g_c);
+            SetTimer(finestra_handle(),UI_CONTROLLI_TIMER,50,ui_controlli_timer);
+            break;
+        case ID_EXPORT:{
+            if(g_chiudendo || vm_stato()!=VM_PRONTO){finestra_avviso("Android must be ready before exporting a file.",false);break;}
+            wchar_t root[MAX_PATH];GetCurrentDirectoryW(MAX_PATH,root);
+            file_export_open(finestra_handle(),root,g_c.porta_adb);break;
+        }
         case ID_OPEN_SHOTS:
             if(screenshot_folder())ShellExecuteW(finestra_handle(),L"open",g_screenshot_folder,NULL,NULL,SW_SHOWNORMAL);
             break;
@@ -2659,6 +2686,9 @@ int main(int argc, char **argv)
         return status;
     }
 
+    if(!apps_prepare()){
+        MessageBoxA(NULL,"Invalid app launch request or profile path.","Habumi",MB_OK|MB_ICONERROR);return 2;
+    }
     if (!istanza_unica()) {
         return 0;
     }
@@ -2913,11 +2943,14 @@ int main(int argc, char **argv)
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         if(settings_message(&msg))continue;
+        if(apps_message(&msg))continue;
+        if(file_export_message(&msg))continue;
         if (finestra_tastiera(&msg)) {
             continue;
         }
         if (msg.message == WM_TIMER && msg.hwnd == finestra_handle() && msg.wParam != UI_CONTROLLI_TIMER) {
             VmStato s = vm_passo();
+            apps_tick(&g_c,s==VM_PRONTO,g_chiudendo);
 
             if (g_chiusura &&
                 WaitForSingleObject(g_chiusura, 0) == WAIT_OBJECT_0) {
@@ -3042,9 +3075,10 @@ int main(int argc, char **argv)
         bool appunti_fermi = appunti_ferma();
         bool sessione_fermata = sessione_ferma();
         screenshot_stop();
+        bool apps_stopped=apps_shutdown();
 
         vm_chiudi();
-        if (varianti_ferme && appunti_fermi && sessione_fermata) {
+        if (varianti_ferme && appunti_fermi && sessione_fermata && apps_stopped) {
             registro_chiudi();
             profilo_lock_chiudi();
         }

@@ -108,6 +108,97 @@ done:
     return ok;
 }
 
+bool data_export_start(DataJob *job, const wchar_t *root,
+                       const wchar_t *guest_path, const wchar_t *destination,
+                       int port)
+{
+    GUID guid;
+    wchar_t guid_text[40], temporary[DATA_PATH], request_path[DATA_PATH];
+    wchar_t host[DATA_PATH], script[DATA_PATH], log_path[DATA_PATH];
+    wchar_t quoted_host[DATA_PATH * 2], quoted_script[DATA_PATH * 2];
+    wchar_t quoted_request[DATA_PATH * 2], escaped_root[DATA_PATH * 2];
+    wchar_t escaped_guest[DATA_PATH * 2], escaped_destination[DATA_PATH * 2];
+    wchar_t command[DATA_PATH * 6], request[DATA_PATH * 8];
+    STARTUPINFOW startup = {0};
+    PROCESS_INFORMATION process = {0};
+    SECURITY_ATTRIBUTES inherit = {sizeof(inherit), NULL, TRUE};
+    HANDLE log = INVALID_HANDLE_VALUE, input = INVALID_HANDLE_VALUE;
+    HANDLE file = INVALID_HANDLE_VALUE;
+    char *utf8 = NULL;
+    bool ok = false;
+
+    if (!job || !root || !guest_path || !destination || job->process ||
+        wcslen(root) >= DATA_PATH - 128 || wcslen(guest_path) >= DATA_PATH ||
+        wcslen(destination) >= DATA_PATH || port < 1024 || port > 65535 ||
+        (port >= 5554 && port <= 5585)) { return false; }
+    ZeroMemory(job, sizeof(*job));
+    wcscpy(job->message, L"The export worker could not be started.");
+    if (FAILED(CoCreateGuid(&guid)) || !StringFromGUID2(&guid, guid_text, 40)) { return false; }
+    unsigned n = 0;
+    for (unsigned i = 0; guid_text[i]; ++i) {
+        wchar_t c = guid_text[i];
+        if (c >= L'A' && c <= L'F') c += L'a' - L'A';
+        if ((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f')) job->nonce[n++] = c;
+    }
+    DWORD temporary_length = GetTempPathW(DATA_PATH, temporary);
+    if (n != 32 || !temporary_length || temporary_length >= DATA_PATH - 128) return false;
+    if (swprintf(job->directory, DATA_PATH, L"%lsHabumi-export-%ls", temporary, job->nonce) < 0 ||
+        !CreateDirectoryW(job->directory, NULL)) return false;
+    if (swprintf(request_path, DATA_PATH, L"%ls\\request.json", job->directory) < 0 ||
+        swprintf(log_path, DATA_PATH, L"%ls\\worker.log", job->directory) < 0) goto done;
+    if (!json_string(escaped_root, DATA_PATH * 2, root) ||
+        !json_string(escaped_guest, DATA_PATH * 2, guest_path) ||
+        !json_string(escaped_destination, DATA_PATH * 2, destination)) goto done;
+    int length = swprintf(request, DATA_PATH * 8,
+        L"{\"Schema\":\"habumi.export-ui.v1\",\"Nonce\":\"%ls\",\"ProfileRoot\":\"%ls\","
+        L"\"GuestPath\":\"%ls\",\"Destination\":\"%ls\",\"AdbPort\":%d}\n",
+        job->nonce, escaped_root, escaped_guest, escaped_destination, port);
+    if (length < 0) goto done;
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, request, length,
+                                    NULL, 0, NULL, NULL);
+    if (!bytes || !(utf8 = malloc((size_t)bytes)) ||
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, request, length,
+                            utf8, bytes, NULL, NULL) != bytes) goto done;
+    file = CreateFileW(request_path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD written = 0;
+    if (file == INVALID_HANDLE_VALUE || !WriteFile(file, utf8, (DWORD)bytes,
+        &written, NULL) || written != (DWORD)bytes || !FlushFileBuffers(file)) goto done;
+    CloseHandle(file); file = INVALID_HANDLE_VALUE;
+    DWORD system_length = GetSystemDirectoryW(host, DATA_PATH);
+    if (!system_length || system_length >= DATA_PATH || system_length + 48 >= DATA_PATH) goto done;
+    wcscat(host, L"\\WindowsPowerShell\\v1.0\\powershell.exe");
+    if (swprintf(script, DATA_PATH, L"%ls\\Export-Worker.ps1", root) < 0 ||
+        !data_quote(quoted_host, DATA_PATH * 2, host) ||
+        !data_quote(quoted_script, DATA_PATH * 2, script) ||
+        !data_quote(quoted_request, DATA_PATH * 2, request_path)) goto done;
+    if (swprintf(command, DATA_PATH * 6,
+        L"%ls -NoProfile -NonInteractive -ExecutionPolicy Bypass -File %ls -RequestPath %ls",
+        quoted_host, quoted_script, quoted_request) < 0) goto done;
+    log = CreateFileW(log_path, GENERIC_WRITE, FILE_SHARE_READ, &inherit,
+                      CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        &inherit, OPEN_EXISTING, 0, NULL);
+    if (log == INVALID_HANDLE_VALUE || input == INVALID_HANDLE_VALUE) goto done;
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = input; startup.hStdOutput = log; startup.hStdError = log;
+    if (!CreateProcessW(host, command, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, root, &startup, &process)) goto done;
+    CloseHandle(process.hThread);
+    job->process = process.hProcess;
+    wcscpy(job->message, L"Starting the export...");
+    ok = true;
+done:
+    free(utf8);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
+    if (!ok) wcscpy(job->message, L"The export worker could not be started. Check the operation folder.");
+    return ok;
+}
+
 bool data_job_status(DataJob *job, wchar_t *state, size_t count)
 {
     wchar_t path[DATA_PATH], text[8192], expected[96];

@@ -50,6 +50,11 @@ Implement library behavior for G17 and shortcuts for G18 through the Vulkan laun
 
 **Acceptance:** launch a library item only after readiness, create and use shortcuts, export files, and complete a staged update and rollback without changing user data unexpectedly.
 
+**Progress:** [A4 desktop integration](A4-DESKTOP-INTEGRATION.md) is implemented
+locally, with isolated integrity, worker and launcher checks. It is not included
+in the published rc.2 archive. New-dialog acceptance and final package validation
+remain separate gates; see the checkpoint for the latest executed evidence.
+
 ### A5 — Release validation and provenance
 
 Validate V01–V07 and complete signing and provenance work H04.

@@ -8,7 +8,8 @@ param([Parameter(Mandatory)][string]$RuntimeRoot,
       [string]$MaintenanceBuildRoot='',
       [string]$MsysBin='C:/msys64/clangarm64/bin',
       [string]$QemuExecutable='', [string]$BuildProvenancePath='',
-      [string]$ShellSourceDirectory='',
+      [string]$ShellSourceDirectory='', [string]$AppListJarPath='',
+      [ValidateSet('','A4')][string]$DevelopmentPackage='',
       [switch]$DevelopmentBaseline,
       [ValidateSet('A0','A1')][string]$DevelopmentName='A0',
       [ValidateRange(1024,65535)][int]$AdbPort=15555,
@@ -51,9 +52,10 @@ foreach($relative in $paths){
 }
 $source=Join-Path $repoRoot 'app/guscio'
 if($ShellSourceDirectory){$source=(Resolve-Path -LiteralPath $ShellSourceDirectory).Path}
-$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv','sessione','config-edit','config-save','settings','fullscreen','screenshot')
+$modules=@('main','finestra','vm','comandi','adb','config','registro','tubo','dpi','apk','file','rilascio','archivio','appunti','appunti-trama','varianti','dati','scarica','hyperv','sessione','config-edit','config-save','settings','fullscreen','screenshot','app-target','app-shortcut','app-library','file-export')
 $files=@($modules|ForEach-Object {Join-Path $source "$_.c"})
-& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32 -lole32 -luuid -lwindowscodecs
+$files+=Join-Path $repoRoot 'app/release/data-job.c'
+& (Join-Path $MsysBin 'clang.exe') -std=c11 -Wall -Werror -O2 -mwindows -o (Join-Path $stage 'runtime/bin/Habumi.exe') @files -luser32 -lgdi32 -lcomctl32 -lshell32 -lws2_32 -lwinhttp -lbcrypt -ladvapi32 -lole32 -luuid -lwindowscodecs -lcomdlg32
 if($LASTEXITCODE){throw 'Release shell compilation failed.'}
 $launcherMode=if($DevelopmentBaseline -and $DevelopmentName -eq 'A0'){'0'}else{'1'}
 & (Join-Path $PSScriptRoot 'build-native-launcher.ps1') -OutputPath (Join-Path $stage 'Habumi.exe') -ChildWindow $launcherMode -MsysBin $MsysBin
@@ -62,11 +64,31 @@ $config="# Habumi $version native Vulkan prerelease`nvcpu=6`nmemory=6144`nwidth=
 [IO.File]::WriteAllText((Join-Path $stage 'runtime/bin/config.txt'),$config,$encoding)
 foreach($pair in @(@('Start-Vulkan.cmd','Start.cmd'),@('Start-Habumi.ps1','Start-Habumi.ps1'),@('README.txt','README.txt'))){
     $value=[IO.File]::ReadAllText((Join-Path $repoRoot ('app/release/'+$pair[0]))).Replace("`r`n","`n")
+    if($pair[1] -eq 'README.txt' -and $DevelopmentPackage){
+        $value="Habumi $DevelopmentPackage DEVELOPMENT CANDIDATE - not the published $version archive`n`n"+
+            "New development commands: More > Apps, Export Android file, Updates.`n"+
+            "App launch/shortcuts and file export require debug access. Updates run offline.`n"+
+            "Manual acceptance is recorded separately; no new release has been published.`n`n"+$value
+    }
     if($pair[1] -eq 'Start.cmd' -or $pair[1] -eq 'README.txt'){$value=$value.Replace("`n","`r`n")}
     [IO.File]::WriteAllText((Join-Path $stage $pair[1]),$value,$encoding)
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'app/release/LICENSES') -Destination (Join-Path $stage 'LICENSES') -Recurse
 foreach($name in @('Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1')){Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)}
+foreach($name in @('Profile-Export.psm1','Export-Worker.ps1','Profile-Update.psm1','Update-Worker.ps1','Update-Habumi.ps1')){
+    Copy-Item -LiteralPath (Join-Path $repoRoot ('app/release/'+$name)) -Destination (Join-Path $stage $name)
+}
+if(-not $AppListJarPath){
+    $toolBuild=Join-Path $OutputRoot 'app-list-build';New-Item -ItemType Directory -Path $toolBuild|Out-Null
+    $AppListJarPath=Join-Path $toolBuild 'habumi-app-list.jar'
+    & (Join-Path $repoRoot 'guest/scripts/build-app-list.ps1') -OutputPath $AppListJarPath
+}
+$appListReceipt=Get-Content -LiteralPath ($AppListJarPath+'.json') -Raw|ConvertFrom-Json
+if((Get-FileHash -LiteralPath $AppListJarPath).Hash -ne $appListReceipt.outputJarSha256 -or
+   (Get-FileHash -LiteralPath (Join-Path $repoRoot 'guest/app-list/AppList.java')).Hash -ne $appListReceipt.javaSourceSha256){throw 'App list helper differs from its build receipt or source.'}
+$toolTarget=Join-Path $stage 'runtime/tools';New-Item -ItemType Directory -Path $toolTarget -Force|Out-Null
+Copy-Item -LiteralPath $AppListJarPath -Destination (Join-Path $toolTarget 'habumi-app-list.jar')
+Copy-Item -LiteralPath ($AppListJarPath+'.json') -Destination (Join-Path $toolTarget 'app-list-build.json')
 if($MaintenanceBuildRoot){
     $MaintenanceBuildRoot=(Resolve-Path -LiteralPath $MaintenanceBuildRoot).Path
     $maintenance=Get-Content -LiteralPath (Join-Path $MaintenanceBuildRoot 'maintenance-build.json') -Raw|ConvertFrom-Json
@@ -86,6 +108,27 @@ if($MaintenanceBuildRoot){
     foreach($name in @('build-maintenance-initramfs.sh','maintenance-init.sh')){Copy-Item -LiteralPath (Join-Path $repoRoot ('guest/scripts/'+$name)) -Destination (Join-Path $maintenanceLicenses $name)}
 }
 $critical=@()
+$sourcePaths=@($files)+@(Get-ChildItem -LiteralPath $source -Filter '*.h' -File|ForEach-Object FullName)
+$sourcePaths+=@('app/release/launcher.c','app/release/data-ui.c','app/release/data-ui.h','app/release/data-job.h',
+    'app/scripts/build-native-launcher.ps1','app/scripts/prepare-native-release.ps1','guest/app-list/AppList.java','guest/scripts/build-app-list.ps1')|ForEach-Object {Join-Path $repoRoot $_}
+$softwareInputs=[ordered]@{Schema='habumi.software-inputs.v1';SourceCommit=(& git -C $repoRoot rev-parse HEAD).Trim();
+    SourceMode='Working-tree source hashes identify the software; this is not a publication receipt.';
+    CompilerSHA256=(Get-FileHash -LiteralPath (Join-Path $MsysBin 'clang.exe')).Hash;
+    Inputs=@($sourcePaths|Sort-Object -Unique|ForEach-Object {
+        $inputName=if($_.StartsWith(($repoRoot+'\'),[StringComparison]::OrdinalIgnoreCase)){$_.Substring($repoRoot.Length+1).Replace('\','/')}else{'shell-snapshot/'+[IO.Path]::GetFileName($_)}
+        @{Path=$inputName;SHA256=(Get-FileHash -LiteralPath $_).Hash}
+    })}
+foreach($name in @('Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1','Profile-Export.psm1','Export-Worker.ps1','Profile-Update.psm1','Update-Worker.ps1','Update-Habumi.ps1')){
+    $softwareInputs.Inputs+=@{Path=('app/release/'+$name);SHA256=(Get-FileHash -LiteralPath (Join-Path $repoRoot ('app/release/'+$name))).Hash}
+}
+[IO.File]::WriteAllText((Join-Path $stage 'software-inputs.json'),($softwareInputs|ConvertTo-Json -Depth 6)+"`n",$encoding)
+$critical+=@{Path='software-inputs.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'software-inputs.json')).Hash}
+foreach($relative in @('runtime/tools/habumi-app-list.jar','runtime/tools/app-list-build.json')){
+    $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
+}
+foreach($relative in @('Profile-Export.psm1','Export-Worker.ps1','Profile-Update.psm1','Update-Worker.ps1','Update-Habumi.ps1')){
+    $critical+=@{Path=$relative;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage $relative)).Hash}
+}
 if($RendererBuild){
     Copy-Item -LiteralPath (Join-Path $RendererBuild 'build-inputs.json') -Destination (Join-Path $stage 'renderer-inputs.json')
     $critical+=@{Path='renderer-inputs.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'renderer-inputs.json')).Hash}
@@ -102,6 +145,8 @@ $manifest=@{Version=$version;Prerelease=$true;HostPowerExperimental=$true;Critic
     ChildWindow=($launcherMode -eq '1');CompactInterface=($launcherMode -eq '1');
     OfflineDataTools=$true;NativeDataManagement=$true;DataToolsSchema='habumi.backup.v1';
     OfflineDataGrowth=[bool]$MaintenanceBuildRoot;
+    AppLibrary=$true;AppShortcuts=$true;VerifiedFileExport=$true;ManualUpdates=$true;
+    HostArchitecture='arm64';GuestArchitecture='aarch64';GuestImageReference='waydroid-13-20260927-arm64-only';
     Graphics='Qualcomm native Vulkan / Venus; Zink GLES composition';InitialDataGiB=4;
     UserDataIncluded=$false;RepeatedHibernateValidated=$false;
     ShaderBenchmarkOverheadGuarantee=$false;SourceRecipe='app/scripts/prepare-native-release.ps1'}
@@ -118,14 +163,18 @@ if($DevelopmentBaseline){
         [IO.File]::WriteAllText((Join-Path $stage 'Start-A1.cmd'),$start,$encoding)
     }
 }
+if($DevelopmentPackage){$manifest.DevelopmentPackage=$DevelopmentPackage;$manifest.Published=$false}
 [IO.File]::WriteAllText((Join-Path $stage 'release-profile.json'),($manifest|ConvertTo-Json -Depth 6)+"`n",$encoding)
 $inventory=@(Get-ChildItem -LiteralPath $stage -Recurse -File|ForEach-Object {
     @{Path=$_.FullName.Substring($stage.Length+1).Replace('\','/');Bytes=$_.Length;SHA256=(Get-FileHash -LiteralPath $_.FullName).Hash}
 })
+# Embedded inventory excludes itself; the external inventory includes every ZIP entry.
+[IO.File]::WriteAllText((Join-Path $stage 'package-files.json'),($inventory|ConvertTo-Json -Depth 4)+"`n",$encoding)
+$inventory+=@{Path='package-files.json';Bytes=(Get-Item -LiteralPath (Join-Path $stage 'package-files.json')).Length;SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'package-files.json')).Hash}
 [IO.File]::WriteAllText((Join-Path $OutputRoot 'package-files.json'),($inventory|ConvertTo-Json -Depth 4)+"`n",$encoding)
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archiveName=if($DevelopmentBaseline){"Habumi-development-$DevelopmentName.zip"}else{"Habumi-$version.zip"}
+$archiveName=if($DevelopmentPackage){"Habumi-development-$DevelopmentPackage.zip"}elseif($DevelopmentBaseline){"Habumi-development-$DevelopmentName.zip"}else{"Habumi-$version.zip"}
 $archive=Join-Path $OutputRoot $archiveName
 # .NET Framework's CreateFromDirectory uses backslash entry names. Explicit
 # portable names keep PS5 and PS7 packages identical in path semantics.

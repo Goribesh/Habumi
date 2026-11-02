@@ -15,6 +15,7 @@ static inline HANDLE profilo_lock_apri(void)
 
 static inline bool profilo_recupero_pendente(void)
 {
-    return GetFileAttributesA("storage-maintenance.lock") != INVALID_FILE_ATTRIBUTES;
+    return GetFileAttributesA("storage-maintenance.lock") != INVALID_FILE_ATTRIBUTES ||
+           GetFileAttributesA("software-update.lock") != INVALID_FILE_ATTRIBUTES;
 }
 #endif

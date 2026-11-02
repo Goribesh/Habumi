@@ -455,6 +455,9 @@ void finestra_messaggi_guscio(FinMsgGuscio f);
 #define ID_VARIANTE 1009
 #define ID_DATI     1010
 #define ID_SETTINGS 1011
+#define ID_APPS 1014
+#define ID_EXPORT 1015
+#define ID_UPDATES 1016
 #define ID_SCREENSHOT 1012
 #define ID_OPEN_SHOTS 1013
 

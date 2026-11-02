@@ -5,7 +5,7 @@ param([Parameter(Mandatory)][string]$RuntimeArchive,
       [Parameter(Mandatory)][string]$QemuBuildRoot,
       [Parameter(Mandatory)][string]$InitramfsPath,
       [Parameter(Mandatory)][string]$OutputRoot,
-      [string]$MaintenanceBuildRoot='',
+      [string]$MaintenanceBuildRoot='', [string]$AppListJarPath='',
       [ValidateSet('A0','A1')][string]$DevelopmentName='A0',
       [string]$MsysBin='C:/msys64/clangarm64/bin')
 $ErrorActionPreference='Stop'
@@ -57,6 +57,6 @@ $provenance=[ordered]@{SchemaVersion=1;DevelopmentBuild=$DevelopmentName;Publish
     ReproducibilityScope='Clean shell/QEMU build, pinned binary dependencies; not a bit-identical rebuild of every third-party component.'}
 $provenancePath=Join-Path $OutputRoot 'development-build.json'
 $provenance|ConvertTo-Json -Depth 12|Set-Content -LiteralPath $provenancePath -Encoding utf8
-& (Join-Path $PSScriptRoot 'prepare-native-release.ps1') -RuntimeRoot $runtime -InitramfsPath $initramfs -OutputRoot (Join-Path $OutputRoot 'distribution') -MaintenanceBuildRoot $MaintenanceBuildRoot -QemuExecutable $qemu -BuildProvenancePath $provenancePath -ShellSourceDirectory $snapshot -DevelopmentBaseline -DevelopmentName $DevelopmentName -AdbPort 17555 -ClipboardPort 15556 -MsysBin $MsysBin
+& (Join-Path $PSScriptRoot 'prepare-native-release.ps1') -RuntimeRoot $runtime -InitramfsPath $initramfs -OutputRoot (Join-Path $OutputRoot 'distribution') -MaintenanceBuildRoot $MaintenanceBuildRoot -AppListJarPath $AppListJarPath -QemuExecutable $qemu -BuildProvenancePath $provenancePath -ShellSourceDirectory $snapshot -DevelopmentBaseline -DevelopmentName $DevelopmentName -AdbPort 17555 -ClipboardPort 15556 -MsysBin $MsysBin
 if(-not(Test-Path -LiteralPath (Join-Path $OutputRoot 'distribution/SHA256SUMS.txt'))){throw 'Baseline package was not produced.'}
 Write-Output "PASS: isolated $DevelopmentName baseline packaged from clean QEMU and pinned dependencies. No Android user disk was copied."

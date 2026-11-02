@@ -28,6 +28,7 @@
 #include "guscio.h"
 #include "layout-compatto.h"
 #include "fullscreen.h"
+#include "app-library.h"
 
 #define FIN_CLASSE   "AndroidRuntimeGuscio"
 #define FIN_LARGHEZZA 760
@@ -915,6 +916,8 @@ static void fin_menu_mostra(void)
     if (!menu || !GetWindowRect(fin_more, &r)) { if (menu) DestroyMenu(menu); return; }
     AppendMenuA(menu, MF_STRING, FIN_ADATTA, "Fit window");
     AppendMenuA(menu, MF_STRING, FIN_FULLSCREEN, fin_fullscreen.active?"Exit full screen":"Full screen");
+    AppendMenuA(menu, MF_STRING, ID_APPS, "Apps...");
+    AppendMenuA(menu, MF_STRING, ID_EXPORT, "Export Android file...");
     AppendMenuA(menu, MF_STRING, ID_SETTINGS, "Settings...");
     AppendMenuA(menu, MF_STRING|(fin_catturando?MF_GRAYED:0), ID_SCREENSHOT, "Save screenshot");
     AppendMenuA(menu, MF_STRING, ID_OPEN_SHOTS, "Open screenshots folder");
@@ -931,6 +934,7 @@ static void fin_menu_mostra(void)
     }
     AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuA(menu, MF_STRING, ID_DATI, "Data management...");
+    AppendMenuA(menu, MF_STRING, ID_UPDATES, "Updates...");
     AppendMenuA(menu, MF_STRING, FIN_LOG, "Activity log...");
     SetForegroundWindow(fin_hwnd);
     UINT selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN,
@@ -945,6 +949,7 @@ static void fin_menu_mostra(void)
 
 static LRESULT CALLBACK fin_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
+    if(msg==WM_COPYDATA)return apps_receive((const COPYDATASTRUCT*)lp);
     switch (msg) {
     case WM_ACTIVATE:
         if (fin_vista && LOWORD(wp) == WA_INACTIVE) { sessione_focus(false); }

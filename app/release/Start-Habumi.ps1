@@ -24,6 +24,7 @@ function Find-QualcommIcd {
     throw 'A native Qualcomm Vulkan driver was not found. Install the graphics driver supplied for your Windows ARM64 device.'
 }
 try{
+    if(Test-Path -LiteralPath (Join-Path $taskRoot 'software-update.lock')){throw 'Software recovery is required. Open Habumi.exe --update and choose Recover.'}
     if(Test-Path -LiteralPath (Join-Path $taskRoot 'storage-maintenance.lock')){throw 'Storage maintenance is in progress.'}
     $taskProfile=Get-Content -LiteralPath (Join-Path $taskRoot 'release-profile.json') -Raw|ConvertFrom-Json
     foreach($taskFile in $taskProfile.CriticalFiles){

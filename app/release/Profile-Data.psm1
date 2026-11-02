@@ -57,11 +57,12 @@ function Get-HabumiDataFiles([string]$Root){
         }
     }
 }
-function Open-HabumiDataGuard([string]$Root,[switch]$Recovery){
+function Open-HabumiDataGuard([string]$Root,[switch]$Recovery,[switch]$SoftwareUpdate){
     if(-not(Test-Path -LiteralPath (Join-Path $Root 'runtime/bin') -PathType Container)){throw 'This is not a prepared Habumi profile.'}
     Assert-HabumiPlainPath (Join-Path $Root '.habumi-profile.lock')
     try{$guard=[IO.File]::Open((Join-Path $Root '.habumi-profile.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     catch{throw 'This profile is running or another data operation is active.'}
+    if(-not $SoftwareUpdate -and (Test-Path -LiteralPath (Join-Path $Root 'software-update.lock'))){$guard.Dispose();throw 'Interrupted software update requires Recover in the update panel before data operations.'}
     if(-not $Recovery -and (Test-Path -LiteralPath (Join-Path $Root 'storage-maintenance.lock'))){$guard.Dispose();throw 'Interrupted maintenance requires Recover before other operations.'}
     return $guard
 }

@@ -99,16 +99,16 @@ BlueStacks references: [media manager][bs-media], [toolbar APK/XAPK and capture]
 
 | ID | Priority | Capability | Status | Work remaining in Habumi |
 | --- | --- | --- | --- | --- |
-| G17 | P2 | Integrated app library | Partial | Android's launcher already lists and launches apps. A profile-aware library with app-info/uninstall access in the Habumi shell is absent; this is a desktop-integration gap, not missing Android app launching. |
-| G18 | P1 | Windows app shortcuts | Missing | Create shortcuts that start the correct profile/environment, wait for readiness and launch the selected package. |
-| G19 | P1 | Media browser/export | Partial | File import exists. Add guest file selection and export to Windows with clear destinations and filename handling. |
+| G17 | P2 | Integrated app library | Implemented locally; pending UI acceptance/release | The Habumi shell lists installed launcher apps by human-readable name and launches a selected app. App-info and uninstall are not included. |
+| G18 | P1 | Windows app shortcuts | Implemented locally; pending UI acceptance/release | Shortcuts target the selected app and profile; startup waits for Android readiness. Not yet published. |
+| G19 | P1 | Media browser/export | Partial; export implemented locally | File import exists. A guest-path to Windows single-file export with an explicit destination is implemented locally; a verified 65,539-byte export matched its expected hash. UI acceptance and release inclusion are pending. |
 | G20 | P2 | XAPK/split APK installation | Missing | Ordinary APK installation is present. Add archive/split validation and OBB/data handling where applicable. |
 | G21 | P1 | Screenshot action | Partial | More captures an on-request validated PNG to Pictures/Habumi and can open that folder. A destination chooser and video recording are not included. |
 | G22 | P2 | Video recording | Missing | Add start/stop, output path, audio policy and a validated encoder path without forcing unnecessary extra copies. |
 | G23 | P3 | Rolling highlight capture | Missing | Optional recent-gameplay buffer with an explicit memory/power budget; vendor documentation gives differing durations, so none is used as an acceptance target. |
 | G24 | P3 | Capture gallery/video editing | Missing | Optional gallery and basic clip management; editing is a separate cost from recording. |
-| G25 | P1 | In-app update checks/install | Missing | There is no automatic updater. Add version checks and an update workflow with rollback and preserved user data; manual GitHub downloads remain available. |
-| G26 | P1 | Upgrade/data migration | Partial | Version/reference-image metadata and journaled recovery support maintenance. Cross-version Android image migration is not supported; backup/restore requires matching pinned system/vendor images. |
+| G25 | P1 | In-app update checks/install | Partial; staged updater/rollback implemented locally | A manual staged updater with rollback is present in the working tree, but is not published. Automatic version checks are absent; manual GitHub downloads remain available. |
+| G26 | P1 | Upgrade/data migration | Partial | Version/reference-image metadata and journaled recovery support maintenance. Profile backup/restore is already accepted and distributed in RC2; cross-version Android image migration remains unsupported and restore requires matching pinned system/vendor images. The new updater rollback is local and unpublished. |
 | G27 | P1 | Instance backup/restore | Available | The offline data panel and CLI back up and restore profiles when matching pinned images are present. This does not provide simultaneous instances or cross-image migration. |
 | G28 | P2 | Disk reclaim/cleanup | Missing | Assess the raw-image format, guest discard and host space recovery. Removing an Android file alone does not prove Windows disk space was reclaimed. |
 | G29 | P1 | Diagnostic export/report | Partial | The data panel exports bounded logs, host/driver details and requested config. Applied settings remain unavailable; there is no automatic upload. |
@@ -191,11 +191,14 @@ added to the implementation plan.
 
 ## Remaining work
 
-The RC2 implementation closes the settings, fullscreen, screenshot and manual
-rotation portions of G01, G09, G21 and H03. Continue with app-requested
-orientation, destination selection, applied-settings reporting, G18 shortcuts,
-and release validation gates. The wider parity backlog remains open; these
-entries do not imply that A5 or the broader catalog is complete.
+RC2 closes the settings, fullscreen, screenshot and manual rotation portions of
+G01, G09, G21 and H03. The local A4 work adds the app library, Windows
+shortcuts, verified single-file export and a manual staged updater with
+rollback. UI acceptance and release inclusion remain pending; see [A4 desktop
+integration](A4-DESKTOP-INTEGRATION.md). RC2 backup/restore remains the released
+G26 capability. Store/gaming parity, split APK handling and app uninstall are
+not claimed. Continue with app-requested orientation, applied-settings
+reporting and release validation gates.
 
 Prioritize stability, data-recovery and hardware validation before expanding
 storage/profile workflows. Keep performance and power comparisons tied to a

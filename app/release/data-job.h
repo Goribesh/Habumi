@@ -12,6 +12,9 @@ typedef struct {
 bool data_quote(wchar_t *output, size_t count, const wchar_t *input);
 bool data_job_start(DataJob *job, const wchar_t *root, const wchar_t *operation,
                     const wchar_t *path, const wchar_t *image, int size);
+bool data_export_start(DataJob *job, const wchar_t *root,
+                       const wchar_t *guest_path, const wchar_t *destination,
+                       int port);
 /* 0 running, 1 success, -1 failure. Never terminates a worker. */
 int data_job_poll(DataJob *job);
 bool data_job_status(DataJob *job, wchar_t *state, size_t count);

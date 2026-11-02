@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../guscio"
 
 esito=0
-for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama varianti dati hyperv; do
+for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama varianti dati hyperv app-target app-library; do
     if [ ! -f "test-$prova.c" ]; then
         continue
     fi
@@ -49,6 +49,8 @@ for prova in registro config vm dpi adb apk file rilascio archivio appunti-trama
     # giorno che quel modulo scrivesse nel registro, la sua prova non
     # compilerebbe, ed e' voluto: e' chiamato PRIMA che la finestra esista.
     if [ "$prova" = "hyperv" ]; then extra=""; fi
+    if [ "$prova" = "app-target" ]; then extra=""; fi
+    if [ "$prova" = "app-library" ]; then extra="app-target.c app-shortcut.c -lshell32 -lole32 -luuid -lgdi32"; fi
     # dati.c tocca Win32 (tar.exe, GetFileAttributesA, MoveFileExA) e ORA
     # anche registro.c: dati_sposta_con_riprova (condivisa con
     # variante_estrai_immagine in main.c, vedi il commento su di lei in

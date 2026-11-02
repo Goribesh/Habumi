@@ -1,30 +1,29 @@
 # Development status
 
-- **Commit:** publication checkpoint; parent/tag source `bf7768b`.
-  Recorded 2 November 2026. Main and the development branch are pushed.
-- **Completed:** A2 accepted in the isolated Surface profile: TCG-only growth
-  4-to-16 GiB with retained original, real backup/restore, proof-file preservation
-  and user-confirmed runtime/data-panel/restart handoff. A3 accepted: settings
-  persistence/application, fullscreen, PNG, rotation and physical input verified.
-  Issue #3 recovery correction included; its target-hardware cause remains open.
-- **Tests:** 13 shell suites / 702 checks, including 28 new retry/serial checks;
-  complete development shell build; 57 A3 config/fullscreen checks, screenshot
-  failure cases and console-free launcher probe pass. A3 boot 35.515 s; saved
-  90 Hz applied after restart (36.000 s), then restored to 120 Hz. Fresh rc.2
-  candidate: 347 entries verified, new 4-GiB data, ready 51.578 s, Vulkan device
-  enumeration, readable launcher and normal close 5.500 s. Final runtime
-  inventory/reboot passed: ready 28.516 s, normal close 4.500 s. Evidence:
-  `Builds/Checks/A3-20261102` and `RC2-20261102`.
-- **Open limit:** the original hardware-watchdog trigger is unconfirmed. TCG
-  removes WHPX from maintenance; no general stability guarantee follows.
-  Other hardware and physical power-loss tests remain open. Issue #3's
-  `chr_dev_init`/THP slowdown needs raw logs and target-hardware confirmation.
-  Personal installation unchanged. The runtime remains an experimental prerelease.
-- **Distribution:** [0.3.0-rc.2](https://github.com/Goribesh/Habumi/releases/tag/0.3.0-rc.2)
-  published with runtime, corresponding source and SHA256SUMS. GitHub confirms
-  all three uploaded SHA-256 hashes. Runtime has 347 verified entries; source
-  has 24 entries and matches `bf7768b`, including 19 compiled QEMU overlays.
-  Stable remains 0.2.3. Publication receipt is in the rc.2 package folder.
-- **Next:** A4 essential app library, launcher-based shortcuts, file export and
-  user-initiated staged update/rollback, one bounded package at a time. A5
-  signing and broader hardware gates remain open; issue #3 is not closed.
+- **Commit:** local A4 implementation commit; parent `fa1c1e4`. Not pushed.
+- **Completed:** local app library and launcher-based Windows shortcuts;
+  verified shared-storage file export; manual staged software update, rollback
+  and recovery. Candidate: `Packages/Habumi-A4-20261102-acceptance`, 356 entries,
+  archive SHA-256 `F571F765D3C7D44EC20F669AA5680E704A3FAA2533033A7FBD767B1B080D75EF`.
+- **Tests:** full shell build; 15 suites / 746 counted checks plus app IPC
+  lifecycle checks; export 24 + worker 12; update 30 on PS7 and Windows PS5.1;
+  update-worker/channel rejection fixtures; 43 existing data-worker checks.
+  Real guest: 15 named apps and exact 65,539-byte export. Complete package
+  apply/rollback/reapply passed; final candidate installed. Config and full
+  16-GiB data SHA-256 stayed identical. All 66 source/build inputs match the
+  candidate receipt. Cold app launch logged completion at 41.906 s; an
+  independent foreground query confirmed Settings. Initial polling used the
+  wrong field name (`mResumedActivity` instead of `ResumedActivity`).
+  Real Windows shortcut opened Calculator in 2.47 s with the same QEMU PID
+  (34452); receipt: `Builds/A4/warm-shortcut-launch.json`.
+- **Open limit:** new-dialog manual acceptance remains unverified. The previous
+  approval-review quota failure is resolved; the pending test passed through
+  normal approval review. Physical power-loss, signing and broader hardware
+  remain A5 gates. No graphics/backend changes in A4.
+- **Distribution:** public rc.2 and the personal installation are unchanged.
+  A4 is implemented locally, not accepted or distributed.
+- **Next:** user acceptance of More > Apps, Export Android file, and Updates.
+  Record results before marking A4 accepted or preparing A5. Do not repeat
+  inventories/builds without a new change or an unresolved regression.
+
+Details and evidence: [A4 desktop integration](A4-DESKTOP-INTEGRATION.md).
