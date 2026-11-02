@@ -60,4 +60,26 @@ foreach($arguments in @(
 Move-Item -LiteralPath (Join-Path $probe 'Start-Habumi.ps1') -Destination (Join-Path $probe 'probe-script.ps1')
 $process=Start-Process -FilePath $exe -ArgumentList '--validate' -Wait -PassThru
 if($process.ExitCode -ne 1){throw 'Missing-script validation did not fail.'}
+$updateProbe=@'
+param([string]$ProfileRoot)
+$ErrorActionPreference='Stop'
+$env:PSModulePath=$PSHOME+'\Modules;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0\Modules'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class UpdateVisibility { [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); }'
+$form=[Windows.Forms.Form]::new();$form.Text='Habumi updater visibility check'
+try{
+    $form.Show();[Windows.Forms.Application]::DoEvents()
+    @{Visible=[UpdateVisibility]::IsWindowVisible($form.Handle);Console=[UpdateVisibility]::GetConsoleWindow().ToInt64();Root=$ProfileRoot}|
+        ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot 'update-result.json') -Encoding UTF8
+}finally{$form.Close();$form.Dispose()}
+'@
+[IO.File]::WriteAllText((Join-Path $probe 'Update-Habumi.ps1'),$updateProbe,[Text.UTF8Encoding]::new($false))
+$process=Start-Process -FilePath $exe -ArgumentList '--update' -PassThru -Wait
+if($process.ExitCode){throw 'Update launcher did not detach successfully.'}
+$updateResult=Join-Path $probe 'update-result.json';$deadline=[Diagnostics.Stopwatch]::StartNew()
+while(-not(Test-Path -LiteralPath $updateResult) -and $deadline.Elapsed.TotalSeconds -lt 10){Start-Sleep -Milliseconds 100}
+if(-not(Test-Path -LiteralPath $updateResult)){throw 'Update visibility probe did not finish.'}
+$result=Get-Content -LiteralPath $updateResult -Raw|ConvertFrom-Json
+if(-not $result.Visible -or $result.Console -ne 0 -or $result.Root -ne $probe){throw 'Update panel was hidden, received a console, or lost its profile root.'}
 Write-Output 'PASS: GUI child environment, strict app argument validation, incompatible modes, headless errors, and missing script.'
+Write-Output 'PASS: update panel is visible, console-free, and receives its profile root.'

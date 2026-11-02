@@ -2,6 +2,8 @@
 [CmdletBinding()]param([string]$OutputDirectory)
 Set-StrictMode -Version 2
 $ErrorActionPreference='Stop'
+if($PSVersionTable.PSEdition -eq 'Desktop'){$env:PSModulePath=$PSHOME+'\Modules;'+$env:SystemRoot+'\System32\WindowsPowerShell\v1.0\Modules'}
+$runClock=[Diagnostics.Stopwatch]::StartNew()
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $desktop=[Environment]::GetFolderPath('DesktopDirectory')
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $desktop 'Habumi-Workspace/Builds/Checks'}
@@ -23,6 +25,7 @@ function Get-CheckSnapshot([string]$Profile){
     return [ordered]@{Files=@(foreach($relative in $paths){$path=Join-Path $Profile $relative;@{Path=$relative;Bytes=(Get-Item -LiteralPath $path).Length;SHA256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}})}
 }
 function Invoke-CheckCase([string]$Name,[bool]$Prerelease,[string]$Mode,[string]$Profile){
+    if($runClock.Elapsed.TotalSeconds -gt 45){throw 'Update Check test exceeded its whole-run deadline.'}
     $nonce=[guid]::NewGuid().ToString('N')
     $workerRoot=Join-Path $fixture ('Habumi-update-'+$nonce)
     New-Item -ItemType Directory -Path $workerRoot|Out-Null
@@ -37,6 +40,7 @@ function Invoke-CheckCase([string]$Name,[bool]$Prerelease,[string]$Mode,[string]
 Set-StrictMode -Version 2
 $ErrorActionPreference='Stop'
 $mock=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'mock.json') -Raw|ConvertFrom-Json
+if($mock.Mode -eq 'timeout-cleanup'){Start-Sleep -Seconds 30}
 $global:MockReleases=@()
 foreach($item in @(@{Version=$mock.RCVersion;Prerelease=$true;Hash=$mock.RCHash},@{Version=$mock.StableVersion;Prerelease=$false;Hash=$mock.StableHash})){
     $version=[string]$item.Version;$name='Habumi-'+$version+'.zip';$prefix='https://github.com/Goribesh/Habumi/releases/download/'+$version+'/'
@@ -71,17 +75,35 @@ function Invoke-WebRequest {
     $start.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+(Join-Path $workerRoot 'mock-worker.ps1')+'" -WorkerPath "'+(Join-Path $workerRoot 'Update-Worker.ps1')+'" -RequestPath "'+$requestPath+'"'
     $start.WorkingDirectory=$workerRoot;$start.UseShellExecute=$false;$start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $process=$null
+    try{
     $process=[Diagnostics.Process]::Start($start)
+    [IO.File]::WriteAllText((Join-Path $fixture ($Name+'.pid')),[string]$process.Id)
     $outTask=$process.StandardOutput.ReadToEndAsync();$errTask=$process.StandardError.ReadToEndAsync()
-    if(-not $process.WaitForExit(10000)){throw "Get-Release mock exceeded its 10-second deadline: $Name"}
-    $outTask.Wait();$errTask.Wait()
+    $caseClock=[Diagnostics.Stopwatch]::StartNew()
+    $deadline=if($Mode -eq 'timeout-cleanup'){1000}else{10000}
+    while(-not $process.WaitForExit(100)){
+        $process.Refresh()
+        if($process.PrivateMemorySize64 -gt 256MB){throw "Check worker exceeded its 256-MiB memory limit: $Name"}
+        if($caseClock.Elapsed.TotalMilliseconds -gt $deadline -or $runClock.Elapsed.TotalSeconds -gt 45){throw "Check worker deadline exceeded: $Name"}
+    }
+    if(-not $outTask.Wait(1000) -or -not $errTask.Wait(1000)){throw "Check worker output did not close: $Name"}
     [IO.File]::WriteAllText($stdout,$outTask.Result,[Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($stderr,$errTask.Result,[Text.UTF8Encoding]::new($false))
     $resultPath=Join-Path $workerRoot 'result.json'
     if(-not(Test-Path -LiteralPath $resultPath -PathType Leaf)){throw "Check worker omitted result.json ($Name, exit $($process.ExitCode)): $($errTask.Result)"}
+    if((Get-Item -LiteralPath $resultPath).Length -gt 65536){throw 'Check result exceeds its size limit.'}
     $result=[IO.File]::ReadAllText($resultPath)|ConvertFrom-Json
-    $calls=@();$callsPath=Join-Path $workerRoot 'mock-calls.txt';if(Test-Path -LiteralPath $callsPath){$calls=@(Get-Content -LiteralPath $callsPath)}
+    $calls=@();$callsPath=Join-Path $workerRoot 'mock-calls.txt';if(Test-Path -LiteralPath $callsPath){
+        if((Get-Item -LiteralPath $callsPath).Length -gt 65536){throw 'Check call log exceeds its size limit.'}
+        $calls=@(Get-Content -LiteralPath $callsPath)
+    }
     return [pscustomobject]@{Name=$Name;Nonce=$nonce;ExitCode=$process.ExitCode;Result=$result;Stdout=$stdout;Stderr=$stderr;Worker=$workerRoot;Calls=$calls}
+    }finally{
+        if($process){
+            try{if(-not $process.HasExited){$process.Kill();$null=$process.WaitForExit(2000)}}finally{$process.Dispose()}
+        }
+    }
 }
 function Assert-CheckResult($Case,[string]$ExpectedVersion){
     Assert-Check ($Case.ExitCode -eq 0) "Check should pass for $($Case.Name): $($Case.Result.Message)"
@@ -117,8 +139,15 @@ foreach($case in @($preview,$stable,$duplicate,$digest,$url)){
 }
 $after=Get-CheckSnapshot $profile
 Assert-Check ((ConvertTo-Json -InputObject $before -Depth 6 -Compress) -ceq (ConvertTo-Json -InputObject $after -Depth 6 -Compress)) 'Offline checks changed the profile fixture.'
+$timedOut=$false
+try{$null=Invoke-CheckCase 'timeout-cleanup' $true 'timeout-cleanup' $profile}catch{
+    if($_.Exception.Message -notlike '*deadline exceeded*'){throw};$timedOut=$true
+}
+Assert-Check $timedOut 'A stalled test worker did not reach its deadline.'
+$timedOutId=[int][IO.File]::ReadAllText((Join-Path $fixture 'timeout-cleanup.pid'))
+Assert-Check (-not(Get-Process -Id $timedOutId -ErrorAction SilentlyContinue)) 'The owned timed-out worker was left running.'
 $cases=@($preview,$stable,$duplicate,$digest,$url)
-$reportLines=@('Habumi updater Check protocol regression','Network calls: 0 (all web cmdlets mocked)','Profile files unchanged: true')
+$reportLines=@('Habumi updater Check protocol regression','Network calls: 0 (all web cmdlets mocked)','Profile files unchanged: true','Timed-out owned worker terminated: true')
 foreach($case in $cases){
     $version='';if($case.Result.PSObject.Properties['Release']){$version=[string]$case.Result.Release.Version}
     $reportLines+=($case.Name+'|exit='+$case.ExitCode+'|nonce='+$case.Result.Nonce+'|ok='+$case.Result.OK+'|version='+$version+'|message='+$case.Result.Message+'|mockCalls='+(@($case.Calls)-join ',')+'|worker='+$case.Worker)

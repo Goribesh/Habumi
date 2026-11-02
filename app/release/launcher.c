@@ -25,7 +25,7 @@ static int update_start(const wchar_t *root,BOOL validate)
     if(!length || length+48>=32768)return fail(L"Cannot locate Windows PowerShell.",FALSE);
     wcscat(host,L"\\WindowsPowerShell\\v1.0\\powershell.exe");
     if(swprintf(command,65536,L"\"%ls\" -NoProfile -ExecutionPolicy Bypass -STA -File \"%ls\\Update-Habumi.ps1\" -ProfileRoot \"%ls\"",host,root,root)<0 || wcslen(command)>=32767)return 1;
-    startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESHOWWINDOW;startup.wShowWindow=SW_HIDE;
+    startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESHOWWINDOW;startup.wShowWindow=SW_SHOWNORMAL;
     if(!CreateProcessW(host,command,NULL,NULL,FALSE,CREATE_NO_WINDOW,NULL,root,&startup,&process))return fail(L"The update panel could not be opened.",FALSE);
     CloseHandle(process.hThread);CloseHandle(process.hProcess);
     /* Exit the launcher so an external helper can replace this executable. */

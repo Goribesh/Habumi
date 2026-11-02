@@ -97,6 +97,21 @@ workspace. Its archive SHA-256 is
 It contains the embedded inventory and working-source input hashes. It is an
 unpublished A4 candidate, not a replacement for the public rc.2 archive.
 
+User acceptance found that the update panel inherited `SW_HIDE`. The launcher
+now uses `SW_SHOWNORMAL` for this interactive panel while retaining
+`CREATE_NO_WINDOW`. A focused native-launcher regression checks visible form,
+no console, and the correct root. The original F571 archive lacks this fix;
+the isolated profile has the local verified patch recorded under
+`Builds/A4/VisibilityFix/patch`, applied with the existing rollback mechanism.
+
+A stale pre-correction test process was also found consuming 21 GiB private
+memory in report generation and was terminated. The current plain-text report
+avoids that serialization; the harness now bounds child memory/time, disposes
+processes and terminates its own timed-out child. The new timeout regression
+and five existing mocked Check cases pass under Windows PowerShell 5.1:
+4.1 seconds, 85 MiB parent peak under an external resource guard. Android then
+returned to Home in 31 seconds without a high-memory PowerShell process.
+
 Evidence lives under `Habumi-Workspace/Builds/Checks/A4-*` and the A4 package
 directory. Live app-launch evidence is recorded in the development checkpoint
 after execution. Manual acceptance of the new
