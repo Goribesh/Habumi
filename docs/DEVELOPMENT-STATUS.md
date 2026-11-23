@@ -35,6 +35,7 @@
 - **Distribution:** public rc.2 and the personal installation are unchanged.
   A4 is accepted locally, not distributed.
 - **A5 corrected Vanilla boot:** `Builds/A5-SystemUI-Fix/profile` used fresh Vanilla data. Guest log confirmed stock SystemUI and readiness at 38.016 s. ADB confirmed Launcher3 in the foreground.
-- **Next:** validate Vanilla to GApps and back through the variant menu on the corrected profile, then check media, clipboard and standby. Reuse A4 evidence for unchanged workflows.
+- **A5 corrected package:** `Packages/Habumi-A5-Variant-Fix/Habumi-development-A5.zip`, 356 verified entries, SHA-256 `801268744461F7083E443444C36CFC53D8F4A84A33D77134345801CADAEE36D0`. Initramfs provenance receipt is beside the archive. From this ZIP, GApps booted with a fresh data disk and previously verified system/vendor images. The probe remained active, Android reached readiness at 48.516 s, and ADB confirmed Launcher3 in the foreground. The user reported both directions reaching Home through the variant menu. The inspected profile log did not capture those transitions, so the independently observed results cover startup in both variants separately.
+- **Next:** verify clipboard text in both directions and real media playback, then standby. Capture variant transition logs when repeating that workflow for final validation.
 
 Details and evidence: [A4 desktop integration](A4-DESKTOP-INTEGRATION.md).
