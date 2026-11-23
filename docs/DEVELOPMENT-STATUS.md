@@ -1,6 +1,6 @@
 # Development status
 
-- **Commit:** A4 correction `705ed76`; Home confirmation `27183e9`. Not pushed.
+- **Commit:** A5 candidate built from `eeb372c` plus the packaging change that enables the A5 development label. A4 launcher correction `705ed76` is included. Local only.
 - **Completed:** local app library and launcher-based Windows shortcuts;
   verified shared-storage file export; manual staged software update, rollback
   and recovery. Candidate: `Packages/Habumi-A4-20261102-acceptance`, 356 entries,
@@ -28,14 +28,10 @@
   The user also confirmed Updates is visible and Check completes successfully.
   The user confirmed Apps opens Calculator and the file-export dialog completes
   the shared-storage export. A4 is accepted on this isolated profile.
-- **Open limit:** Original
-  F571 candidate lacks the visibility correction; the isolated profile has the
-  verified local software patch, with rollback originals retained. Physical
-  power-loss, signing and broader hardware remain A5 gates.
+- **A5 packaging and tests (23 November):** `Packages/Habumi-A5-20261123/Habumi-development-A5.zip` contains 356 verified entries and the launcher visibility correction. SHA-256 `B7F09D8083B488EAD99C3C1C1E939906A53F4F0E219FD97BF9E8441EDD345E60`. From a fresh extraction, launcher `--validate` passed, the Updates visibility/profile path/no-console regression passed, and no deployed guest disk was present. The launcher reports `NotSigned`.
+- **Open limit:** A5 runtime validation requires a fresh Android boot and the V01–V07 scenarios. Signing, dependency/license coverage, physical power-loss and broader hardware remain open.
 - **Distribution:** public rc.2 and the personal installation are unchanged.
   A4 is accepted locally, not distributed.
-- **Next:** A5: consolidate the visibility correction into a complete candidate,
-  then validate installation, variants, media, clipboard and standby; record
-  signing/provenance gates. Reuse A4 evidence instead of repeating its suites.
+- **Next:** boot the extracted A5 candidate with fresh data in isolation, then validate both variant-switch directions, media, clipboard and standby. Reuse A4 evidence for unchanged workflows.
 
 Details and evidence: [A4 desktop integration](A4-DESKTOP-INTEGRATION.md).
