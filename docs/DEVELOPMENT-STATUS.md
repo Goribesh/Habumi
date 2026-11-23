@@ -29,9 +29,12 @@
   The user confirmed Apps opens Calculator and the file-export dialog completes
   the shared-storage export. A4 is accepted on this isolated profile.
 - **A5 packaging and tests (23 November):** `Packages/Habumi-A5-20261123/Habumi-development-A5.zip` contains 356 verified entries and the launcher visibility correction. SHA-256 `B7F09D8083B488EAD99C3C1C1E939906A53F4F0E219FD97BF9E8441EDD345E60`. From a fresh extraction, launcher `--validate` passed, the Updates visibility/profile path/no-console regression passed, and no deployed guest disk was present. The launcher reports `NotSigned`.
-- **Open limit:** A5 runtime validation requires a fresh Android boot and the V01–V07 scenarios. Signing, dependency/license coverage, physical power-loss and broader hardware remain open.
+- **A5 fresh boot:** the isolated `fresh-extraction` profile downloaded and verified vendor and GApps, created a new 4 GiB data disk, and reached Android readiness in 163.531 s including downloads. ADB confirmed `sys.boot_completed=1` and Launcher3 in the foreground. The clipboard helper connected on port 15556.
+- **A5 variant regression:** the original candidate verified the Vanilla download and shut down GApps normally, but the guest init stopped on a SystemUI hash mismatch after switching. The probe was built for GApps. Guest init now retains stock SystemUI for the exact observed Vanilla APK hash, applies the verified probe to the matching GApps APK, and rejects unrecognized hashes. GApps recovery on the original profile reached readiness in 36.016 s. The local initramfs repack and hash receipt are under `Builds/A5-SystemUI-Fix`; the earlier A5 ZIP still contains the original initramfs.
+- **Open limit:** the launcher warned that vendor build `1790493416` differs from the audio HAL reference `1775198504`. Audio playback and capture remain unverified. Variant switching and clipboard transfer remain open, along with signing, dependency/license coverage, physical power-loss and broader hardware.
 - **Distribution:** public rc.2 and the personal installation are unchanged.
   A4 is accepted locally, not distributed.
-- **Next:** boot the extracted A5 candidate with fresh data in isolation, then validate both variant-switch directions, media, clipboard and standby. Reuse A4 evidence for unchanged workflows.
+- **A5 corrected Vanilla boot:** `Builds/A5-SystemUI-Fix/profile` used fresh Vanilla data. Guest log confirmed stock SystemUI and readiness at 38.016 s. ADB confirmed Launcher3 in the foreground.
+- **Next:** validate Vanilla to GApps and back through the variant menu on the corrected profile, then check media, clipboard and standby. Reuse A4 evidence for unchanged workflows.
 
 Details and evidence: [A4 desktop integration](A4-DESKTOP-INTEGRATION.md).

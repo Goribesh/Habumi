@@ -428,15 +428,25 @@ if [ -f /winq/SystemUI.null-probe.apk ]; then
     SYSTEMUI_ORIGINAL=${SYSTEMUI_ORIGINAL%% *}
     SYSTEMUI_CANDIDATE=$(sha256sum /winq/SystemUI.null-probe.apk)
     SYSTEMUI_CANDIDATE=${SYSTEMUI_CANDIDATE%% *}
-    if [ "$SYSTEMUI_ORIGINAL" != "2f8fe1b0d88a33b26d3c7ea09dedf56248002ec00b86ba8431ed257573da6960" ] ||
-       [ "$SYSTEMUI_CANDIDATE" != "40f473924907f993d2eb73f81e6c31112eb06b411682edb0f319a6f21afcf888" ]; then
+    if [ "$SYSTEMUI_CANDIDATE" != "40f473924907f993d2eb73f81e6c31112eb06b411682edb0f319a6f21afcf888" ]; then
         echo "HABUMI-STOP: experimental SystemUI probe hash mismatch" > /dev/kmsg
         exec sh
     fi
-    mkdir -p /so/extra/system_ext/priv-app/SystemUI
-    cp /winq/SystemUI.null-probe.apk /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
-    chmod 0644 /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
-    echo "=== Habumi: experimental SystemUI null-list guard enabled" > /dev/kmsg
+    case "$SYSTEMUI_ORIGINAL" in
+        2f8fe1b0d88a33b26d3c7ea09dedf56248002ec00b86ba8431ed257573da6960)
+            mkdir -p /so/extra/system_ext/priv-app/SystemUI
+            cp /winq/SystemUI.null-probe.apk /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
+            chmod 0644 /so/extra/system_ext/priv-app/SystemUI/SystemUI.apk
+            echo "=== Habumi: experimental SystemUI null-list guard enabled" > /dev/kmsg
+            ;;
+        cfd004cabd71e43930b584faf2f754cbbee9c1febe5ea3e0a142e3400537ea26)
+            echo "=== Habumi: keeping stock SystemUI for the verified Vanilla image" > /dev/kmsg
+            ;;
+        *)
+            echo "HABUMI-STOP: experimental SystemUI probe does not match this Android image" > /dev/kmsg
+            exec sh
+            ;;
+    esac
 fi
 
 if [ -f /winq/HabumiClipboard.apk ]; then
