@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Prepare an experimental, single-instruction OMX nonblocking probe.
+"""Prepare an experimental OMX nonblocking probe.
 
 This is a byte-level probe for the supplied Waydroid 20260927 arm64_only
 OMX library. It does not rebuild or patch upstream source. The candidate
 instruction replaces the getService retry-count move with the matching
 tryGetService nonblocking value, after confirming the original ELF layout,
 instruction context, and shared helper branch.
+By default this adjusts IOmxStore. The playback option also adjusts IOmx.
 
 The HIDL OMX interface provenance is Android Open Source Project
 hardware/interfaces/media/omx/1.0 (Apache-2.0):
@@ -43,6 +44,10 @@ NEW_BYTES = struct.pack("<I", NEW_WORD)
 TRY_GET_SERVICE_VA = 0x621C0
 TRY_GET_SERVICE_PREFIX = bytes.fromhex("e203012a e1031f2a")
 SHARED_HELPER_VA = 0x67450
+
+IO_MX_GET_SERVICE_VA = 0x38A80
+IO_MX_TRY_GET_SERVICE_VA = 0x38808
+IO_MX_HELPER_VA = 0x66D40
 
 
 class ProbeError(Exception):
@@ -119,7 +124,7 @@ def branch_target_aarch64(word, pc):
     return pc + (immediate << 2)
 
 
-def prepare(input_path, output_path, metadata_path):
+def prepare(input_path, output_path, metadata_path, playback=False):
     input_path = Path(input_path).resolve(strict=True)
     output_path = Path(output_path).resolve(strict=False)
     metadata_path = Path(metadata_path).resolve(strict=False)
@@ -163,15 +168,33 @@ def prepare(input_path, output_path, metadata_path):
     candidate = bytearray(original)
     patch_offset = va_to_offset(segments, PATCH_VA, len(NEW_BYTES))
     candidate[patch_offset:patch_offset + len(NEW_BYTES)] = NEW_BYTES
+    patch_offsets = [patch_offset]
+    if playback:
+        get_offset = va_to_offset(segments, IO_MX_GET_SERVICE_VA, 12)
+        try_offset = va_to_offset(segments, IO_MX_TRY_GET_SERVICE_VA, 12)
+        for offset, address, prefix in (
+            (get_offset, IO_MX_GET_SERVICE_VA, GET_SERVICE_CONTEXT[:8]),
+            (try_offset, IO_MX_TRY_GET_SERVICE_VA, TRY_GET_SERVICE_PREFIX),
+        ):
+            if original[offset:offset + 8] != prefix:
+                fail("IOmx service lookup instructions do not match")
+            word = struct.unpack_from("<I", original, offset + 8)[0]
+            if branch_target_aarch64(word, address + 8) != IO_MX_HELPER_VA:
+                fail("IOmx service lookup does not reach the expected helper")
+        candidate[get_offset + 4:get_offset + 8] = NEW_BYTES
+        patch_offsets.append(get_offset + 4)
     differences = [i for i, (before, after) in enumerate(zip(original, candidate)) if before != after]
-    expected_differences = [patch_offset + i for i in range(4) if original[patch_offset + i] != NEW_BYTES[i]]
+    expected_differences = sorted(offset + i for offset in patch_offsets for i in range(4)
+                                  if original[offset + i] != NEW_BYTES[i])
     if differences != expected_differences or not differences:
         fail("candidate differs outside the targeted instruction")
 
     byte_changes = [
         {
             "file_offset": offset,
-            "virtual_address": PATCH_VA + offset - patch_offset,
+            "virtual_address": next(va + offset - start for va, start in
+                                    zip((PATCH_VA, IO_MX_GET_SERVICE_VA + 4), patch_offsets)
+                                    if start <= offset < start + 4),
             "before_hex": original[offset:offset + 1].hex(),
             "after_hex": candidate[offset:offset + 1].hex(),
         }
@@ -179,6 +202,7 @@ def prepare(input_path, output_path, metadata_path):
     ]
     metadata = {
         "classification": "experimental probe not release",
+        "playback": playback,
         "input_name": input_path.name,
         "input_size": len(original),
         "input_sha256": input_hash,
@@ -241,9 +265,10 @@ def main(argv=None):
     parser.add_argument("--input", required=True, help="verified original OMX ELF")
     parser.add_argument("--output", required=True, help="new probe ELF path; must not exist")
     parser.add_argument("--metadata", required=True, help="new JSON metadata path; must not exist")
+    parser.add_argument("--playback", action="store_true", help="also make IOmx lookup nonblocking")
     args = parser.parse_args(argv)
     try:
-        result = prepare(args.input, args.output, args.metadata)
+        result = prepare(args.input, args.output, args.metadata, playback=args.playback)
     except (ProbeError, OSError, ValueError, struct.error) as error:
         print("probe preparation failed: " + str(error), file=sys.stderr)
         return 2

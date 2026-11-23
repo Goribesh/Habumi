@@ -438,8 +438,9 @@ bool scarica_sha256_file(const char *percorso, char *fuori65, char *errore,
     unsigned char oggetto_hash[1024];
     unsigned char digest[32];
     unsigned char blocco[65536];
-    FILE *f;
-    size_t letti, i;
+    HANDLE file;
+    DWORD letti;
+    size_t i;
     bool ok = false;
 
     errore[0] = '\0';
@@ -448,8 +449,11 @@ bool scarica_sha256_file(const char *percorso, char *fuori65, char *errore,
     /* Letto a blocchi apposta: sono 1,17 GB, e non stanno in memoria tutti
      * insieme -- ne' dovrebbero, quando l'unica cosa che serve e' farli
      * scorrere una volta sola dentro BCrypt. */
-    f = fopen(percorso, "rb");
-    if (f == NULL) {
+    /* La verifica puo' sovrapporsi all'avvio di QEMU. L'handle non deve
+     * essere ereditato dal figlio, altrimenti blocca la sostituzione. */
+    file = CreateFileA(percorso, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                       OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
         snprintf(errore, errore_n,
                 "cannot open %s to hash it",
                 percorso);
@@ -461,7 +465,7 @@ bool scarica_sha256_file(const char *percorso, char *fuori65, char *errore,
         snprintf(errore, errore_n,
                 "BCryptOpenAlgorithmProvider failed (0x%lx)",
                 (unsigned long)st);
-        fclose(f);
+        CloseHandle(file);
         return false;
     }
 
@@ -490,22 +494,17 @@ bool scarica_sha256_file(const char *percorso, char *fuori65, char *errore,
     }
 
     for (;;) {
-        letti = fread(blocco, 1, sizeof(blocco), f);
-        if (letti > 0) {
-            st = BCryptHashData(hash, blocco, (ULONG)letti, 0);
-            if (st != 0) {
-                snprintf(errore, errore_n, "BCryptHashData failed (0x%lx)",
-                        (unsigned long)st);
-                goto fine;
-            }
+        if (!ReadFile(file, blocco, sizeof(blocco), &letti, NULL)) {
+            snprintf(errore, errore_n, "read of %s interrupted (%lu)",
+                    percorso, (unsigned long)GetLastError());
+            goto fine;
         }
-        if (letti < sizeof(blocco)) {
-            if (ferror(f)) {
-                snprintf(errore, errore_n, "read of %s interrupted",
-                        percorso);
-                goto fine;
-            }
-            break;
+        if (letti == 0) break;
+        st = BCryptHashData(hash, blocco, letti, 0);
+        if (st != 0) {
+            snprintf(errore, errore_n, "BCryptHashData failed (0x%lx)",
+                    (unsigned long)st);
+            goto fine;
         }
     }
 
@@ -530,7 +529,7 @@ fine:
     if (alg) {
         BCryptCloseAlgorithmProvider(alg, 0);
     }
-    fclose(f);
+    CloseHandle(file);
     return ok;
 }
 
