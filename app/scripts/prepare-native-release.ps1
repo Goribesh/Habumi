@@ -4,6 +4,7 @@
 param([Parameter(Mandatory)][string]$RuntimeRoot,
       [string]$RendererBuild='',
       [Parameter(Mandatory)][string]$InitramfsPath,
+      [string]$InitramfsReceipt='',
       [Parameter(Mandatory)][string]$OutputRoot,
       [string]$MaintenanceBuildRoot='',
       [string]$MsysBin='C:/msys64/clangarm64/bin',
@@ -120,6 +121,15 @@ $softwareInputs=[ordered]@{Schema='habumi.software-inputs.v1';SourceCommit=(& gi
     })}
 foreach($name in @('Start-Habumi.ps1','Manage-Data.ps1','Profile-Data.psm1','Profile-Growth.ps1','Profile-SystemInfo.ps1','Data-Worker.ps1','Profile-Export.psm1','Export-Worker.ps1','Profile-Update.psm1','Update-Worker.ps1','Update-Habumi.ps1')){
     $softwareInputs.Inputs+=@{Path=('app/release/'+$name);SHA256=(Get-FileHash -LiteralPath (Join-Path $repoRoot ('app/release/'+$name))).Hash}
+}
+if($InitramfsReceipt){
+    $initInputs=Get-Content -LiteralPath $InitramfsReceipt -Raw|ConvertFrom-Json
+    $initSource=Join-Path $repoRoot 'guest/scripts/android-initramfs-init.sh'
+    $omxRecipe=Join-Path $repoRoot 'guest/scripts/prepare-omx-nonblocking-probe.py'
+    if((Get-FileHash -LiteralPath $InitramfsPath).Hash -ne $initInputs.output_sha256 -or
+       (Get-FileHash -LiteralPath $initSource).Hash -ne $initInputs.init_sha256 -or
+       (Get-FileHash -LiteralPath $omxRecipe).Hash -ne $initInputs.omx_recipe_sha256){throw 'Initramfs receipt does not match the staged image and source.'}
+    $softwareInputs.Initramfs=$initInputs
 }
 [IO.File]::WriteAllText((Join-Path $stage 'software-inputs.json'),($softwareInputs|ConvertTo-Json -Depth 6)+"`n",$encoding)
 $critical+=@{Path='software-inputs.json';SHA256=(Get-FileHash -LiteralPath (Join-Path $stage 'software-inputs.json')).Hash}

@@ -1,4 +1,4 @@
-Habumi 0.3.0-rc.2 prerelease
+Habumi 0.3.0-rc.3 prerelease
 ===========================
 
 STATUS: experimental prerelease; not a stable release
@@ -26,6 +26,11 @@ Unpack the archive, then run Habumi.exe from the top-level folder. The launcher
 prepares the graphics environment. Do not start runtime\bin\Habumi.exe
 directly. Close Habumi normally and let Android shut down before moving,
 backing up, or restoring profile files.
+
+The More menu includes Apps, Windows app shortcuts, Android file export and
+manual updates. Apps and export require the bundled ADB connection. Updates
+checks the selected release channel and can stage replacement software while
+preserving Android data. Keep the rollback files until the update is verified.
 
 ANDROID DATA
 ------------

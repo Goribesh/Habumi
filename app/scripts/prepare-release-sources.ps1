@@ -93,8 +93,8 @@ the selected Ubuntu patch and receipt live under maintenance/glibc-2ubuntu2.3.
 Archive sizes/SHA256 were checked against source manifests; detached signatures
 are supplied without claiming that their cryptographic signatures were verified.
 
-See the project's docs/RELEASE-READINESS-0.3.0-rc.2.md for build recipes and
-runtime limitations. Exact binary reproduction across toolchains/timestamps,
+See the project's docs/DEVELOPMENT-STATUS.md for release readiness and the
+version-specific notes for build recipes. Exact binary reproduction across toolchains/timestamps,
 general hardware compatibility and a complete dependency audit are not claimed.
 '@
 [IO.File]::WriteAllText((Join-Path $stage 'README.txt'),$readme.Replace("`r`n","`n")+"`n",[Text.UTF8Encoding]::new($false))
